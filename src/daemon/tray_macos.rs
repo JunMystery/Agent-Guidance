@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::thread;
 use tray_item::{IconSource, TrayItem};
 
-use crate::daemon::tray_platform::{open_browser, open_folder};
+use crate::daemon::tray_platform::{open_browser, open_folder, show_about_dialog};
 
 pub fn run_macos_tray(port: u16) {
     let mut tray = match TrayItem::new("Agent Guidance", IconSource::Resource("agent-guidance")) {
@@ -16,7 +16,8 @@ pub fn run_macos_tray(port: u16) {
         }
     };
 
-    let _ = tray.add_label("Agent Guidance (MCP)");
+    let label = format!("Agent Guidance v{}", env!("CARGO_PKG_VERSION"));
+    let _ = tray.add_label(&label);
     let url = format!("http://127.0.0.1:{}/", port);
     let _ = tray.add_menu_item("Open Web Dashboard", move || {
         open_browser(&url);
@@ -29,6 +30,9 @@ pub fn run_macos_tray(port: u16) {
                     .as_path(),
             );
         }
+    });
+    let _ = tray.add_menu_item("About Agent Guidance", || {
+        show_about_dialog(0, env!("CARGO_PKG_VERSION"));
     });
     let _ = tray.add_menu_item("Exit MCP Daemon", || {
         std::process::exit(0);

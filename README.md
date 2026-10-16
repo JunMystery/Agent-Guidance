@@ -1,6 +1,6 @@
 # 🦀 Agent Guidance MCP Server
 
-[![Version](https://img.shields.io/badge/Version-v1.8.7-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/Version-v1.8.8-blue.svg)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/Language-Rust%202024-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/Security-Policy-blue.svg)](SECURITY.md)
@@ -27,19 +27,19 @@ Installers provide an interactive mode selector:
 
 **Windows (PowerShell):**
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "iex (irm https://raw.githubusercontent.com/JunMystery/Agent-Guidance-Rust/main/scripts/install.ps1)"
+powershell -ExecutionPolicy Bypass -Command "iex (irm https://raw.githubusercontent.com/JunMystery/Agent-Guidance/main/scripts/install.ps1)"
 ```
 
 **Linux / macOS (Bash):**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JunMystery/Agent-Guidance-Rust/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JunMystery/Agent-Guidance/main/scripts/install.sh | bash
 ```
 
 ### Manual Cargo Build
 
 ```bash
-git clone https://github.com/JunMystery/Agent-Guidance-Rust.git
-cd Agent-Guidance-Rust
+git clone https://github.com/JunMystery/Agent-Guidance.git
+cd Agent-Guidance
 cargo build --release
 ./target/release/agent-guidance --setup
 ```
@@ -246,6 +246,35 @@ Daemon & Maintenance:
 | **`project_context`** | **GraphRAG & AST Search** | Hierarchical Leiden GraphRAG (`drift`, `global`, `local`), Subgraph Bundling (<250 LOC definition + 1-hop callers/callees), intra-procedural data flow, AST skeletonization, and 6-phase instant cascade (<100ms). |
 | **`guidance`** | **Standards & Skill Catalog** | 2-stage Candle BERT vector search + Cross-Encoder reranking over 279 embedded skills, pre-code architecture checklists, and empirical verification contracts. |
 | **`session_continuity`** | **Memory & Snapshots** | Persists session memory, tracks pairwise co-changes into evolutionary git graphs, stores categorised project learnings, and generates cross-agent handoff briefs. |
+
+---
+
+## ⚡ Tool Micro-Rules & Dashboard Editor
+
+Every core MCP tool is coupled with targeted execution micro-rules that keep LLMs aligned with project conventions without cluttering global prompts:
+
+- **Dual-Scope Hierarchy**:
+  1. **Per-Project Override** (`<project>/.agent-context/tool_rules.toml`): Repo-specific guardrails.
+  2. **Global Configuration** (`~/.agent-guidance/config.toml`): System-wide default conventions.
+  3. **Built-in Defaults**: High-signal, battle-tested engineering mandates.
+- **Web Dashboard Editor (`http://127.0.0.1:11997/#rules`)**: Visual management tab featuring:
+  - Per-tool Enable/Disable toggle switches.
+  - Markdown rule editors with multi-line auto-expansion.
+  - One-click **Reset Default** and project-level **Revert to Global**.
+  - Dynamic synchronization with the tracked project dropdown.
+- **Runtime Injection**: The effective rule is automatically attached to the response payload as a high-visibility `> [!IMPORTANT] **Tool Execution Mandate**` banner upon tool execution.
+
+---
+
+## 🎨 In-Browser Skill Editor & Staging Override
+
+The Web Dashboard features a centralized Skill Registry and Markdown editor (`http://127.0.0.1:11997/#skills`):
+
+- **In-Browser Authoring & Live Preview**: Split-screen Markdown editor with real-time rendered preview, syntax styling, and tab-indentation support.
+- **Global Staging Precedence (`~/.agent-guidance/staging/skills/`)**: Edits safely override embedded built-in skills without altering git repository assets or source files.
+- **Instant Precedence & Fallback**: `load_all_skills` immediately picks up staged skills. One-click **Revert to Default** purges staging overrides to restore built-in embedded originals.
+- **Custom Skill Creation**: Add brand-new domain skills via the `➕ New Skill` button.
+- **Binary Re-Indexing**: Integrate with **⚡ Compile to Binary** to refresh the high-speed AVX-512 vector index (`skills.bin` & `vectors.bin`) on demand.
 
 ---
 

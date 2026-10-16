@@ -92,13 +92,13 @@ detect_assets() {
 }
 
 try_download() {
-    local repo="JunMystery/Agent-Guidance-Rust" version=""
+    local repo="JunMystery/Agent-Guidance" version=""
     if command -v curl &>/dev/null; then
         version="$(curl -sSL "https://api.github.com/repos/${repo}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
     elif command -v wget &>/dev/null; then
         version="$(wget -qO- "https://api.github.com/repos/${repo}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
     fi
-    version="${version:-v1.8.7}"
+    version="${version:-v1.8.8}"
     local tmp_dir; tmp_dir="$(mktemp -d 2>/dev/null || echo "/tmp/ag-download-$$")"
     mkdir -p "$tmp_dir"
 
@@ -135,7 +135,7 @@ build_source() {
     else
         sdir="$HOME/.agent-guidance/src"
         if [ -f "$sdir/Cargo.toml" ]; then (cd "$sdir" && git pull --depth 1 &>/dev/null) || true;
-        else rm -rf "$sdir"; mkdir -p "$sdir"; git clone --depth 1 https://github.com/JunMystery/Agent-Guidance-Rust.git "$sdir" &>/dev/null; fi
+        else rm -rf "$sdir"; mkdir -p "$sdir"; git clone --depth 1 https://github.com/JunMystery/Agent-Guidance.git "$sdir" &>/dev/null; fi
     fi
     echo -e "  ${CYAN}Compiling release binary...${NC}"
     (cd "$sdir" && RUSTFLAGS='-A warnings' cargo build --release --quiet)

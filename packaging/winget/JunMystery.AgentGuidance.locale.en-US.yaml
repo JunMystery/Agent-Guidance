@@ -1,14 +1,14 @@
 PackageIdentifier: JunMystery.AgentGuidance
-PackageVersion: 1.8.7
+PackageVersion: 1.8.8
 PackageLocale: en-US
 Publisher: JunMystery
 PublisherUrl: https://github.com/JunMystery
-PublisherSupportUrl: https://github.com/JunMystery/Agent-Guidance-Rust/issues
+PublisherSupportUrl: https://github.com/JunMystery/Agent-Guidance/issues
 Author: JunMystery
 PackageName: Agent Guidance Rust MCP Server
-PackageUrl: https://github.com/JunMystery/Agent-Guidance-Rust
+PackageUrl: https://github.com/JunMystery/Agent-Guidance
 License: MIT
-LicenseUrl: https://github.com/JunMystery/Agent-Guidance-Rust/blob/main/LICENSE
+LicenseUrl: https://github.com/JunMystery/Agent-Guidance/blob/main/LICENSE
 Copyright: Copyright (c) 2026 JunMystery
 ShortDescription: Token-optimized Agent Guidance Rust MCP server for AI coding tools.
 Description: |

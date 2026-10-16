@@ -26,7 +26,7 @@ Instead, please report security issues through one of the following private chan
 
 ### 1. GitHub Private Vulnerability Reporting (Preferred)
 You can report a vulnerability directly on GitHub by navigating to:
-**[Security Tab $\rightarrow$ Report a vulnerability](https://github.com/JunMystery/Agent-Guidance-Rust/security/advisories/new)**
+**[Security Tab $\rightarrow$ Report a vulnerability](https://github.com/JunMystery/Agent-Guidance/security/advisories/new)**
 
 This opens a private advisory workspace between you and the maintainers to discuss, verify, and resolve the issue confidentially before public disclosure.
 

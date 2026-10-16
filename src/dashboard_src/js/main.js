@@ -4,6 +4,7 @@ import { renderGraphView } from './render/graphView.js';
 import { renderLogsView } from './render/logsView.js';
 import { renderSkillsView } from './render/skillsView.js';
 import { initSettingsView } from './render/settingsView.js';
+import { renderRulesView } from './render/rulesView.js';
 import { startPoll, stopPoll } from './poll.js';
 import { changeProjectPath, closeDirBrowser, selectDirPath } from './dirBrowser.js';
 import { initI18n, getLanguage, setLanguage, onLanguageChange } from './i18n/index.js';
@@ -12,7 +13,7 @@ import { initProjectSelector } from './projectSelect.js';
 
 export { toggleSidebar, toggleSidebarCollapse };
 
-const VIEWS = ['dashboard', 'actions', 'graph', 'logs', 'skills', 'settings'];
+const VIEWS = ['dashboard', 'actions', 'graph', 'logs', 'skills', 'settings', 'rules'];
 
 export async function loadAndRenderGraph() {
   const data = await fetchGraphData({ view: 'files' });
@@ -58,6 +59,11 @@ function syncView(view, { push = true } = {}) {
     const graphList = el('graph-symbol-list-container');
     if (graphList) graphList.innerHTML = '';
     initSettingsView();
+  } else if (view === 'rules') {
+    stopPoll();
+    const graphList = el('graph-symbol-list-container');
+    if (graphList) graphList.innerHTML = '';
+    renderRulesView();
   } else {
     const graphList = el('graph-symbol-list-container');
     if (graphList) graphList.innerHTML = '';

@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 
-use crate::daemon::tray_platform::{open_browser, open_folder};
+use crate::daemon::tray_platform::{open_browser, open_folder, show_about_dialog};
 use ksni::menu::{MenuItem, StandardItem};
 use ksni::{Icon, ToolTip, Tray, TrayService};
 
@@ -16,7 +16,7 @@ impl Tray for LinuxTray {
     }
 
     fn title(&self) -> String {
-        "Agent Guidance (MCP)".into()
+        format!("Agent Guidance v{}", env!("CARGO_PKG_VERSION"))
     }
 
     fn icon_name(&self) -> String {
@@ -25,7 +25,7 @@ impl Tray for LinuxTray {
 
     fn tool_tip(&self) -> ToolTip {
         ToolTip {
-            title: "Agent Guidance (MCP)".into(),
+            title: format!("Agent Guidance v{}", env!("CARGO_PKG_VERSION")),
             description: "Running in background".into(),
             ..Default::default()
         }
@@ -79,6 +79,14 @@ impl Tray for LinuxTray {
                                 .as_path(),
                         );
                     }
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: "About Agent Guidance".into(),
+                activate: Box::new(|_| {
+                    show_about_dialog(0, env!("CARGO_PKG_VERSION"));
                 }),
                 ..Default::default()
             }
@@ -152,15 +160,15 @@ mod tests {
     fn test_linux_tray_metadata() {
         let tray = LinuxTray { port: 8080 };
         assert_eq!(tray.id(), "agent-guidance-mcp");
-        assert_eq!(tray.title(), "Agent Guidance (MCP)");
+        assert_eq!(tray.title(), format!("Agent Guidance v{}", env!("CARGO_PKG_VERSION")));
         assert_eq!(tray.icon_name(), "agent-guidance");
 
         let tip = tray.tool_tip();
-        assert_eq!(tip.title, "Agent Guidance (MCP)");
+        assert_eq!(tip.title, format!("Agent Guidance v{}", env!("CARGO_PKG_VERSION")));
         assert_eq!(tip.description, "Running in background");
 
         let menu = tray.menu();
-        assert_eq!(menu.len(), 4);
+        assert_eq!(menu.len(), 5);
 
         let icons = tray.icon_pixmap();
         assert_eq!(icons.len(), 1);

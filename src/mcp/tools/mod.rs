@@ -37,6 +37,7 @@ pub(crate) mod gate_edit;
 pub(crate) mod gate_edit_single;
 pub(crate) mod gate_edit_batch;
 mod gate_edit_modularity;
+pub mod micro_rules;
 
 fn extract_target(args: &Value) -> Option<String> {
     if let Some(p) = args.get("relative_path").or_else(|| args.get("file_path")).or_else(|| args.get("path")).and_then(|v| v.as_str()) {
@@ -138,9 +139,18 @@ pub fn handle_tool_call(
             })
     };
 
+    let explicit_proj = arguments
+        .get("project_path")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     let res = match handle_tool_call_internal(name, arguments, state) {
         Ok(mut val) => {
             let duration = start_time.elapsed().as_millis() as u64;
+
+            let resolved_proj = detect_project_path(explicit_proj.as_deref().unwrap_or(""), state);
+            let proj_path = resolved_proj.to_str();
+            micro_rules::inject_tool_micro_rule(name, proj_path, &mut val);
 
             // Universal token optimization & compression across all MCP tool responses
             let opt_enabled = std::env::var("AGENT_GUIDANCE_TOKEN_OPT")

@@ -63,6 +63,8 @@ export async function initProjectSelector() {
     fetchData();
     if (location.hash.slice(1) === 'graph') {
       loadAndRenderGraph();
+    } else if (location.hash.slice(1) === 'rules') {
+      import('./render/rulesView.js').then(m => m.renderRulesView());
     }
   };
 

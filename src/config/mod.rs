@@ -1,3 +1,4 @@
+pub mod project_rules;
 pub mod schema;
 pub mod store;
 pub mod watcher;

@@ -10,16 +10,16 @@ Use the one-line installer script:
 
 **Windows (PowerShell / CMD):**
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/JunMystery/Agent-Guidance-Rust/main/scripts/install.ps1 -OutFile $env:TEMP\i.ps1; & $env:TEMP\i.ps1"
+powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/JunMystery/Agent-Guidance/main/scripts/install.ps1 -OutFile $env:TEMP\i.ps1; & $env:TEMP\i.ps1"
 ```
 *Alternatively, stream and execute directly in memory without writing a temporary file:*
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/JunMystery/Agent-Guidance-Rust/main/scripts/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/JunMystery/Agent-Guidance/main/scripts/install.ps1 | iex"
 ```
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JunMystery/Agent-Guidance-Rust/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JunMystery/Agent-Guidance/main/scripts/install.sh | bash
 ```
 
 The installer builds the native release binary (`agent-guidance`) and configures all detected IDE client configurations via `--setup`.
@@ -29,8 +29,8 @@ The installer builds the native release binary (`agent-guidance`) and configures
 Build the binary directly using `cargo`:
 
 ```bash
-git clone https://github.com/JunMystery/Agent-Guidance-Rust.git
-cd Agent-Guidance-Rust
+git clone https://github.com/JunMystery/Agent-Guidance.git
+cd Agent-Guidance
 cargo build --release
 ```
 

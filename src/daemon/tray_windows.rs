@@ -1,5 +1,5 @@
 #[cfg(target_os = "windows")]
-use crate::daemon::tray_platform::{open_browser, open_folder};
+use crate::daemon::tray_platform::{open_browser, open_folder, show_about_dialog};
 
 #[cfg(target_os = "windows")]
 const LOGO_PNG: &[u8] = include_bytes!("../../docs/images/logo.png");
@@ -109,7 +109,8 @@ unsafe extern "system" fn tray_wnd_proc(
     const WM_TRAY_CALLBACK: u32 = WM_USER + 100;
     const IDM_DASHBOARD: usize = 2001;
     const IDM_DATA_DIR: usize = 2002;
-    const IDM_EXIT: usize = 2003;
+    const IDM_ABOUT: usize = 2003;
+    const IDM_EXIT: usize = 2004;
 
     unsafe {
         if msg == WM_TRAY_CALLBACK {
@@ -120,15 +121,17 @@ unsafe extern "system" fn tray_wnd_proc(
                 SetForegroundWindow(hwnd);
 
                 let menu = CreatePopupMenu();
-                let label: Vec<u16> = "Agent Guidance (Running)\0".encode_utf16().collect();
+                let label: Vec<u16> = format!("Agent Guidance v{}\0", env!("CARGO_PKG_VERSION")).encode_utf16().collect();
                 let dash: Vec<u16> = "Open Web Dashboard\0".encode_utf16().collect();
                 let folder: Vec<u16> = "Open Data Folder\0".encode_utf16().collect();
+                let about: Vec<u16> = "About Agent Guidance\0".encode_utf16().collect();
                 let exit_txt: Vec<u16> = "Exit MCP Daemon\0".encode_utf16().collect();
 
                 AppendMenuW(menu, MF_GRAYED | MF_STRING, 0, label.as_ptr());
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
                 AppendMenuW(menu, MF_STRING, IDM_DASHBOARD, dash.as_ptr());
                 AppendMenuW(menu, MF_STRING, IDM_DATA_DIR, folder.as_ptr());
+                AppendMenuW(menu, MF_STRING, IDM_ABOUT, about.as_ptr());
                 AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
                 AppendMenuW(menu, MF_STRING, IDM_EXIT, exit_txt.as_ptr());
 
@@ -152,6 +155,8 @@ unsafe extern "system" fn tray_wnd_proc(
                     if let Ok(appdata) = std::env::var("LOCALAPPDATA") {
                         open_folder(std::path::Path::new(&appdata).join("agent-guidance").as_path());
                     }
+                } else if cmd == IDM_ABOUT {
+                    show_about_dialog(hwnd as isize, env!("CARGO_PKG_VERSION"));
                 } else if cmd == IDM_EXIT {
                     std::process::exit(0);
                 }

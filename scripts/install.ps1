@@ -72,11 +72,11 @@ if (-not (Test-Path $stagingDir)) { New-Item -ItemType Directory -Path $stagingD
 
 function Try-DownloadPrebuilt {
     param([string]$Prof)
-    $repo = "JunMystery/Agent-Guidance-Rust"
+    $repo = "JunMystery/Agent-Guidance"
     try {
         $meta = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -UseBasicParsing -ErrorAction Stop
         $version = $meta.tag_name
-    } catch { $version = "v1.8.7" }
+    } catch { $version = "v1.8.8" }
 
     $tag = switch ($Prof) { { $_ -in "Client", "2" } { "client" }; { $_ -in "Server", "3" } { "server" }; default { "standalone" } }
     $candidates = @("agent-guidance-$tag-windows-x86_64.zip")
@@ -120,7 +120,7 @@ function Build-FromSource {
             Push-Location $sDir; try { git pull --depth 1 2>$null | Out-Null } finally { Pop-Location }
         } else {
             New-Item -ItemType Directory -Path $sDir -Force | Out-Null
-            git clone --depth 1 https://github.com/JunMystery/Agent-Guidance-Rust.git "$sDir" 2>$null | Out-Null
+            git clone --depth 1 https://github.com/JunMystery/Agent-Guidance.git "$sDir" 2>$null | Out-Null
         }
     }
     Push-Location $sDir

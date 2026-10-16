@@ -10,7 +10,16 @@ export const coreEn = {
   'nav.graph': '🕸️ Architecture Graph',
   'nav.logs': '⚠️ Diagnostics',
   'nav.skills': '📚 Skill Registry',
+  'nav.rules': '⚡ Tool Rules',
   'nav.settings': '⚙️ Settings & Server',
+
+  // Tool Micro-Rules
+  'rules.title': 'Tool Micro-Rules',
+  'rules.global_desc': 'Default execution rules applied to all workspaces.',
+  'rules.project_desc': 'Custom execution rules for this project:',
+  'rules.save_all': 'Save Changes',
+  'rules.revert_global': 'Revert to Global',
+  'rules.reset_default': 'Reset Default',
 
   // Sidebar & Footer
   'sidebar.collapse': 'Collapse sidebar (Ctrl+B)',
@@ -143,4 +152,10 @@ export const coreEn = {
   'time.m_ago': '{min}m ago',
   'time.h_ago': '{hr}h ago',
   'time.d_ago': '{day}d ago',
+
+  // Skill Editor
+  'skills.new_skill': 'New Skill',
+  'skills.edit_skill': 'Edit Skill',
+  'skills.save_skill': 'Save Skill',
+  'skills.revert_default': 'Revert to Default',
 };

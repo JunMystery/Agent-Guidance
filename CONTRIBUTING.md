@@ -15,7 +15,7 @@ This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDU
 ## How Can I Contribute?
 
 ### 1. Reporting Bugs
-- Search existing [GitHub Issues](https://github.com/JunMystery/Agent-Guidance-Rust/issues) before opening a new report.
+- Search existing [GitHub Issues](https://github.com/JunMystery/Agent-Guidance/issues) before opening a new report.
 - Use our [Bug Report Template](.github/ISSUE_TEMPLATE/bug_report.yml) and include:
   - Agent Guidance version (`agent-guidance --version`)
   - OS and deployment profile (Standalone, Client, Server)
@@ -60,8 +60,8 @@ Agent Guidance embeds a catalog of 279+ domain skills under `skills/`:
 
 ### Building the Project
 ```bash
-git clone https://github.com/JunMystery/Agent-Guidance-Rust.git
-cd Agent-Guidance-Rust
+git clone https://github.com/JunMystery/Agent-Guidance.git
+cd Agent-Guidance
 
 # Build debug binary
 cargo build
@@ -126,5 +126,5 @@ Agent Guidance enforces strict internal code quality gates that all pull request
 
 ## Community & Questions
 
-- Join discussions and ask questions on [GitHub Discussions](https://github.com/JunMystery/Agent-Guidance-Rust/discussions).
+- Join discussions and ask questions on [GitHub Discussions](https://github.com/JunMystery/Agent-Guidance/discussions).
 - Check the [Documentation Index](README.md#-documentation-index) for architecture deep dives and tool specs.

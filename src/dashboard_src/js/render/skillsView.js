@@ -5,6 +5,7 @@ import {
   compileSkillsBinary,
 } from '../api.js';
 import { showAlert, showConfirm } from '../dialog.js';
+import { openSkillEditorModal } from './skillEditorModal.js';
 
 let skillsCache = [];
 let selectedNames = new Set();
@@ -25,7 +26,6 @@ export async function renderSkillsView() {
         <div class="terminal-title">Centralized Skill Registry &amp; Binary Compactor</div>
       </div>
       <div class="terminal-body-raw" style="padding:20px">
-        <!-- Binary Metrics Banner -->
         <div id="skills-binary-stats-card" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:12px;margin-bottom:20px">
           <div style="background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:6px;padding:12px">
             <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase">skills.bin Size</div>
@@ -45,32 +45,33 @@ export async function renderSkillsView() {
           </div>
         </div>
 
-        <!-- Action Toolbar -->
         <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px;justify-content:space-between">
-          <div style="display:flex;gap:10px;align-items:center;flex:1;max-width:400px">
+          <div style="display:flex;gap:10px;align-items:center;flex:1;max-width:380px">
             <input type="text" id="skills-search-input" placeholder="Filter skills by name..."
               style="width:100%;padding:8px 12px;border-radius:var(--border-radius-sm);background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);font-size:13px">
           </div>
-          <div style="display:flex;gap:12px;align-items:center">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <button id="btn-new-skill" class="btn-primary" style="padding:7px 14px;cursor:pointer">
+              ➕ New Skill
+            </button>
             <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer">
               <input type="checkbox" id="skills-purge-staging-toggle" checked style="cursor:pointer">
-              <span>Purge from staging directory</span>
+              <span>Purge staging</span>
             </label>
-            <button id="btn-compile-staging" class="btn-secondary" style="padding:7px 14px;cursor:pointer" title="Compile staging skills to binary with SHA-256 diff">
-              ⚡ Compile Staging to Binary
+            <button id="btn-compile-staging" class="btn-secondary" style="padding:7px 14px;cursor:pointer" title="Compile staging skills to binary">
+              ⚡ Compile to Binary
             </button>
             <button id="btn-delete-selected-skills" class="btn-accent" style="padding:7px 14px;background:#ef4444;border-color:#dc2626;cursor:pointer" disabled>
-              🗑️ Delete Selected (<span id="delete-count-badge">0</span>)
+              🗑️ Delete (<span id="delete-count-badge">0</span>)
             </button>
           </div>
         </div>
 
-        <!-- Skills Table -->
         <div style="overflow-x:auto;border:1px solid var(--border-color);border-radius:6px;background:var(--bg-secondary)">
           <table style="width:100%;border-collapse:collapse;font-size:13px;text-align:left">
             <thead>
               <tr style="background:var(--bg-tertiary);border-bottom:1px solid var(--border-color)">
-                <th style="padding:10px 14px;width:40px">
+                <th style="padding:10px 14px;width:36px">
                   <input type="checkbox" id="skills-select-all" style="cursor:pointer">
                 </th>
                 <th style="padding:10px 14px">Skill Slug</th>
@@ -78,10 +79,11 @@ export async function renderSkillsView() {
                 <th style="padding:10px 14px">Source</th>
                 <th style="padding:10px 14px">Status</th>
                 <th style="padding:10px 14px">Size</th>
+                <th style="padding:10px 14px;text-align:right">Action</th>
               </tr>
             </thead>
             <tbody id="skills-table-body">
-              <tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text-secondary)">Loading skills registry...</td></tr>
+              <tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text-secondary)">Loading skills registry...</td></tr>
             </tbody>
           </table>
         </div>
@@ -107,24 +109,21 @@ function bindSkillsEvents() {
     selectAll.addEventListener('change', (e) => {
       const checked = e.target.checked;
       const visible = getFilteredSkills();
-      if (checked) {
-        visible.forEach(s => selectedNames.add(s.name));
-      } else {
-        visible.forEach(s => selectedNames.delete(s.name));
-      }
+      visible.forEach(s => checked ? selectedNames.add(s.name) : selectedNames.delete(s.name));
       updateSelectionUI();
     });
   }
 
-  const btnCompile = document.getElementById('btn-compile-staging');
-  if (btnCompile) {
-    btnCompile.addEventListener('click', onCompileClick);
+  const btnNew = document.getElementById('btn-new-skill');
+  if (btnNew) {
+    btnNew.addEventListener('click', () => openSkillEditorModal('', () => refreshSkillsData()));
   }
 
+  const btnCompile = document.getElementById('btn-compile-staging');
+  if (btnCompile) btnCompile.addEventListener('click', onCompileClick);
+
   const btnDelete = document.getElementById('btn-delete-selected-skills');
-  if (btnDelete) {
-    btnDelete.addEventListener('click', onDeleteClick);
-  }
+  if (btnDelete) btnDelete.addEventListener('click', onDeleteClick);
 }
 
 async function refreshSkillsData() {
@@ -133,7 +132,6 @@ async function refreshSkillsData() {
       fetchSkillsRegistry().catch(() => ({ skills: [] })),
       fetchSkillsBinaryStats().catch(() => ({})),
     ]);
-
     skillsCache = reg.skills || [];
     renderSkillsStats(bstats, skillsCache.length);
     renderSkillsTable();
@@ -148,7 +146,6 @@ function renderSkillsStats(stats, total) {
     if (b > 1024 * 1024) return (b / (1024 * 1024)).toFixed(2) + ' MB';
     return (b / 1024).toFixed(1) + ' KB';
   };
-
   const sBin = document.getElementById('metric-skills-bin');
   const vBin = document.getElementById('metric-vectors-bin');
   const sCount = document.getElementById('metric-skills-count');
@@ -160,7 +157,7 @@ function renderSkillsStats(stats, total) {
   if (cHash) {
     const hash = stats.catalog_hash || 'none';
     const tombs = stats.tombstones_count || 0;
-    cHash.innerHTML = `<span title="${hash}">${hash.substring(0, 12)}...</span> · ${tombs} tombstones`;
+    cHash.innerHTML = `<span title="${hash}">${hash.substring(0, 10)}...</span> · ${tombs} tombs`;
   }
 }
 
@@ -175,7 +172,7 @@ function renderSkillsTable() {
 
   const filtered = getFilteredSkills();
   if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-secondary)">No skills match "${searchQuery}"</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text-secondary)">No skills match "${searchQuery}"</td></tr>`;
     return;
   }
 
@@ -203,6 +200,9 @@ function renderSkillsTable() {
         <td style="padding:10px 14px">${sourceBadge}</td>
         <td style="padding:10px 14px">${statusBadge}</td>
         <td style="padding:10px 14px;color:var(--text-secondary)">${lenKb}</td>
+        <td style="padding:10px 14px;text-align:right">
+          <button class="btn-edit-skill btn-secondary" data-name="${skill.name}" style="padding:3px 10px;font-size:12px;cursor:pointer">✏️ Edit</button>
+        </td>
       </tr>
     `;
   }).join('');
@@ -213,6 +213,13 @@ function renderSkillsTable() {
       if (e.target.checked) selectedNames.add(name);
       else selectedNames.delete(name);
       updateSelectionUI();
+    });
+  });
+
+  tbody.querySelectorAll('.btn-edit-skill').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const name = e.currentTarget.dataset.name;
+      openSkillEditorModal(name, () => refreshSkillsData());
     });
   });
 
@@ -230,8 +237,7 @@ function updateSelectionUI() {
 
   const visible = getFilteredSkills();
   if (selectAll && visible.length > 0) {
-    const allSelected = visible.every(s => selectedNames.has(s.name));
-    selectAll.checked = allSelected;
+    selectAll.checked = visible.every(s => selectedNames.has(s.name));
   }
 }
 
@@ -244,7 +250,7 @@ async function onCompileClick() {
       const st = res.stats || {};
       await showAlert({
         title: 'Skills Compilation Succeeded',
-        message: `Compiled ${st.total_skills || 0} skills in ${st.duration_ms || 0} ms.\nReindexed: ${st.reindexed || 0} | Unchanged: ${st.unchanged_skipped || 0}\nCatalog Hash: ${st.catalog_hash || 'ok'}`,
+        message: `Compiled ${st.total_skills || 0} skills in ${st.duration_ms || 0} ms.\nReindexed: ${st.reindexed || 0} | Unchanged: ${st.unchanged_skipped || 0}`,
         variant: 'success',
       });
       await refreshSkillsData();
@@ -264,11 +270,10 @@ async function onDeleteClick() {
 
   const confirmed = await showConfirm({
     title: `Delete ${count} Skill(s)?`,
-    message: `Are you sure you want to delete ${count} selected skill(s)? This will compact vectors.bin and record them into tombstones.json${purge ? ' and purge their staging folders' : ''}.`,
+    message: `Are you sure you want to delete ${count} selected skill(s)?`,
     confirmText: 'Delete & Compact',
     variant: 'danger',
   });
-
   if (!confirmed) return;
 
   const btnDelete = document.getElementById('btn-delete-selected-skills');
@@ -281,7 +286,7 @@ async function onDeleteClick() {
       selectedNames.clear();
       await showAlert({
         title: 'Skills Deleted & Compacted',
-        message: `Successfully pruned ${names.length} skills in ${res.result?.duration_ms || 0} ms.\nNew skills.bin count: ${res.result?.new_count || 'updated'}`,
+        message: `Successfully pruned ${names.length} skills.`,
         variant: 'success',
       });
       await refreshSkillsData();

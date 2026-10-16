@@ -34,12 +34,20 @@ pub fn scan_staging_skills() -> Vec<SkillItem> {
     results
 }
 
+pub fn is_valid_skill_slug(slug: &str) -> bool {
+    let norm = slug.trim();
+    !norm.is_empty()
+        && norm
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
 pub fn purge_staging_skill(slug: &str) -> anyhow::Result<bool> {
-    let dir = staging_dir();
-    let norm = slug.trim().to_lowercase();
-    if norm.is_empty() {
+    if !is_valid_skill_slug(slug) {
         return Ok(false);
     }
+    let dir = staging_dir();
+    let norm = slug.trim().to_lowercase();
 
     let target_dir = dir.join(&norm);
     if target_dir.exists() && target_dir.is_dir() {
@@ -55,6 +63,43 @@ pub fn purge_staging_skill(slug: &str) -> anyhow::Result<bool> {
     }
 
     Ok(false)
+}
+
+pub fn save_staging_skill(slug: &str, content: &str) -> anyhow::Result<()> {
+    if !is_valid_skill_slug(slug) {
+        anyhow::bail!("Invalid skill slug format: '{}'", slug);
+    }
+    let dir = ensure_staging_dir()?;
+    let norm = slug.trim().to_lowercase();
+    let target_dir = dir.join(&norm);
+    fs::create_dir_all(&target_dir)?;
+    fs::write(target_dir.join("SKILL.md"), content)?;
+
+    // Auto-revive if skill was tombstoned
+    let _ = crate::catalog::tombstone::remove_tombstones(&[norm.as_str()]);
+    Ok(())
+}
+
+pub fn get_skill_content(name: &str) -> Option<(String, &'static str)> {
+    if !is_valid_skill_slug(name) {
+        return None;
+    }
+    let norm = name.trim().to_lowercase();
+    let s_file = staging_dir().join(&norm).join("SKILL.md");
+    if let Ok(c) = fs::read_to_string(s_file) {
+        return Some((c, "staging"));
+    }
+    let s_flat = staging_dir().join(format!("{}.md", norm));
+    if let Ok(c) = fs::read_to_string(s_flat) {
+        return Some((c, "staging"));
+    }
+    if let Some(c) = crate::catalog::store::get_embedded_skill(&format!("{}/SKILL.md", norm)) {
+        return Some((c, "embedded"));
+    }
+    if let Some(c) = crate::catalog::store::get_embedded_skill(&norm) {
+        return Some((c, "embedded"));
+    }
+    None
 }
 
 /// Applies staged precedence over embedded skills, and filters out tombstoned skills.
@@ -135,5 +180,23 @@ mod tests {
         assert_eq!(skill_c.content, "staged-c");
 
         assert!(merged.iter().all(|s| s.name != "skill-b"));
+    }
+
+    #[test]
+    fn test_save_and_get_staging_skill() {
+        let slug = "test-temp-skill-xyz";
+        let content = "# Temp Skill\nTest content";
+        let res = save_staging_skill(slug, content);
+        assert!(res.is_ok());
+
+        let loaded = get_skill_content(slug);
+        assert!(loaded.is_some());
+        let (body, source) = loaded.unwrap();
+        assert_eq!(body, content);
+        assert_eq!(source, "staging");
+
+        let purged = purge_staging_skill(slug);
+        assert!(purged.unwrap());
+        assert!(get_skill_content(slug).is_none());
     }
 }

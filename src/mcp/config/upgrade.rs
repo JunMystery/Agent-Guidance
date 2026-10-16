@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use super::setup::run_setup;
 
-const REPO: &str = "JunMystery/Agent-Guidance-Rust";
+const REPO: &str = "JunMystery/Agent-Guidance";
 
 fn get_release_asset_name() -> Option<&'static str> {
     if cfg!(target_os = "windows") {

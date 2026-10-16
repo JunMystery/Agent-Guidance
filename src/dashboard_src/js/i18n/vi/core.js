@@ -10,7 +10,16 @@ export const coreVi = {
   'nav.graph': '🕸️ Đồ Thị Kiến Trúc',
   'nav.logs': '⚠️ Nhật Ký & Chẩn Đoán',
   'nav.skills': '📚 Quản Lý Skill',
+  'nav.rules': '⚡ Quy Tắc Công Cụ',
   'nav.settings': '⚙️ Cài Đặt & Máy Chủ',
+
+  // Tool Micro-Rules
+  'rules.title': 'Quy Tắc Micro-Rules Công Cụ',
+  'rules.global_desc': 'Quy tắc thực thi mặc định áp dụng cho tất cả dự án.',
+  'rules.project_desc': 'Quy tắc thực thi tùy biến cho dự án này:',
+  'rules.save_all': 'Lưu Thay Đổi',
+  'rules.revert_global': 'Quay về Toàn Cục',
+  'rules.reset_default': 'Khôi Phục Mặc Định',
 
   // Sidebar & Footer
   'sidebar.collapse': 'Thu gọn thanh bên (Ctrl+B)',
@@ -143,4 +152,10 @@ export const coreVi = {
   'time.m_ago': '{min} phút trước',
   'time.h_ago': '{hr} giờ trước',
   'time.d_ago': '{day} ngày trước',
+
+  // Skill Editor
+  'skills.new_skill': 'Tạo Skill Mới',
+  'skills.edit_skill': 'Chỉnh Sửa Skill',
+  'skills.save_skill': 'Lưu Skill',
+  'skills.revert_default': 'Khôi phục Mặc định',
 };
