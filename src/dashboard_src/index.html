@@ -36,11 +36,11 @@
   <nav role="tablist" aria-label="Dashboard views">
     <a class="active" role="tab" aria-selected="true" aria-controls="view-dashboard" id="tab-dashboard" data-view="dashboard"><span data-i18n="nav.dashboard">Dashboard</span></a>
     <a role="tab" aria-selected="false" aria-controls="view-actions" id="tab-actions" data-view="actions"><span data-i18n="nav.actions">Actions Log</span></a>
-    <a role="tab" aria-selected="false" aria-controls="view-graph" id="tab-graph" data-view="graph"><span data-i18n="nav.graph">🕸️ Architecture Graph</span></a>
-    <a role="tab" aria-selected="false" aria-controls="view-logs" id="tab-logs" data-view="logs"><span data-i18n="nav.logs">⚠️ Diagnostics</span></a>
-    <a role="tab" aria-selected="false" aria-controls="view-skills" id="tab-skills" data-view="skills"><span data-i18n="nav.skills">📚 Skill Registry</span></a>
-    <a role="tab" aria-selected="false" aria-controls="view-rules" id="tab-rules" data-view="rules"><span data-i18n="nav.rules">⚡ Tool Rules</span></a>
-    <a role="tab" aria-selected="false" aria-controls="view-settings" id="tab-settings" data-view="settings"><span data-i18n="nav.settings">⚙️ Settings &amp; Server</span></a>
+    <a role="tab" aria-selected="false" aria-controls="view-graph" id="tab-graph" data-view="graph"><span data-i18n="nav.graph">Architecture Graph</span></a>
+    <a role="tab" aria-selected="false" aria-controls="view-logs" id="tab-logs" data-view="logs"><span data-i18n="nav.logs">Diagnostics</span></a>
+    <a role="tab" aria-selected="false" aria-controls="view-skills" id="tab-skills" data-view="skills"><span data-i18n="nav.skills">Skill Registry</span></a>
+    <a role="tab" aria-selected="false" aria-controls="view-rules" id="tab-rules" data-view="rules"><span data-i18n="nav.rules">Tool Rules</span></a>
+    <a role="tab" aria-selected="false" aria-controls="view-settings" id="tab-settings" data-view="settings"><span data-i18n="nav.settings">Settings &amp; Server</span></a>
   </nav>
   <div class="sidebar-footer">
     <div style="margin-bottom:8px">
@@ -118,6 +118,39 @@
   </div>
 
   <!-- VIEWS -->
+  <div class="hud-command-bar" style="margin-bottom:16px">
+    <div class="hud-scope-wrap">
+      <div class="hud-scope-label">
+        <span class="hud-pulse-dot pulse-emerald"></span>
+        <span class="hud-scope-title" data-i18n="kpi.active_scope">ACTIVE SCOPE:</span>
+      </div>
+      <div class="hud-project-select-wrap">
+        <div class="combobox-wrap" id="header-combobox-wrap">
+          <input type="text" id="header-project-search" class="combobox-input font-mono" placeholder="Search or select project…" autocomplete="off" aria-label="Search and select project" data-i18n-placeholder="combobox.search_placeholder">
+          <button type="button" id="header-combobox-arrow" class="combobox-arrow" title="Toggle project dropdown">▾</button>
+          <div id="header-combobox-dropdown" class="combobox-dropdown hidden">
+            <div id="header-combobox-options" class="combobox-options"></div>
+          </div>
+        </div>
+        <select id="header-project-selector" class="hud-project-select hidden" aria-label="Filter dashboard by project" data-i18n-aria-label="kpi.filter_project_aria">
+          <option value="all" data-i18n="sidebar.all_projects_analytics">🌐 All Projects (Global Analytics)</option>
+        </select>
+        <div id="header-project-badge" class="header-project-badge"></div>
+      </div>
+      <div class="hud-scope-tag">
+        <span id="sys-project" class="hud-project-name">--</span>
+        <span class="hud-arch-badge">Clean_Arch</span>
+      </div>
+    </div>
+
+    <div class="hud-timeframe-wrap" id="timeframe-selector">
+      <button class="timeframe-tab active" data-timeframe="past_24h">24H</button>
+      <button class="timeframe-tab" data-timeframe="last_7d">7D</button>
+      <button class="timeframe-tab" data-timeframe="last_30d">30D</button>
+      <button class="timeframe-tab" data-timeframe="lifetime">ALL</button>
+    </div>
+  </div>
+
   <section id="view-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
     <div class="terminal-window">
       <div class="terminal-header">
@@ -130,39 +163,6 @@
       </div>
       <div class="terminal-body-raw">
         <div class="hud-container">
-
-          <div class="hud-command-bar">
-            <div class="hud-scope-wrap">
-              <div class="hud-scope-label">
-                <span class="hud-pulse-dot pulse-emerald"></span>
-                <span class="hud-scope-title" data-i18n="kpi.active_scope">ACTIVE SCOPE:</span>
-              </div>
-              <div class="hud-project-select-wrap">
-                <div class="combobox-wrap" id="header-combobox-wrap">
-                  <input type="text" id="header-project-search" class="combobox-input font-mono" placeholder="Search or select project…" autocomplete="off" aria-label="Search and select project" data-i18n-placeholder="combobox.search_placeholder">
-                  <button type="button" id="header-combobox-arrow" class="combobox-arrow" title="Toggle project dropdown">▾</button>
-                  <div id="header-combobox-dropdown" class="combobox-dropdown hidden">
-                    <div id="header-combobox-options" class="combobox-options"></div>
-                  </div>
-                </div>
-                <select id="header-project-selector" class="hud-project-select hidden" aria-label="Filter dashboard by project" data-i18n-aria-label="kpi.filter_project_aria">
-                  <option value="all" data-i18n="sidebar.all_projects_analytics">🌐 All Projects (Global Analytics)</option>
-                </select>
-                <div id="header-project-badge" class="header-project-badge"></div>
-              </div>
-              <div class="hud-scope-tag">
-                <span id="sys-project" class="hud-project-name">--</span>
-                <span class="hud-arch-badge">Clean_Arch</span>
-              </div>
-            </div>
-
-            <div class="hud-timeframe-wrap" id="timeframe-selector">
-              <button class="timeframe-tab active" data-timeframe="past_24h">24H</button>
-              <button class="timeframe-tab" data-timeframe="last_7d">7D</button>
-              <button class="timeframe-tab" data-timeframe="last_30d">30D</button>
-              <button class="timeframe-tab" data-timeframe="lifetime">ALL</button>
-            </div>
-          </div>
 
           <div class="hud-kpi-grid">
 
@@ -492,7 +492,7 @@
       </div>
       <div class="terminal-body-raw">
         <div class="chart-card">
-          <div class="chart-card-title" data-i18n="actions.chart_subtitle">Tool Call Volume &amp; Execution Latency (ms) · Last 24h</div>
+          <div class="chart-card-title" id="chart-card-subtitle" data-i18n="actions.chart_subtitle">Tool Call Volume &amp; Execution Latency (ms) · Last 24h</div>
           <div id="hourly-chart" class="hourly-chart"></div>
         </div>
         <div class="cards" style="margin-top:20px" id="token-summary-cards"></div>

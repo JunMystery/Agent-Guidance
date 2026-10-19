@@ -64,6 +64,7 @@ function bindTimeframeTabs() {
       activeTimeframe = tab.dataset.timeframe;
       syncTimeframeTabs(activeTimeframe);
       updateTimeframeSummary(activeTimeframe);
+      import('../api.js').then(m => m.fetchData({ force: true }));
     });
   });
 }

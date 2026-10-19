@@ -94,7 +94,7 @@ fn test_select_skill_singular_alias_and_logging() {
 
     // Verify stats query top_skills records custom-audit
     let db_path = crate::mcp::db::get_db_path();
-    let stats = crate::dashboard::stats_query::query_usage_stats(&db_path, None).expect("query stats");
+    let stats = crate::dashboard::stats_query::query_usage_stats(&db_path, None, "past_24h").expect("query stats");
     let top = stats["top_skills"].as_array().expect("top skills array");
     assert!(top.iter().any(|s| s["skill_id"] == "custom-audit"), "Top skills must record custom-audit: {:?}", top);
 

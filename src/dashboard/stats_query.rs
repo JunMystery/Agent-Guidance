@@ -4,11 +4,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::stats_query_aggregates::{
-    query_hourly_savings, query_phase_and_gov, query_summaries,
-};
+use super::stats_query_aggregates::{query_phase_and_gov, query_summaries};
 
-pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>) -> Result<Value> {
+pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>, timeframe: &str) -> Result<Value> {
     if !db_path.exists() {
         return Ok(json!({ "db_status": "missing" }));
     }
@@ -23,7 +21,13 @@ pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>) -> Result<Va
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let cutoff_24h = now - 86400;
+
+    let (normalized_tf, cutoff) = match timeframe {
+        "last_7d" | "7d" => ("last_7d", now.saturating_sub(7 * 86400)),
+        "last_30d" | "30d" => ("last_30d", now.saturating_sub(30 * 86400)),
+        "lifetime" | "all" => ("lifetime", 0),
+        _ => ("past_24h", now.saturating_sub(86400)),
+    };
 
     let is_proj = proj_filter.is_some() && proj_filter != Some("all");
     let p1 = proj_filter.unwrap_or("").replace('\\', "/");
@@ -39,9 +43,9 @@ pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>) -> Result<Va
     };
     let mut stmt = conn.prepare(tool_sql)?;
     let tool_breakdown: Vec<Value> = if is_proj {
-        stmt.query_map(params![cutoff_24h, p1, p2], map_tool_row)?
+        stmt.query_map(params![cutoff, p1, p2], map_tool_row)?
     } else {
-        stmt.query_map([cutoff_24h], map_tool_row)?
+        stmt.query_map([cutoff], map_tool_row)?
     }
     .filter_map(|r| r.ok())
     .collect();
@@ -49,7 +53,7 @@ pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>) -> Result<Va
     // 2. Top Skills
     let mut top_skills_map: HashMap<String, i64> = HashMap::new();
     let mut stmt = conn.prepare("SELECT skill_id, COUNT(*) FROM skill_loads WHERE loaded_at >= ? GROUP BY skill_id")?;
-    let rows = stmt.query_map([cutoff_24h], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?;
+    let rows = stmt.query_map([cutoff], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?;
     for item in rows.flatten() {
         if let Some(clean_id) = normalize_skill_name(&item.0) {
             *top_skills_map.entry(clean_id).or_default() += item.1;
@@ -63,9 +67,9 @@ pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>) -> Result<Va
     if let Ok(mut tc_stmt) = conn.prepare(tc_sql) {
         let mapper = |r: &rusqlite::Row| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?));
         let tc_rows = if is_proj {
-            tc_stmt.query_map(params![cutoff_24h, p1, p2], mapper)
+            tc_stmt.query_map(params![cutoff, p1, p2], mapper)
         } else {
-            tc_stmt.query_map([cutoff_24h], mapper)
+            tc_stmt.query_map([cutoff], mapper)
         };
         if let Ok(iter) = tc_rows {
             for (ops, tc_cnt) in iter.flatten() {
@@ -115,30 +119,30 @@ pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>) -> Result<Va
 
     // 3. Recent Actions
     let recent_sql = if is_proj {
-        "SELECT tool_name, operation, started_at, duration_ms, tokens_original, tokens_optimized, error_message, target FROM tool_calls WHERE tool_name != 'mcp_tool' AND (project_path = ?1 COLLATE NOCASE OR project_path = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?1 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE) ORDER BY started_at DESC LIMIT 50"
+        "SELECT tool_name, operation, started_at, duration_ms, tokens_original, tokens_optimized, error_message, target FROM tool_calls WHERE started_at >= ?1 AND tool_name != 'mcp_tool' AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE) ORDER BY started_at DESC LIMIT 50"
     } else {
-        "SELECT tool_name, operation, started_at, duration_ms, tokens_original, tokens_optimized, error_message, target FROM tool_calls WHERE tool_name != 'mcp_tool' ORDER BY started_at DESC LIMIT 50"
+        "SELECT tool_name, operation, started_at, duration_ms, tokens_original, tokens_optimized, error_message, target FROM tool_calls WHERE started_at >= ?1 AND tool_name != 'mcp_tool' ORDER BY started_at DESC LIMIT 50"
     };
     let mut stmt = conn.prepare(recent_sql)?;
     let recent_actions: Vec<Value> = if is_proj {
-        stmt.query_map(params![p1, p2], map_recent_action)?
+        stmt.query_map(params![cutoff, p1, p2], map_recent_action)?
     } else {
-        stmt.query_map([], map_recent_action)?
+        stmt.query_map([cutoff], map_recent_action)?
     }
     .filter_map(|r| r.ok())
     .collect();
 
     // 4. Hourly Savings & Summaries
-    let hourly_savings = query_hourly_savings(&conn, now, is_proj, &p1, &p2);
-    let summaries = query_summaries(&conn, now, cutoff_24h, is_proj, &p1, &p2);
+    let hourly_savings = super::stats_chart_query::query_adaptive_savings(&conn, now, normalized_tf, is_proj, &p1, &p2);
+    let summaries = query_summaries(&conn, now, now.saturating_sub(86400), is_proj, &p1, &p2);
 
     let mut stmt = conn.prepare("SELECT query_text, queried_at FROM embed_queries WHERE queried_at >= ? ORDER BY queried_at DESC LIMIT 50")?;
-    let embed_recent: Vec<Value> = stmt.query_map([cutoff_24h], |row| {
+    let embed_recent: Vec<Value> = stmt.query_map([cutoff], |row| {
         Ok(json!({ "query": row.get::<_, String>(0)?, "created_at": row.get::<_, i64>(1)? }))
     })?.filter_map(|r| r.ok()).collect();
 
-    let past_24h = summaries["past_24h"].clone();
-    let (phase_stats, governance_stats) = query_phase_and_gov(&conn, cutoff_24h, is_proj, &p1, &p2);
+    let active_totals = summaries.get(normalized_tf).cloned().unwrap_or_else(|| summaries["past_24h"].clone());
+    let (phase_stats, governance_stats) = query_phase_and_gov(&conn, cutoff, is_proj, &p1, &p2);
 
     let remote_skills = if crate::config::current_config().server.is_remote() {
         crate::client::cache::get_cached_remote_stats().map(|s| {
@@ -159,8 +163,9 @@ pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>) -> Result<Va
         "db_status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
         "project_path": proj_filter.unwrap_or("all"),
+        "timeframe": normalized_tf,
         "server_port": crate::dashboard::get_dashboard_port(),
-        "totals": past_24h,
+        "totals": active_totals,
         "summaries": summaries,
         "tool_breakdown": tool_breakdown,
         "top_skills": top_skills,

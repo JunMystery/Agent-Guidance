@@ -23,6 +23,7 @@ pub mod skills_api;
 pub mod skills_editor_api;
 pub(crate) use router::json_response;
 pub mod stats;
+pub(crate) mod stats_chart_query;
 pub mod stats_query;
 pub(crate) mod stats_query_aggregates;
 

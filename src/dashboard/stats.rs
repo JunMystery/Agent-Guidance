@@ -16,10 +16,13 @@ pub(crate) fn handle_api_stats(request: tiny_http::Request, default_proj: &str, 
                 "all".to_string()
             }
         });
+    let query_timeframe = extract_query_param(url, "timeframe")
+        .unwrap_or_else(|| "past_24h".to_string());
+    let cache_key = format!("{}:{}", query_project, query_timeframe);
 
     if let Ok(guard) = cache.lock() {
         if let (Some(gen_at), Some(data), Some(cached_key)) = (guard.generated_at, guard.data.as_ref(), guard.project_key.as_ref()) {
-            if cached_key == &query_project && gen_at.elapsed() < STATS_CACHE_TTL {
+            if cached_key == &cache_key && gen_at.elapsed() < STATS_CACHE_TTL {
                 json_response(request, 200, data);
                 return;
             }
@@ -44,10 +47,10 @@ pub(crate) fn handle_api_stats(request: tiny_http::Request, default_proj: &str, 
         return;
     }
 
-    match query_usage_stats(&db_path, Some(&query_project)) {
+    match query_usage_stats(&db_path, Some(&query_project), &query_timeframe) {
         Ok(data) => {
             if let Ok(mut guard) = cache.lock() {
-                guard.project_key = Some(query_project);
+                guard.project_key = Some(cache_key);
                 guard.generated_at = Some(Instant::now());
                 guard.data = Some(data.clone());
             }

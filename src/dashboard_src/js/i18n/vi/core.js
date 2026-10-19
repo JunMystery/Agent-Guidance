@@ -7,11 +7,11 @@ export const coreVi = {
   'nav.top_skills': 'Kỹ Năng Hàng Đầu',
   'nav.actions': 'Đo Đạc & Nhật Ký Lệnh',
   'nav.recent_calls': 'Cuộc Gọi Gần Đây',
-  'nav.graph': '🕸️ Đồ Thị Kiến Trúc',
-  'nav.logs': '⚠️ Nhật Ký & Chẩn Đoán',
-  'nav.skills': '📚 Quản Lý Skill',
-  'nav.rules': '⚡ Quy Tắc Công Cụ',
-  'nav.settings': '⚙️ Cài Đặt & Máy Chủ',
+  'nav.graph': 'Đồ Thị Kiến Trúc',
+  'nav.logs': 'Nhật Ký & Chẩn Đoán',
+  'nav.skills': 'Quản Lý Skill',
+  'nav.rules': 'Quy Tắc Công Cụ',
+  'nav.settings': 'Cài Đặt & Máy Chủ',
 
   // Tool Micro-Rules
   'rules.title': 'Quy Tắc Micro-Rules Công Cụ',

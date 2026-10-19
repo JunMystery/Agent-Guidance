@@ -1,6 +1,6 @@
 # 🦀 Agent Guidance MCP Server
 
-[![Version](https://img.shields.io/badge/Version-v1.8.8-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/Version-v1.8.9-blue.svg)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/Language-Rust%202024-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/Security-Policy-blue.svg)](SECURITY.md)
@@ -263,6 +263,20 @@ Every core MCP tool is coupled with targeted execution micro-rules that keep LLM
   - One-click **Reset Default** and project-level **Revert to Global**.
   - Dynamic synchronization with the tracked project dropdown.
 - **Runtime Injection**: The effective rule is automatically attached to the response payload as a high-visibility `> [!IMPORTANT] **Tool Execution Mandate**` banner upon tool execution.
+
+---
+
+## ⏱️ Global Timeframe Analytics & Adaptive Telemetry
+
+The Web Dashboard (`http://127.0.0.1:11997`) features an interactive persistent Command Deck with global timeframe controls:
+
+- **Persistent Command Bar**: Sticky top bar housing the **Active Scope** project combobox and **Timeframe Tabs** (`24H` / `7D` / `30D` / `ALL`), synchronizing telemetry views seamlessly across both Dashboard and Actions Log.
+- **Server-Side SQLite Filtering**: Switching timeframes dynamically recalculates token metrics, tool breakdown distributions, top active skills, recent action streams, and governance cadence.
+- **Adaptive Invocations & Latency Wave**:
+  - `24H`: 24 hourly buckets (`HH:00`) for fine-grained intraday execution rhythms.
+  - `7D` & `30D`: Daily milestone buckets (`DD/MM`) displaying longitudinal token optimization trends.
+  - `ALL`: Dynamic multi-day historical bucketing spanning full SQLite telemetry records.
+- **Clean Minimal Sidebar**: Polished sidebar navigation with clean text indicators for distraction-free monitoring.
 
 ---
 

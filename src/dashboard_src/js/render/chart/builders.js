@@ -96,9 +96,12 @@ export function formatHour(h, i) {
   const ts = typeof h?.timestamp === 'number' ? h.timestamp : (typeof h?.hour === 'number' ? h.hour : null);
   if (ts !== null) {
     const d = new Date(ts * 1000);
+    if (h?.step >= 86400) {
+      return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0');
+    }
     return String(d.getHours()).padStart(2, '0') + ':00';
   }
-  if (typeof h?.hour === 'string' && h.hour.includes(':')) {
+  if (typeof h?.hour === 'string' && (h.hour.includes(':') || h.hour.includes('/'))) {
     return h.hour;
   }
   const now = new Date();

@@ -7,11 +7,11 @@ export const coreEn = {
   'nav.top_skills': 'Top Skills',
   'nav.actions': 'Actions & Traces',
   'nav.recent_calls': 'Recent Calls',
-  'nav.graph': '🕸️ Architecture Graph',
-  'nav.logs': '⚠️ Diagnostics',
-  'nav.skills': '📚 Skill Registry',
-  'nav.rules': '⚡ Tool Rules',
-  'nav.settings': '⚙️ Settings & Server',
+  'nav.graph': 'Architecture Graph',
+  'nav.logs': 'Diagnostics',
+  'nav.skills': 'Skill Registry',
+  'nav.rules': 'Tool Rules',
+  'nav.settings': 'Settings & Server',
 
   // Tool Micro-Rules
   'rules.title': 'Tool Micro-Rules',

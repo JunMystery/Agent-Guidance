@@ -1,57 +1,9 @@
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 
+#[allow(dead_code)]
 pub fn query_hourly_savings(conn: &Connection, now: i64, is_proj: bool, p1: &str, p2: &str) -> Vec<Value> {
-    let mut hourly_map = std::collections::BTreeMap::new();
-    let start_of_period = now - (23 * 3600);
-    let start_hour = (start_of_period / 3600) * 3600;
-
-    for i in 0..24 {
-        let h = start_hour + (i * 3600);
-        hourly_map.insert(h, (0i64, 0i64, 0i64, 0.0f64));
-    }
-
-    let h_sql = if is_proj {
-        "SELECT (started_at / 3600) * 3600 as hour, COUNT(*), COALESCE(SUM(tokens_original), 0), COALESCE(SUM(tokens_optimized), 0), COALESCE(AVG(duration_ms), 0.0)
-         FROM tool_calls WHERE started_at >= ?1 AND tool_name != 'mcp_tool' AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE) GROUP BY hour"
-    } else {
-        "SELECT (started_at / 3600) * 3600 as hour, COUNT(*), COALESCE(SUM(tokens_original), 0), COALESCE(SUM(tokens_optimized), 0), COALESCE(AVG(duration_ms), 0.0)
-         FROM tool_calls WHERE started_at >= ?1 AND tool_name != 'mcp_tool' GROUP BY hour"
-    };
-
-    if let Ok(mut stmt) = conn.prepare(h_sql) {
-        let mapper = |row: &rusqlite::Row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?, row.get::<_, f64>(4)?));
-        let rows = if is_proj { stmt.query_map(params![start_hour, p1, p2], mapper) }
-                   else { stmt.query_map([start_hour], mapper) };
-        if let Ok(iter) = rows {
-            for (h, cnt, orig, opt, dur) in iter.flatten() {
-                hourly_map.insert(h, (cnt, orig, opt, dur));
-            }
-        }
-    }
-
-    let total_len = hourly_map.len();
-    hourly_map
-        .into_iter()
-        .enumerate()
-        .map(|(idx, (h, (cnt, orig, opt, dur)))| {
-            let saved = orig - opt;
-            let is_current = idx + 1 == total_len;
-            json!({
-                "hour": h,
-                "timestamp": h,
-                "calls": cnt,
-                "avg_duration_ms": dur.round() as i64,
-                "tokens_original": orig,
-                "tokens_optimized": opt,
-                "tokens_saved": saved,
-                "original": orig,
-                "optimized": opt,
-                "saved": saved,
-                "is_current": is_current
-            })
-        })
-        .collect()
+    super::stats_chart_query::query_adaptive_savings(conn, now, "past_24h", is_proj, p1, p2)
 }
 
 pub fn query_phase_and_gov(conn: &Connection, cutoff: i64, is_proj: bool, p1: &str, p2: &str) -> (Value, Value) {

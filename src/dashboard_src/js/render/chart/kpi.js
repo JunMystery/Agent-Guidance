@@ -11,11 +11,13 @@ export function buildKpi(tot, hours = []) {
     : 0;
   const peakCalls = hours.reduce((m, h) => Math.max(m, h.calls || 0), 0);
   const opt = tot.tokens_optimized || hours.reduce((m, h) => m + (h.tokens_optimized || h.optimized || 0), 0);
+  const isDaily = hours[0]?.step >= 86400;
+  const unit = isDaily ? (t('chart.per_day') || '/d') : (t('chart.per_hr') || '/hr');
 
   return '<div class="savings-kpi">' +
     '<div class="kpi"><span class="kpi-label">' + t('chart.total_invocations') + '</span><span class="kpi-val kpi-opt">' + totalCalls.toLocaleString() + '</span></div>' +
     '<div class="kpi"><span class="kpi-label">' + t('chart.avg_latency') + '</span><span class="kpi-val">' + avgLatency + 'ms</span></div>' +
-    '<div class="kpi kpi-velocity"><span class="kpi-label">' + t('chart.peak_invocations') + '</span><span class="kpi-val kpi-peak">⚡ ' + peakCalls + t('chart.per_hr') + '</span></div>' +
+    '<div class="kpi kpi-velocity"><span class="kpi-label">' + t('chart.peak_invocations') + '</span><span class="kpi-val kpi-peak">⚡ ' + peakCalls + unit + '</span></div>' +
     '<div class="kpi"><span class="kpi-label">' + t('chart.opt_payload') + '</span><span class="kpi-val kpi-saved">' + fmtTokens(opt) + '</span></div>' +
     '</div>';
 }

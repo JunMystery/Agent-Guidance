@@ -17,11 +17,18 @@ export function renderHourlyChart(data, totals) {
   if (!chart) return;
 
   const rawHours = (data.hourly_savings || []);
-  const fingerprint = rawHours.map(h => `${h.calls || 0}:${h.avg_duration_ms || 0}:${h.optimized || h.tokens_optimized || 0}`).join('|');
+  const tf = data.timeframe || '';
+  const fingerprint = `${tf}|` + rawHours.map(h => `${h.calls || 0}:${h.avg_duration_ms || 0}:${h.optimized || h.tokens_optimized || 0}`).join('|');
   if (fingerprint && fingerprint === lastChartFingerprint && chart.children.length > 0) {
     return;
   }
   lastChartFingerprint = fingerprint;
+
+  const subtitleEl = el('chart-card-subtitle');
+  if (subtitleEl) {
+    const tfLabel = tf === 'last_7d' ? '7D' : (tf === 'last_30d' ? '30D' : (tf === 'lifetime' ? 'ALL' : '24H'));
+    subtitleEl.textContent = `${t('actions.chart_title')} · ${tfLabel}`;
+  }
   const hours = rawHours.map((h, i) => {
     const calls = h.calls ?? 0;
     const latency = h.avg_duration_ms ?? 0;

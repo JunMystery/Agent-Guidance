@@ -1,5 +1,5 @@
 import { setText, setDisplay, setLoading, activeView, pollSpanFor } from './dom.js';
-import { renderDashboard } from './render/statsView.js';
+import { renderDashboard, getActiveTimeframe } from './render/statsView.js';
 import { renderHealthPanel } from './render/health.js';
 import { pollBackoff, setBackoff, resetBackoff, store } from './state.js';
 import { showAlert } from './dialog.js';
@@ -17,7 +17,9 @@ export function getSelectedProject() {
 
 async function fetchStats() {
   const projParam = selectedProject ? `&project=${encodeURIComponent(selectedProject)}` : '&project=all';
-  const resp = await fetch(`/api/stats?window=24h${projParam}`);
+  const tf = getActiveTimeframe ? getActiveTimeframe() : 'past_24h';
+  const tfParam = tf ? `&timeframe=${encodeURIComponent(tf)}` : '';
+  const resp = await fetch(`/api/stats?window=24h${projParam}${tfParam}`);
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   return resp.json();
 }
@@ -278,31 +280,6 @@ export async function compileSkillsBinary(force = false) {
   return resp.json();
 }
 
-export async function fetchToolRules(project) {
-  const q = project && project !== 'all' ? `?project=${encodeURIComponent(project)}` : '?project=all';
-  const resp = await fetch(`/api/tool-rules${q}`);
-  if (!resp.ok) throw new Error('Failed to fetch tool rules: ' + resp.statusText);
-  return resp.json();
-}
-
-export async function saveToolRules(project, rules) {
-  const q = project && project !== 'all' ? `?project=${encodeURIComponent(project)}` : '?project=all';
-  const resp = await fetch(`/api/tool-rules${q}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rules }),
-  });
-  if (!resp.ok) throw new Error('Failed to save tool rules: ' + resp.statusText);
-  return resp.json();
-}
-
-export async function revertToolRules(project) {
-  if (!project || project === 'all') throw new Error('Project path required to revert');
-  const resp = await fetch(`/api/tool-rules/revert?project=${encodeURIComponent(project)}`, {
-    method: 'POST',
-  });
-  if (!resp.ok) throw new Error('Failed to revert tool rules: ' + resp.statusText);
-  return resp.json();
-}
+export { fetchToolRules, saveToolRules, revertToolRules } from './rulesApi.js';
 
 
