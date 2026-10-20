@@ -12,7 +12,11 @@ export function buildKpi(tot, hours = []) {
   const peakCalls = hours.reduce((m, h) => Math.max(m, h.calls || 0), 0);
   const opt = tot.tokens_optimized || hours.reduce((m, h) => m + (h.tokens_optimized || h.optimized || 0), 0);
   const isDaily = hours[0]?.step >= 86400;
-  const unit = isDaily ? (t('chart.per_day') || '/d') : (t('chart.per_hr') || '/hr');
+  const rawDay = t('chart.per_day');
+  const rawHr = t('chart.per_hr');
+  const unit = isDaily
+    ? (rawDay && rawDay !== 'chart.per_day' ? rawDay : '/d')
+    : (rawHr && rawHr !== 'chart.per_hr' ? rawHr : '/hr');
 
   return '<div class="savings-kpi">' +
     '<div class="kpi"><span class="kpi-label">' + t('chart.total_invocations') + '</span><span class="kpi-val kpi-opt">' + totalCalls.toLocaleString() + '</span></div>' +

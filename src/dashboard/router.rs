@@ -50,6 +50,7 @@ pub(crate) fn handle_dashboard_request(
             projects::handle_api_delete_project(request, &db_path, cache);
         }
         "/api/graph" => graph::handle_api_graph(request, project_path),
+        "/api/dashboard/clean" => super::dashboard_clean_api::handle_api_dashboard_clean(request, cache),
         "/api/cleanup" => handle_api_cleanup(request),
         "/api/skills/registry" => super::skills_api::handle_api_skills_registry(request),
         "/api/skills/binary_stats" => super::skills_api::handle_api_skills_binary_stats(request),

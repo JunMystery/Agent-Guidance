@@ -88,6 +88,7 @@ export const telemetryEn = {
   'chart.peak_invocations': 'Peak Invocations',
   'chart.opt_payload': 'Delivered Payload',
   'chart.per_hr': '/hr',
+  'chart.per_day': '/d',
   'chart.legend_calls_wave': 'Invocations (calls)',
   'chart.legend_latency_line': 'Avg Latency (ms)',
   'chart.legend_heat_ribbon': 'Latency Performance Ribbon',

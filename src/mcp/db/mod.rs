@@ -1,7 +1,12 @@
 pub mod cleanup;
 pub mod logger;
+pub mod rollup;
 pub use cleanup::run_auto_cleanup;
 pub use logger::{log_embed_query, log_skill_load, log_tool_call};
+pub use rollup::{clean_dashboard_history, rollup_before_prune};
+
+#[cfg(test)]
+mod rollup_tests;
 
 use anyhow::Result;
 use rusqlite::{Connection, OpenFlags};
@@ -117,6 +122,27 @@ fn init_db_internal(db_path: &PathBuf) -> Result<()> {
             used_at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_psa_proj_skill ON project_skill_analytics(project_path, skill_id);
+        CREATE TABLE IF NOT EXISTS dashboard_daily_rollups (
+            day TEXT NOT NULL,
+            project_path TEXT NOT NULL,
+            tool_name TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            calls INTEGER NOT NULL DEFAULT 0,
+            tokens_original INTEGER NOT NULL DEFAULT 0,
+            tokens_optimized INTEGER NOT NULL DEFAULT 0,
+            total_duration_ms INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (day, project_path, tool_name, operation, phase)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ddr_day_proj ON dashboard_daily_rollups(day, project_path);
+        CREATE TABLE IF NOT EXISTS daily_skill_rollups (
+            day TEXT NOT NULL,
+            project_path TEXT NOT NULL,
+            skill_id TEXT NOT NULL,
+            calls INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (day, project_path, skill_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_dsr_day_proj ON daily_skill_rollups(day, project_path);
         DELETE FROM tool_calls WHERE tool_name = 'mcp_tool';",
     )?;
 

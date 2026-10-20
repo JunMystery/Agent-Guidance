@@ -7,6 +7,7 @@ use tiny_http::Server;
 use tracing::info;
 
 pub mod config_api;
+pub(crate) mod dashboard_clean_api;
 pub mod graph;
 pub(crate) mod graph_contract;
 pub(crate) mod graph_file_query;

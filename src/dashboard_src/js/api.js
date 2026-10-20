@@ -95,6 +95,19 @@ export async function triggerAutoCleanup() {
   }
 }
 
+export async function cleanDashboardMetrics(project = 'all') {
+  try {
+    const resp = await fetch('/api/dashboard/clean', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project }),
+    });
+    return resp.json();
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
 async function fetchHealth() {
   const resp = await fetch('/health');
   return resp.json();

@@ -29,12 +29,29 @@ pub fn query_adaptive_savings(
             } else {
                 "SELECT MIN(started_at) FROM tool_calls WHERE started_at > 0 AND tool_name != 'mcp_tool'"
             };
-            let earliest: Option<i64> = if is_proj {
+            let earliest_raw: Option<i64> = if is_proj {
                 conn.query_row(min_sql, params![p1, p2], |r| r.get(0)).ok()
             } else {
                 conn.query_row(min_sql, [], |r| r.get(0)).ok()
             };
-            let earliest = earliest.unwrap_or(now - (29 * 86400));
+
+            let min_rollup_sql = if is_proj {
+                "SELECT MIN(CAST(strftime('%s', day) AS INTEGER)) FROM dashboard_daily_rollups WHERE (project_path = ?1 COLLATE NOCASE OR project_path = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?1 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE)"
+            } else {
+                "SELECT MIN(CAST(strftime('%s', day) AS INTEGER)) FROM dashboard_daily_rollups"
+            };
+            let earliest_rollup: Option<i64> = if is_proj {
+                conn.query_row(min_rollup_sql, params![p1, p2], |r| r.get(0)).ok()
+            } else {
+                conn.query_row(min_rollup_sql, [], |r| r.get(0)).ok()
+            };
+
+            let earliest = match (earliest_raw, earliest_rollup) {
+                (Some(r), Some(u)) => r.min(u),
+                (Some(r), None) => r,
+                (None, Some(u)) => u,
+                (None, None) => now - (29 * 86400),
+            };
             let span = (now - earliest).max(86400);
             if span > 30 * 86400 {
                 let num = 30usize;
@@ -93,6 +110,63 @@ pub fn query_adaptive_savings(
         if let Ok(iter) = rows {
             for (slot, cnt, orig, opt, dur) in iter.flatten() {
                 slot_map.insert(slot, (cnt, orig, opt, dur));
+            }
+        }
+    }
+
+    // Merge historical daily rollups for timeframes spanning past raw retention
+    if step >= 86400 {
+        let rollup_sql = if is_proj {
+            format!(
+                "SELECT (CAST(strftime('%s', day) AS INTEGER) / {step}) * {step} as slot,
+                        SUM(calls),
+                        SUM(tokens_original),
+                        SUM(tokens_optimized),
+                        CASE WHEN SUM(calls) > 0 THEN CAST(SUM(total_duration_ms) AS REAL) / SUM(calls) ELSE 0.0 END
+                 FROM dashboard_daily_rollups
+                 WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE)
+                 GROUP BY slot"
+            )
+        } else {
+            format!(
+                "SELECT (CAST(strftime('%s', day) AS INTEGER) / {step}) * {step} as slot,
+                        SUM(calls),
+                        SUM(tokens_original),
+                        SUM(tokens_optimized),
+                        CASE WHEN SUM(calls) > 0 THEN CAST(SUM(total_duration_ms) AS REAL) / SUM(calls) ELSE 0.0 END
+                 FROM dashboard_daily_rollups
+                 WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1
+                 GROUP BY slot"
+            )
+        };
+
+        if let Ok(mut stmt) = conn.prepare(&rollup_sql) {
+            let mapper = |row: &rusqlite::Row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, f64>(4)?,
+                ))
+            };
+            let rows = if is_proj {
+                stmt.query_map(params![start_slot, p1, p2], mapper)
+            } else {
+                stmt.query_map([start_slot], mapper)
+            };
+            if let Ok(iter) = rows {
+                for (slot, cnt, orig, opt, dur) in iter.flatten() {
+                    let target_slot = slot.max(start_slot);
+                    if let Some(entry) = slot_map.get_mut(&target_slot) {
+                        let new_calls = entry.0 + cnt;
+                        let new_orig = entry.1 + orig;
+                        let new_opt = entry.2 + opt;
+                        let total_dur = (entry.3 * entry.0 as f64) + (dur * cnt as f64);
+                        let new_avg = if new_calls > 0 { total_dur / new_calls as f64 } else { 0.0 };
+                        *entry = (new_calls, new_orig, new_opt, new_avg);
+                    }
+                }
             }
         }
     }

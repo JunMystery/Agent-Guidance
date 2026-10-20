@@ -32,6 +32,9 @@ pub fn run_auto_cleanup(conn: &Connection, retention_days: i64) -> Result<Cleanu
     let cutoff_daily_str = format_day_string(cutoff_daily_secs);
     let cutoff_30d = now - 30 * 86400;
 
+    // Rollup raw metrics into compact historical tables before purging
+    let _ = super::rollup::rollup_before_prune(conn, cutoff_raw);
+
     // 1. Raw detail logs TTL
     let tool_calls_pruned = conn.execute(
         "DELETE FROM tool_calls WHERE started_at < ? OR tool_name = 'mcp_tool'",

@@ -34,21 +34,52 @@ pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>, timeframe: &
     let p2 = proj_filter.unwrap_or("").replace('/', "\\");
 
     // 1. Tool breakdown
+    let mut tb_map: HashMap<(String, Option<String>), (i64, i64, i64, i64)> = HashMap::new();
     let tool_sql = if is_proj {
-        "SELECT tool_name, operation, COUNT(*), COALESCE(SUM(tokens_original), 0), COALESCE(SUM(tokens_optimized), 0), COALESCE(AVG(duration_ms), 0)
+        "SELECT tool_name, operation, COUNT(*), COALESCE(SUM(tokens_original), 0), COALESCE(SUM(tokens_optimized), 0), COALESCE(SUM(duration_ms), 0)
          FROM tool_calls WHERE started_at >= ?1 AND tool_name != 'mcp_tool' AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE) GROUP BY tool_name, operation"
     } else {
-        "SELECT tool_name, operation, COUNT(*), COALESCE(SUM(tokens_original), 0), COALESCE(SUM(tokens_optimized), 0), COALESCE(AVG(duration_ms), 0)
+        "SELECT tool_name, operation, COUNT(*), COALESCE(SUM(tokens_original), 0), COALESCE(SUM(tokens_optimized), 0), COALESCE(SUM(duration_ms), 0)
          FROM tool_calls WHERE started_at >= ?1 AND tool_name != 'mcp_tool' GROUP BY tool_name, operation"
     };
-    let mut stmt = conn.prepare(tool_sql)?;
-    let tool_breakdown: Vec<Value> = if is_proj {
-        stmt.query_map(params![cutoff, p1, p2], map_tool_row)?
-    } else {
-        stmt.query_map([cutoff], map_tool_row)?
+    if let Ok(mut stmt) = conn.prepare(tool_sql) {
+        let mapper = |r: &rusqlite::Row| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?, r.get::<_, i64>(5)?));
+        let rows = if is_proj { stmt.query_map(params![cutoff, p1, p2], mapper) } else { stmt.query_map([cutoff], mapper) };
+        if let Ok(iter) = rows {
+            for (t, op, cnt, orig, opt, dur) in iter.flatten() {
+                let e = tb_map.entry((t, op)).or_default();
+                e.0 += cnt; e.1 += orig; e.2 += opt; e.3 += dur;
+            }
+        }
     }
-    .filter_map(|r| r.ok())
-    .collect();
+    let r_tool_sql = if is_proj {
+        "SELECT tool_name, operation, SUM(calls), SUM(tokens_original), SUM(tokens_optimized), SUM(total_duration_ms)
+         FROM dashboard_daily_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE) GROUP BY tool_name, operation"
+    } else {
+        "SELECT tool_name, operation, SUM(calls), SUM(tokens_original), SUM(tokens_optimized), SUM(total_duration_ms)
+         FROM dashboard_daily_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 GROUP BY tool_name, operation"
+    };
+    if let Ok(mut r_stmt) = conn.prepare(r_tool_sql) {
+        let mapper = |r: &rusqlite::Row| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?, r.get::<_, i64>(5)?));
+        let rows = if is_proj { r_stmt.query_map(params![cutoff, p1, p2], mapper) } else { r_stmt.query_map([cutoff], mapper) };
+        if let Ok(iter) = rows {
+            for (t, op, cnt, orig, opt, dur) in iter.flatten() {
+                let e = tb_map.entry((t, op)).or_default();
+                e.0 += cnt; e.1 += orig; e.2 += opt; e.3 += dur;
+            }
+        }
+    }
+    let tool_breakdown: Vec<Value> = tb_map.into_iter().map(|((tool_name, operation), (cnt, orig, opt, dur))| {
+        let avg_dur = if cnt > 0 { dur as f64 / cnt as f64 } else { 0.0 };
+        json!({
+            "tool_name": tool_name,
+            "operation": operation,
+            "count": cnt,
+            "tokens_original": orig,
+            "tokens_optimized": opt,
+            "avg_duration_ms": avg_dur
+        })
+    }).collect();
 
     // 2. Top Skills
     let mut top_skills_map: HashMap<String, i64> = HashMap::new();
@@ -57,6 +88,22 @@ pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>, timeframe: &
     for item in rows.flatten() {
         if let Some(clean_id) = normalize_skill_name(&item.0) {
             *top_skills_map.entry(clean_id).or_default() += item.1;
+        }
+    }
+    let r_skill_sql = if is_proj {
+        "SELECT skill_id, SUM(calls) FROM daily_skill_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR project_path = '') GROUP BY skill_id"
+    } else {
+        "SELECT skill_id, SUM(calls) FROM daily_skill_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 GROUP BY skill_id"
+    };
+    if let Ok(mut r_stmt) = conn.prepare(r_skill_sql) {
+        let mapper = |r: &rusqlite::Row| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?));
+        let rows = if is_proj { r_stmt.query_map(params![cutoff, p1, p2], mapper) } else { r_stmt.query_map([cutoff], mapper) };
+        if let Ok(iter) = rows {
+            for (sk, cnt) in iter.flatten() {
+                if let Some(clean_id) = normalize_skill_name(&sk) {
+                    *top_skills_map.entry(clean_id).or_default() += cnt;
+                }
+            }
         }
     }
     let tc_sql = if is_proj {
@@ -176,17 +223,6 @@ pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>, timeframe: &
         "governance_stats": governance_stats,
         "embed_recent": embed_recent,
         "remote_skills": remote_skills
-    }))
-}
-
-fn map_tool_row(row: &rusqlite::Row) -> rusqlite::Result<Value> {
-    Ok(json!({
-        "tool_name": row.get::<_, String>(0)?,
-        "operation": row.get::<_, Option<String>>(1)?,
-        "count": row.get::<_, i64>(2)?,
-        "tokens_original": row.get::<_, i64>(3)?,
-        "tokens_optimized": row.get::<_, i64>(4)?,
-        "avg_duration_ms": row.get::<_, f64>(5)?
     }))
 }
 

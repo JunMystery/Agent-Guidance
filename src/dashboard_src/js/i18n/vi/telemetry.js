@@ -88,6 +88,7 @@ export const telemetryVi = {
   'chart.peak_invocations': 'Lệnh Gọi Đỉnh',
   'chart.opt_payload': 'Ngữ Cảnh Chuyển Giao',
   'chart.per_hr': '/giờ',
+  'chart.per_day': '/ngày',
   'chart.legend_calls_wave': 'Lệnh Gọi (cuộc gọi)',
   'chart.legend_latency_line': 'Độ Trễ TB (ms)',
   'chart.legend_heat_ribbon': 'Thước Đo Hiệu Suất Độ Trễ',

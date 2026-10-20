@@ -68,6 +68,28 @@ pub fn query_phase_and_gov(conn: &Connection, cutoff: i64, is_proj: bool, p1: &s
             }
         }
     }
+
+    let r_sql = if is_proj {
+        "SELECT phase, tool_name, operation, SUM(calls) FROM dashboard_daily_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE) GROUP BY phase, tool_name, operation"
+    } else {
+        "SELECT phase, tool_name, operation, SUM(calls) FROM dashboard_daily_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 GROUP BY phase, tool_name, operation"
+    };
+    if let Ok(mut r_stmt) = conn.prepare(r_sql) {
+        let mapper = |r: &rusqlite::Row| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?));
+        let rows = if is_proj { r_stmt.query_map(params![cutoff, p1, p2], mapper) } else { r_stmt.query_map([cutoff], mapper) };
+        if let Ok(iter) = rows {
+            for (phase, tool_name, op, cnt) in iter.flatten() {
+                add_phase(&phase, cnt);
+                if tool_name == "workflow_gate" {
+                    if op == "authorize_edit" { gov["edits_authorized"] = json!(gov["edits_authorized"].as_i64().unwrap_or(0) + cnt); }
+                    else if op == "approve_plan" || op == "approve" { gov["plans_approved"] = json!(gov["plans_approved"].as_i64().unwrap_or(0) + cnt); }
+                    else if op == "verify" || op == "pass_verification" { gov["verifications_passed"] = json!(gov["verifications_passed"].as_i64().unwrap_or(0) + cnt); }
+                } else if tool_name == "guidance" && op == "verify" {
+                    gov["verifications_passed"] = json!(gov["verifications_passed"].as_i64().unwrap_or(0) + cnt);
+                }
+            }
+        }
+    }
     (phases, gov)
 }
 
@@ -104,7 +126,54 @@ pub fn query_timeframe_summary(conn: &Connection, cutoff: i64, is_proj: bool, p1
         ).unwrap_or((0, 0, 0))
     };
 
-    let skills: i64 = conn.query_row("SELECT COUNT(*) FROM skill_loads WHERE loaded_at >= ?1", [cutoff], |r| r.get(0)).unwrap_or(0);
+    let (skills_cnt, r_skills): (i64, i64) = (
+        conn.query_row("SELECT COUNT(*) FROM skill_loads WHERE loaded_at >= ?1", [cutoff], |r| r.get(0)).unwrap_or(0),
+        conn.query_row("SELECT COALESCE(SUM(calls), 0) FROM daily_skill_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1", [cutoff], |r| r.get(0)).unwrap_or(0),
+    );
+    let skills = skills_cnt + r_skills;
+
+    let (r_calls, r_orig, r_opt): (i64, i64, i64) = if is_proj {
+        conn.query_row(
+            "SELECT COALESCE(SUM(calls), 0), COALESCE(SUM(tokens_original), 0), COALESCE(SUM(tokens_optimized), 0)
+             FROM dashboard_daily_rollups
+             WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE)",
+            params![cutoff, p1, p2],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap_or((0, 0, 0))
+    } else {
+        conn.query_row(
+            "SELECT COALESCE(SUM(calls), 0), COALESCE(SUM(tokens_original), 0), COALESCE(SUM(tokens_optimized), 0)
+             FROM dashboard_daily_rollups
+             WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1",
+            params![cutoff],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap_or((0, 0, 0))
+    };
+    let calls = calls + r_calls;
+    let orig = orig + r_orig;
+    let opt = opt + r_opt;
+
+    let (r_ctx_calls, r_ctx_orig, r_ctx_opt): (i64, i64, i64) = if is_proj {
+        conn.query_row(
+            "SELECT COALESCE(SUM(calls), 0), COALESCE(SUM(tokens_original), 0), COALESCE(SUM(tokens_optimized), 0)
+             FROM dashboard_daily_rollups
+             WHERE tool_name = 'project_context' AND CAST(strftime('%s', day) AS INTEGER) >= ?1 AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE)",
+            params![cutoff, p1, p2],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap_or((0, 0, 0))
+    } else {
+        conn.query_row(
+            "SELECT COALESCE(SUM(calls), 0), COALESCE(SUM(tokens_original), 0), COALESCE(SUM(tokens_optimized), 0)
+             FROM dashboard_daily_rollups
+             WHERE tool_name = 'project_context' AND CAST(strftime('%s', day) AS INTEGER) >= ?1",
+            params![cutoff],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap_or((0, 0, 0))
+    };
+    let ctx_calls = ctx_calls + r_ctx_calls;
+    let ctx_orig = ctx_orig + r_ctx_orig;
+    let ctx_opt = ctx_opt + r_ctx_opt;
+
     let embeds: i64 = conn.query_row("SELECT COUNT(*) FROM embed_queries WHERE queried_at >= ?1", [cutoff], |r| r.get(0)).unwrap_or(0);
     let saved = (orig - opt).max(0);
     let pct = if orig > 0 { (((saved as f64 / orig as f64) * 1000.0).round() / 10.0).max(0.0) } else { 0.0 };
@@ -132,117 +201,5 @@ pub fn query_summaries(conn: &Connection, now: i64, cutoff_24h: i64, is_proj: bo
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use rusqlite::Connection;
-
-    #[test]
-    fn test_query_hourly_savings_metrics_and_is_current() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute(
-            "CREATE TABLE tool_calls (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tool_name TEXT NOT NULL,
-                operation TEXT,
-                started_at INTEGER NOT NULL,
-                duration_ms INTEGER,
-                tokens_original INTEGER DEFAULT 0,
-                tokens_optimized INTEGER DEFAULT 0,
-                error_message TEXT,
-                project_path TEXT,
-                target TEXT
-            )",
-            [],
-        ).unwrap();
-
-        let now = 1773187200; // test epoch
-        conn.execute(
-            "INSERT INTO tool_calls (tool_name, operation, started_at, duration_ms, tokens_original, tokens_optimized, project_path)
-             VALUES ('project_context', 'read', ?1, 120, 1000, 200, 'test_proj')",
-            [now],
-        ).unwrap();
-
-        let res = query_hourly_savings(&conn, now, false, "", "");
-        assert_eq!(res.len(), 24);
-
-        let last = &res[23];
-        assert_eq!(last["is_current"], true);
-        assert_eq!(last["calls"], 1);
-        assert_eq!(last["avg_duration_ms"], 120);
-        assert_eq!(last["tokens_optimized"], 200);
-        assert_eq!(last["optimized"], 200);
-        assert!(last["timestamp"].is_number());
-
-        let first = &res[0];
-        assert_eq!(first["is_current"], false);
-        assert_eq!(first["calls"], 0);
-    }
-
-    #[test]
-    fn test_query_phase_and_gov_lifecycle_cadence() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute(
-            "CREATE TABLE tool_calls (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tool_name TEXT NOT NULL,
-                operation TEXT,
-                started_at INTEGER NOT NULL,
-                duration_ms INTEGER,
-                tokens_original INTEGER DEFAULT 0,
-                tokens_optimized INTEGER DEFAULT 0,
-                error_message TEXT,
-                project_path TEXT,
-                target TEXT
-            )",
-            [],
-        ).unwrap();
-
-        let now = 1773187200;
-        conn.execute("INSERT INTO tool_calls (tool_name, operation, started_at, target) VALUES ('task_pipeline', 'plan', ?1, '')", [now]).unwrap();
-        conn.execute("INSERT INTO tool_calls (tool_name, operation, started_at, target) VALUES ('task_pipeline', 'debug', ?1, '')", [now]).unwrap();
-        conn.execute("INSERT INTO tool_calls (tool_name, operation, started_at, target) VALUES ('workflow_gate', 'authorize_edit', ?1, 'src/main.rs')", [now]).unwrap();
-        conn.execute("INSERT INTO tool_calls (tool_name, operation, started_at, target) VALUES ('guidance', 'verify', ?1, '')", [now]).unwrap();
-        conn.execute("INSERT INTO tool_calls (tool_name, operation, started_at, target) VALUES ('workflow_gate', 'advance', ?1, 'Review')", [now]).unwrap();
-
-        let (phases, gov) = query_phase_and_gov(&conn, now - 3600, false, "", "");
-        assert_eq!(phases["plan"], 1);
-        assert_eq!(phases["fix"], 1);
-        assert_eq!(phases["build"], 1);
-        assert_eq!(phases["test"], 1);
-        assert_eq!(phases["review"], 1);
-        assert_eq!(gov["edits_authorized"], 1);
-        assert_eq!(gov["verifications_passed"], 1);
-        assert_eq!(gov["stages_transitioned"], 1);
-    }
-
-    #[test]
-    fn test_query_timeframe_summary_graph_precision() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute(
-            "CREATE TABLE tool_calls (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tool_name TEXT NOT NULL,
-                operation TEXT,
-                started_at INTEGER NOT NULL,
-                duration_ms INTEGER,
-                tokens_original INTEGER DEFAULT 0,
-                tokens_optimized INTEGER DEFAULT 0,
-                error_message TEXT,
-                project_path TEXT,
-                target TEXT
-            )",
-            [],
-        ).unwrap();
-
-        let now = 1773187200;
-        conn.execute(
-            "INSERT INTO tool_calls (tool_name, operation, started_at, tokens_original, tokens_optimized)
-             VALUES ('project_context', 'read', ?1, 1000, 100)",
-            [now],
-        ).unwrap();
-
-        let res = query_timeframe_summary(&conn, now - 3600, false, "", "");
-        assert_eq!(res["context_calls"], 1);
-        assert_eq!(res["graph_precision_pct"], 90.0);
-    }
-}
+#[path = "stats_query_aggregates_tests.rs"]
+mod tests;

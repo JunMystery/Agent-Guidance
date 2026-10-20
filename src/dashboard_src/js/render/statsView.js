@@ -7,6 +7,8 @@ import { makeSortable, filterRows, bindFilter } from '../interactions.js';
 import { paginate, renderPagination, resetPage } from '../pagination.js';
 import { store } from '../state.js';
 import { t } from '../i18n/index.js';
+import { showConfirm, showAlert } from '../dialog.js';
+import { cleanDashboardMetrics, getSelectedProject } from '../api.js';
 
 let activeTimeframe = 'past_24h';
 
@@ -67,6 +69,39 @@ function bindTimeframeTabs() {
       import('../api.js').then(m => m.fetchData({ force: true }));
     });
   });
+
+  const cleanBtn = el('btn-clean-dashboard');
+  if (cleanBtn && !cleanBtn.dataset.bound) {
+    cleanBtn.dataset.bound = 'true';
+    cleanBtn.addEventListener('click', async () => {
+      const proj = (getSelectedProject && getSelectedProject()) || 'all';
+      const projLabel = proj === 'all' ? 'All Projects' : proj.split(/[\/\\]/).pop();
+      const confirmed = await showConfirm({
+        title: 'Clean Dashboard Metrics',
+        message: `Are you sure you want to clean metrics history for "${projLabel}"?`,
+        subtext: 'This permanently clears historical aggregated charts and rollups for this scope. Raw MCP logs in other tabs are preserved.',
+        confirmText: 'Clean Metrics',
+        variant: 'danger',
+      });
+      if (confirmed) {
+        const res = await cleanDashboardMetrics(proj);
+        if (res.success) {
+          await showAlert({
+            title: 'Clean Complete',
+            message: res.message || 'Dashboard metrics history has been cleaned.',
+            variant: 'success',
+          });
+          import('../api.js').then(m => m.fetchData({ force: true }));
+        } else {
+          await showAlert({
+            title: 'Clean Failed',
+            message: res.error || 'Failed to clean dashboard metrics.',
+            variant: 'danger',
+          });
+        }
+      }
+    });
+  }
 }
 
 function updateTimeframeSummary(tf) {

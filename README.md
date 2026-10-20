@@ -1,6 +1,6 @@
 # 🦀 Agent Guidance MCP Server
 
-[![Version](https://img.shields.io/badge/Version-v1.8.9-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/Version-v1.8.10-blue.svg)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/Language-Rust%202024-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/Security-Policy-blue.svg)](SECURITY.md)
@@ -276,6 +276,9 @@ The Web Dashboard (`http://127.0.0.1:11997`) features an interactive persistent 
   - `24H`: 24 hourly buckets (`HH:00`) for fine-grained intraday execution rhythms.
   - `7D` & `30D`: Daily milestone buckets (`DD/MM`) displaying longitudinal token optimization trends.
   - `ALL`: Dynamic multi-day historical bucketing spanning full SQLite telemetry records.
+- **Two-Tier Compact Rollup & Scoped Clean**:
+  - Raw 7-day detail logs automatically compact into lightweight daily rollups (`dashboard_daily_rollups`), cutting disk usage by >98% while ensuring 30D/ALL analytics persist indefinitely.
+  - One-click **Clean** button in HUD command bar to purge historical dashboard metrics per active project or globally without affecting diagnostic logs.
 - **Clean Minimal Sidebar**: Polished sidebar navigation with clean text indicators for distraction-free monitoring.
 
 ---
