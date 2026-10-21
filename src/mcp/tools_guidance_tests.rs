@@ -74,7 +74,6 @@ fn test_guidance_workflow_loads_embedded_reference() {
         .as_str()
         .unwrap()
         .to_string();
-    // Embedded workflow-code.md should be loaded instead of generic 1-liner
     assert!(text.contains("code") || text.contains("Code") || text.contains("Build"));
     assert!(!text.contains("# Dev Workflow Guidance: [code]\n\nRecommended Flow: Context -> Plan -> Ask/Revise -> Build -> Test/Recheck -> Fix -> Document"));
 }
@@ -203,4 +202,79 @@ fn test_task_pipeline_enriched_recommendations_formatting() {
     assert!(text.contains("Priority Gate: PASSED"));
 
     let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_guidance_search_informational_question_bypasses_proposal() {
+    let mut state = ServerState::new();
+    let res = handle_tool_call(
+        "guidance",
+        json!({
+            "operation": "search",
+            "query": "Làm thế nào để index skill vào bin sau khi edit trên HTML?"
+        }),
+        &mut state,
+    );
+    assert!(res.is_ok());
+    let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(text.contains("Informational Query Detected"));
+    assert!(text.contains("Bypassing skill proposals"));
+    assert!(!text.contains("SKILL_PROPOSAL: MANDATORY USER INTERACTION REQUIRED"));
+    assert!(state.pending_skill_proposals.is_empty());
+}
+
+#[test]
+fn test_guidance_search_slash_command_alone_bypasses_proposal() {
+    let mut state = ServerState::new();
+    let res = handle_tool_call(
+        "guidance",
+        json!({
+            "operation": "search",
+            "query": "/generative_ui"
+        }),
+        &mut state,
+    );
+    assert!(res.is_ok());
+    let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(text.contains("Slash Command Detected: /generative_ui"));
+    assert!(text.contains("Bypassing skill proposals"));
+    assert!(!text.contains("SKILL_PROPOSAL: MANDATORY USER INTERACTION REQUIRED"));
+    assert!(state.pending_skill_proposals.is_empty());
+}
+
+#[test]
+fn test_guidance_search_slash_command_with_task_strips_command() {
+    let mut state = ServerState::new();
+    let res = handle_tool_call(
+        "guidance",
+        json!({
+            "operation": "search",
+            "query": "/generative_ui render 3 cards preview"
+        }),
+        &mut state,
+    );
+    assert!(res.is_ok());
+    let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+    // Strips slash command from search query
+    assert!(text.contains("render 3 cards preview"));
+    assert!(!text.contains("/generative_ui' ["));
+    assert!(text.contains("Generative UI Protocol"));
+}
+
+#[test]
+fn test_guidance_search_mentioned_skill_prioritized_with_recommended() {
+    let mut state = ServerState::new();
+    let res = handle_tool_call(
+        "guidance",
+        json!({
+            "operation": "search",
+            "query": "Dùng agent-guidance để kiểm tra quy chuẩn"
+        }),
+        &mut state,
+    );
+    assert!(res.is_ok());
+    let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(text.contains("SKILL_PROPOSAL: MANDATORY USER INTERACTION REQUIRED"));
+    assert!(text.contains("ask_question"));
+    assert!(text.contains("(Recommended) agent-guidance"));
 }

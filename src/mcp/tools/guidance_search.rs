@@ -6,6 +6,8 @@ use crate::config::current_config;
 use crate::mcp::state::ServerState;
 use crate::ml::embeddings::hybrid_vector_search;
 use crate::ml::llm_selector::LLMSelector;
+use super::guidance_format::{extract_description, format_search_output};
+use super::guidance_intent::analyze_query_intent;
 use super::helpers::{detect_project_path, ensure_not_cancelled, truncate_chars};
 
 pub(crate) fn handle_list(arguments: &Value, state: &mut ServerState) -> Result<String, (i32, String)> {
@@ -78,11 +80,44 @@ pub(crate) fn handle_search(
         query_parts.push(state.modified_files.join(" "));
     }
 
-    let search_query = if query_parts.is_empty() {
+    let all_skills = load_all_skills(&proj_path);
+    let skill_names: Vec<String> = all_skills.iter().map(|s| s.name.clone()).collect();
+
+    let raw_search_query = if query_parts.is_empty() {
         "general programming guidance".to_string()
     } else {
         query_parts.join(" ")
     };
+
+    let intent = analyze_query_intent(&raw_search_query, &skill_names);
+    let is_gen_ui = intent.slash_commands.iter().any(|c| c == "generative_ui")
+        || intent.mentioned_skills.iter().any(|s| s == "generative_ui")
+        || raw_search_query.to_lowercase().contains("generative_ui");
+
+    if intent.is_empty_task {
+        state.pending_skill_proposals.clear();
+        let cmds_joined = intent.slash_commands.iter().map(|c| format!("/{}", c)).collect::<Vec<_>>().join(", ");
+        let gen_ui_note = if is_gen_ui {
+            "\n\n> [!IMPORTANT] **Generative UI Protocol**: When designing UI alternatives, create visual HTML artifact file(s) via `write_file` (with `UserFacing: true`) and inline embed via `<agent-embed src=\"file:///.../widget.html\"></agent-embed>` BEFORE soliciting user layout choices."
+        } else {
+            ""
+        };
+        return Ok(format!(
+            "# Slash Command Detected: {}\n\n-> Bypassing skill proposals. Proceed directly to execute the slash command workflow (no skill confirmation needed).{}",
+            if cmds_joined.is_empty() { "Command".to_string() } else { cmds_joined },
+            gen_ui_note
+        ));
+    }
+
+    if intent.is_question && intent.mentioned_skills.is_empty() {
+        state.pending_skill_proposals.clear();
+        return Ok(format!(
+            "# Informational Query Detected for '{}'\n\n-> Bypassing skill proposals. Answer the question directly without injecting skills or calling ask_question.",
+            intent.cleaned_query
+        ));
+    }
+
+    let search_query = intent.cleaned_query;
 
     let cfg = current_config();
     if cfg.server.is_remote() {
@@ -107,7 +142,12 @@ pub(crate) fn handle_search(
                     } else {
                         desc
                     };
-                    options.push(format!("{} - {}", item.name, short_desc));
+                    let opt_label = if intent.mentioned_skills.contains(&item.name) {
+                        format!("(Recommended) {} - {}", item.name, short_desc)
+                    } else {
+                        format!("{} - {}", item.name, short_desc)
+                    };
+                    options.push(opt_label);
                     proposals.push((item.name.clone(), format!("remote://skills/{}", item.name), item.score));
                     formatted.push(format!(
                         "- {} [Remote ML Worker] (Score: {:.2})\n  Path: skills/{}/SKILL.md",
@@ -116,7 +156,7 @@ pub(crate) fn handle_search(
                 }
 
                 state.pending_skill_proposals = proposals;
-                return format_search_output(&search_query, formatted, options, "Remote ML Worker (In-Memory AGV1)");
+                return format_search_output(&search_query, &formatted, &options, "Remote ML Worker (In-Memory AGV1)", is_gen_ui);
             }
             Err(e) => {
                 tracing::warn!("Remote skill search failed: {}; attempting fallback", e);
@@ -125,7 +165,6 @@ pub(crate) fn handle_search(
     }
 
     let profile = detect_language_fast(&proj_path, &search_query);
-    let all_skills = load_all_skills(&proj_path);
 
     let stage1_results = hybrid_vector_search(&search_query, &all_skills, 20);
     ensure_not_cancelled(state)?;
@@ -146,6 +185,17 @@ pub(crate) fn handle_search(
 
     let mut seen_names = std::collections::HashSet::new();
     let mut deduped_results = Vec::new();
+
+    // 1. Prioritize explicitly mentioned skills to the front with score 1.0
+    for mentioned in &intent.mentioned_skills {
+        if let Some(item) = all_skills.iter().find(|s| s.name == *mentioned) {
+            if seen_names.insert(item.name.clone()) {
+                deduped_results.push((1.0, item.clone()));
+            }
+        }
+    }
+
+    // 2. Add algorithmic results
     for (score, item) in final_results {
         if score < 0.65 {
             continue;
@@ -167,13 +217,16 @@ pub(crate) fn handle_search(
 
     let options: Vec<String> = deduped_results
         .iter()
-        .map(|(_score, item)| {
+        .enumerate()
+        .map(|(idx, (_score, item))| {
             let short_desc = extract_description(&item.content)
                 .unwrap_or_else(|| "Skill guidance".to_string());
+            let is_mentioned = intent.mentioned_skills.contains(&item.name);
+            let prefix = if is_mentioned || idx == 0 { "(Recommended) " } else { "" };
             if short_desc.is_empty() {
-                item.name.clone()
+                format!("{}{}", prefix, item.name)
             } else {
-                format!("{} - {}", item.name, short_desc)
+                format!("{}{}{}", prefix, item.name, format!(" - {}", short_desc))
             }
         })
         .collect();
@@ -192,98 +245,5 @@ pub(crate) fn handle_search(
         })
         .collect();
 
-    format_search_output(&search_query, formatted_results, options, "3-Stage Hybrid Vector & Cross-Encoder")
-}
-
-fn format_search_output(
-    query: &str,
-    formatted_results: Vec<String>,
-    options: Vec<String>,
-    engine_name: &str,
-) -> Result<String, (i32, String)> {
-    let ask_question_example = serde_json::json!({
-        "questions": [
-            {
-                "question": "Which skills would you like to inject for this task?",
-                "options": options,
-                "is_multi_select": true
-            }
-        ]
-    });
-
-    let next_step_prompt = if formatted_results.is_empty() {
-        "-> No matching skills found. Proceed directly to task planning or codebase inspection (no skills need to be selected).".to_string()
-    } else {
-        format!(
-            "-> SKILL_PROPOSAL: MANDATORY USER INTERACTION REQUIRED. Do NOT call `select_skills` automatically.\nYou MUST trigger the IDE tool `ask_question` with `is_multi_select: true` so the user selects which skills to inject:\n```json\nask_question({})\n```\nAfter the user responds, call `select_skills(skills=[...], user_confirmed=true)` (or `select_skills(skills=[])` if none selected).",
-            serde_json::to_string_pretty(&ask_question_example).unwrap_or_default()
-        )
-    };
-
-    let results_body = if formatted_results.is_empty() {
-        "No matching skills found for this task.".to_string()
-    } else {
-        format!("Recommended Skills:\n{}", formatted_results.join("\n"))
-    };
-
-    Ok(format!(
-        "# Skill Search Results for '{}' [{}]\nMatches Found: {}\n\n{}\n\n{}",
-        query, engine_name, formatted_results.len(), results_body, next_step_prompt
-    ))
-}
-
-fn extract_description(content: &str) -> Option<String> {
-    for line in content.lines() {
-        let t = line.trim();
-        if let Some(rest) = t.strip_prefix("description:") {
-            let val = rest.trim().trim_matches(|c| matches!(c, '"' | '\'' | '`')).trim();
-            if !val.is_empty() && val != ">" && val != "|" {
-                let normalized = val.replace(['\u{2014}', '\u{2013}'], "-");
-                let first = normalized.split(". ").next().unwrap_or(&normalized).trim();
-                let short = if first.chars().count() > 38 {
-                    let truncated = truncate_chars(first, 35).trim_end();
-                    format!("{}...", truncated)
-                } else {
-                    first.to_string()
-                };
-                return Some(short);
-            }
-        }
-    }
-    None
-}
-
-pub(crate) fn handle_reindex(
-    arguments: &Value,
-    state: &mut ServerState,
-) -> Result<String, (i32, String)> {
-    let proj_path_arg = arguments
-        .get("project_path")
-        .and_then(|p| p.as_str())
-        .unwrap_or(".");
-    let proj_path = detect_project_path(proj_path_arg, state);
-
-    crate::ml::embeddings::cache::clear_passage_cache();
-    crate::context::cache::invalidate_snapshot(&proj_path);
-
-    let all_skills = load_all_skills(&proj_path);
-    let count = all_skills.len();
-    let fp = crate::ml::embeddings::catalog_fingerprint(&all_skills);
-
-    let model_status = if let Some(vecs) = crate::ml::embeddings::precomputed::load_precomputed_cache(&all_skills)
-        .or_else(|| crate::ml::embeddings::load_passage_cache(&all_skills))
-    {
-        format!(
-            "Loaded cached embeddings for {} skills (dimension: {})",
-            vecs.len(),
-            vecs.first().map(|v| v.len()).unwrap_or(0)
-        )
-    } else {
-        "Metadata indexed (embeddings loaded on-demand)".to_string()
-    };
-
-    Ok(format!(
-        "# Skill Semantic Index Refreshed\n\n- Total Skills: {}\n- Catalog Fingerprint: {:016x}\n- Status: {}\n- Cache Path: `~/.agent-guidance/vectors.bin`\n\nAll workspace and embedded skills reindexed with rich semantic passages.",
-        count, fp, model_status
-    ))
+    format_search_output(&search_query, &formatted_results, &options, "3-Stage Hybrid Vector & Cross-Encoder", is_gen_ui)
 }

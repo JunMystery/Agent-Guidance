@@ -21,7 +21,7 @@ pub(crate) fn handle(
     match op {
         "list" => super::guidance_search::handle_list(&arguments, state),
         "search" => super::guidance_search::handle_search(&arguments, &query, state),
-        "reindex_skills" | "reindex" => super::guidance_search::handle_reindex(&arguments, state),
+        "reindex_skills" | "reindex" => super::guidance_reindex::handle_reindex(&arguments, state),
         "get" => super::guidance_docs::handle_get(&arguments, state),
         "docs" => super::guidance_docs::handle_docs(&arguments, &query, state),
         "workflow" => super::guidance_docs::handle_workflow(&arguments),

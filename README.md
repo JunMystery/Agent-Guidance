@@ -1,6 +1,6 @@
 # 🦀 Agent Guidance MCP Server
 
-[![Version](https://img.shields.io/badge/Version-v1.8.10-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/Version-v1.8.11-blue.svg)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/Language-Rust%202024-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/Security-Policy-blue.svg)](SECURITY.md)
@@ -244,8 +244,15 @@ Daemon & Maintenance:
 | **`select_skills`** | **Semantic Skill Loader** | Delivers full instructions for standard skills ($\le 250$ LOC) and vector-ranked section slices for large reference skills (up to 5 sections, ~80% token savings), records usage analytics, and injects language safety micro-rules. |
 | **`workflow_gate`** | **Stage & Impact Guard** | Manages stage transitions (`Context` $\rightarrow$ `Plan` $\rightarrow$ `Build` $\rightarrow$ `Test` $\rightarrow$ `Fix` $\rightarrow$ `Review`), enforces 300 LOC hard ceiling, blocks compound plural containers, and controls fix circuit breakers. |
 | **`project_context`** | **GraphRAG & AST Search** | Hierarchical Leiden GraphRAG (`drift`, `global`, `local`), Subgraph Bundling (<250 LOC definition + 1-hop callers/callees), intra-procedural data flow, AST skeletonization, and 6-phase instant cascade (<100ms). |
-| **`guidance`** | **Standards & Skill Catalog** | 2-stage Candle BERT vector search + Cross-Encoder reranking over 279 embedded skills, pre-code architecture checklists, and empirical verification contracts. |
+| **`guidance`** | **Standards & Skill Catalog** | 2-stage Candle BERT vector search + Cross-Encoder reranking over 279 embedded skills, slash command stripping & neutral bypass, question intent detection, mentioned skill prioritization (`(Recommended)`), pre-code architecture checklists, and empirical verification contracts. |
 | **`session_continuity`** | **Memory & Snapshots** | Persists session memory, tracks pairwise co-changes into evolutionary git graphs, stores categorised project learnings, and generates cross-agent handoff briefs. |
+
+### 🛡️ Smart Slash Command & Intent Discovery (v1.8.11)
+
+- **Slash Command Stripping & Neutrality**: Slash command tokens (`/<cmd>` like `/plan`, `/generative_ui`) never auto-load skills; they are cleanly stripped from the prompt so search runs only on the actual task text. If a query contains only slash commands, skill proposals are bypassed entirely.
+- **Informational Q&A Bypass**: Pure informational questions (ending in `?` or starting with question/explanation keywords) automatically bypass skill proposal gates.
+- **Direct Skill Mention Prioritization**: When a user mentions a skill name in prose, it is prioritized at `options[0]` with `(Recommended) ` in the `ask_question` confirmation dialog.
+- **Generative UI Protocol Enforcement**: Mandates visual HTML artifact rendering (`UserFacing: true`) and inline embedding (`<agent-embed>`) before soliciting layout choices, eliminating "blind choice" prompts (`BLIND_UI_CHOICE_PROHIBITED`).
 
 ---
 
