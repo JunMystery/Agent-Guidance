@@ -2,6 +2,21 @@
 
 All notable changes to Agent Guidance Rust MCP Server will be documented in this file.
 
+## [1.8.12] - 2026-10-23
+
+### 🛡️ Grill-Me Protocol & Plan Approval Separation
+- **Question Response & Choice Hard-Block (`src/mcp/tools/gate_approval.rs`)**:
+  - Blocked `approve_plan` when `user_message` contains `ask_question` option outputs (`A1:`, `A2:`) with `QUESTION_RESPONSE_NOT_PLAN_APPROVAL`.
+  - Blocked `approve_plan` justifications citing question answers/choices ("chọn phương án", "chọn đáp án", "ask_question", "trả lời câu hỏi") with `QUESTION_CHOICE_NOT_PLAN_APPROVAL`.
+  - Removed misleading error message text `(or trigger ask_question only if interactive choice is needed)`.
+- **Pre-Approval Gate Integrity (`src/mcp/tools/gate.rs`)**:
+  - Removed premature `state.approve_plan()` call prior to `handle_approve_plan` validation.
+- **Protocol Enforcement (`src/catalog/rules.rs`, `AGENTS.md`, `GEMINI.md`)**:
+  - Codified `SIMULTANEOUS_PLAN_AND_QUESTION_PROHIBITED` and `FALSE_PLAN_APPROVAL_PROHIBITED`.
+  - Enforced interactive interviews (`/grill-me`) to finish in separate turns before publishing `implementation_plan.md` in a standalone turn with `RequestFeedback: true`.
+- **Test Coverage (`src/mcp/tests_gui_approval.rs`)**:
+  - Added unit tests for question response blocking, choice justification blocking, and error string sanitation.
+
 ## [1.8.5] - 2026-10-05
 
 ### 🛡️ Project Root Detection & Git Boundary Protection

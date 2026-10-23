@@ -75,4 +75,61 @@ mod tests {
         assert_eq!(state.workflow_stage, "Build");
         assert!(state.plan_approved);
     }
+
+    #[test]
+    fn test_workflow_gate_blocks_question_response_as_plan_approval() {
+        let mut state = ServerState::new();
+        state.workflow_stage = "Plan".to_string();
+        state.plan_approved = false;
+
+        let args = json!({
+            "action": "approve_plan",
+            "user_confirmed": true,
+            "user_message": "A1: Thêm SAF filter\nA2: Đọc header CSV"
+        });
+
+        let res = tools::handle_tool_call("workflow_gate", args, &mut state);
+        assert!(res.is_ok());
+        let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+        assert!(text.contains("QUESTION_RESPONSE_NOT_PLAN_APPROVAL"), "Got: {}", text);
+        assert!(!state.plan_approved);
+    }
+
+    #[test]
+    fn test_workflow_gate_blocks_question_choice_justification() {
+        let mut state = ServerState::new();
+        state.workflow_stage = "Plan".to_string();
+        state.plan_approved = false;
+
+        let args = json!({
+            "action": "approve_plan",
+            "user_confirmed": true,
+            "justification": "Người dùng đã chọn phương án xử lý lỗi: SAF filter và CSV validation"
+        });
+
+        let res = tools::handle_tool_call("workflow_gate", args, &mut state);
+        assert!(res.is_ok());
+        let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+        assert!(text.contains("QUESTION_CHOICE_NOT_PLAN_APPROVAL"), "Got: {}", text);
+        assert!(!state.plan_approved);
+    }
+
+    #[test]
+    fn test_workflow_gate_approve_plan_unconfirmed_error_message() {
+        let mut state = ServerState::new();
+        state.workflow_stage = "Plan".to_string();
+        state.plan_approved = false;
+
+        let args = json!({
+            "action": "approve_plan",
+            "user_confirmed": false
+        });
+
+        let res = tools::handle_tool_call("workflow_gate", args, &mut state);
+        assert!(res.is_ok());
+        let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+        assert!(text.contains("USER_APPROVAL_REQUIRED"), "Got: {}", text);
+        assert!(!text.contains("trigger `ask_question`"), "Should not encourage ask_question as alternative to approval: {}", text);
+        assert!(!state.plan_approved);
+    }
 }

@@ -29,11 +29,14 @@ pub(crate) fn handle(
         .unwrap_or(false);
     let user_msg = arguments.get("user_message").and_then(|u| u.as_str());
 
-    if user_confirmed {
+    let is_approve_action = action == "approve" || action == "approve_plan";
+    if user_confirmed && !is_approve_action {
         state.approve_plan();
     }
     if let Some(msg) = user_msg {
-        state.process_user_message(msg);
+        if !is_approve_action {
+            state.process_user_message(msg);
+        }
     }
 
     let proj_path_arg = arguments

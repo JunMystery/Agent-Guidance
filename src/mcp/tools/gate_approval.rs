@@ -11,8 +11,53 @@ pub(crate) fn handle_approve_plan(
     user_msg: Option<&str>,
     proj_path: &Path,
 ) -> String {
+    // 1. Check if user_msg contains ask_question responses (e.g. A1:, A2:)
+    if let Some(msg) = user_msg {
+        let msg_trimmed = msg.trim();
+        if msg_trimmed.starts_with("A1:")
+            || msg_trimmed.starts_with("A:")
+            || msg_trimmed.contains("\nA1:")
+            || msg_trimmed.contains("\nA2:")
+        {
+            state.plan_approved = false;
+            return "# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED | Error: QUESTION_RESPONSE_NOT_PLAN_APPROVAL: Answering an `ask_question` prompt (/grill-me) is design feedback, NOT plan approval. Synthesize decisions into `implementation_plan.md` (`RequestFeedback: true`) in a standalone turn and wait for explicit user approval (Proceed button).".to_string();
+        }
+        state.process_user_message(msg);
+    }
+
+    // 2. Check if justification indicates substitution of ask_question choices for plan approval
+    let justification = arguments
+        .get("justification")
+        .and_then(|j| j.as_str())
+        .unwrap_or("");
+    let just_lower = justification.to_lowercase();
+    if just_lower.contains("chọn phương án")
+        || just_lower.contains("chọn đáp án")
+        || just_lower.contains("ask_question")
+        || just_lower.contains("trả lời câu hỏi")
+        || just_lower.contains("answered question")
+        || just_lower.contains("question choice")
+        || just_lower.contains("selected option")
+    {
+        let has_explicit_approval = user_msg
+            .map(|m| {
+                let m_lower = m.to_lowercase();
+                m_lower.contains("proceed")
+                    || m_lower.contains("approved")
+                    || m_lower.contains("duyệt")
+                    || m_lower.contains("đồng ý")
+                    || m_lower.contains("chấp nhận")
+            })
+            .unwrap_or(false);
+
+        if !has_explicit_approval {
+            state.plan_approved = false;
+            return "# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED | Error: QUESTION_CHOICE_NOT_PLAN_APPROVAL: Answering an `ask_question` prompt (/grill-me) is design clarification, NOT plan approval. Present `implementation_plan.md` (`RequestFeedback: true`) in a standalone turn (without calling ask_question) and wait for the user to explicitly click 'Proceed' or send plan approval.".to_string();
+        }
+    }
+
     if !user_confirmed && !state.plan_approved && user_msg.is_none() {
-        return "# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED | Error: USER_APPROVAL_REQUIRED: Plan approval cannot be self-granted by AI agents. If user approved via GUI/chat, re-invoke `workflow_gate(action=\"approve_plan\", user_confirmed=true)` (or trigger `ask_question` only if interactive choice is needed).".to_string();
+        return "# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED | Error: USER_APPROVAL_REQUIRED: Plan approval cannot be self-granted by AI agents. You MUST present `implementation_plan.md` (`RequestFeedback: true`) in a standalone turn and wait for the user to explicitly click 'Proceed' or send an approval message. Never use `ask_question` answers as a substitute for plan approval.".to_string();
     }
 
     state.approve_plan();
