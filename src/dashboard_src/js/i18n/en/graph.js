@@ -78,6 +78,7 @@ export const graphEn = {
   'graph.calls_singular': 'call',
   'graph.calls_plural': 'calls',
   'graph.more_calls': 'more calls',
+  'graph.semantic_match': 'Match',
   'graph.file_canvas_hint': 'Scroll to Zoom • Drag to Pan • Click node to isolate • Click background to reset',
   'graph.function_canvas_hint': 'Central cluster: File functions • Green: Outgoing calls • Purple: Incoming callers • Click background to reset',
 

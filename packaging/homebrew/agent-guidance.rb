@@ -1,20 +1,20 @@
 class AgentGuidance < Formula
   desc "Ultra-fast, zero-overhead Rust MCP server for AI agent steering"
   homepage "https://github.com/JunMystery/Agent-Guidance"
-  version "1.8.12"
+  version "1.8.13"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/JunMystery/Agent-Guidance/releases/download/v1.8.12/agent-guidance-macos-aarch64.tar.gz"
+      url "https://github.com/JunMystery/Agent-Guidance/releases/download/v1.8.13/agent-guidance-macos-aarch64.tar.gz"
       sha256 :no_check
     else
-      url "https://github.com/JunMystery/Agent-Guidance/releases/download/v1.8.12/agent-guidance-macos-x86_64.tar.gz"
+      url "https://github.com/JunMystery/Agent-Guidance/releases/download/v1.8.13/agent-guidance-macos-x86_64.tar.gz"
       sha256 :no_check
     end
   end
 
   on_linux do
-    url "https://github.com/JunMystery/Agent-Guidance/releases/download/v1.8.12/agent-guidance-linux-x86_64.tar.gz"
+    url "https://github.com/JunMystery/Agent-Guidance/releases/download/v1.8.13/agent-guidance-linux-x86_64.tar.gz"
     sha256 :no_check
   end
 

@@ -146,6 +146,7 @@ pub(crate) fn handle(
     }
     state.user_intent_summary = Some(task.to_string());
     state.active_task = Some(task.to_string());
+    state.push_recent_task(task);
 
     // Fast-path file count: use existing code_graph.db count if present, else snapshot
     let file_count = {

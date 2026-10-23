@@ -2,6 +2,7 @@ use super::helpers::truncate_chars;
 
 pub(crate) fn format_search_output(
     query: &str,
+    context_note: Option<&str>,
     formatted_results: &[String],
     options: &[String],
     engine_name: &str,
@@ -34,7 +35,7 @@ pub(crate) fn format_search_output(
         )
     } else {
         format!(
-            "-> SKILL_PROPOSAL: MANDATORY USER INTERACTION REQUIRED. Do NOT call `select_skills` automatically.\nYou MUST trigger the IDE tool `ask_question` with `is_multi_select: true` so the user selects which skills to inject:\n```json\nask_question({})\n```\nAfter the user responds, call `select_skills(skills=[...], user_confirmed=true)` (or `select_skills(skills=[])` if none selected).{}",
+            "-> SKILL_PROPOSAL: MANDATORY USER INTERACTION REQUIRED. Do NOT call `select_skills` automatically.\nYou MUST trigger the IDE tool `ask_question` with `is_multi_select: true` so the user selects which skills to inject.\n\nCRITICAL MULTILINGUAL MANDATE:\n1. Match User Language: Translate the question and each skill's description into the active conversational language used by the user in this chat (e.g. Vietnamese, Japanese, French, English, etc.).\n2. Accents & Diacritics: For languages with diacritics (like Vietnamese), MUST write natural accented text with full diacritics ('tiếng Việt có dấu đầy đủ'). NEVER strip accents or emit unaccented text ('tiếng Việt không dấu').\n3. Option Format: Format each option as `[(Recommended) ]{{name}} - {{translated_short_desc}}` (keep `{{name}}` exact, `{{translated_short_desc}}` <= 50 chars).\n\nSuggested template (translate question & descriptions before calling):\n```json\nask_question({})\n```\nAfter the user responds, call `select_skills(skills=[...], user_confirmed=true)` (or `select_skills(skills=[])` if none selected).{}",
             serde_json::to_string_pretty(&ask_question_example).unwrap_or_default(),
             gen_ui_note
         )
@@ -46,9 +47,14 @@ pub(crate) fn format_search_output(
         format!("Recommended Skills:\n{}", formatted_results.join("\n"))
     };
 
+    let context_section = match context_note {
+        Some(note) if !note.trim().is_empty() => format!("\nContext Source: {}\n", note.trim()),
+        _ => String::new(),
+    };
+
     Ok(format!(
-        "# Skill Search Results for '{}' [{}]\nMatches Found: {}\n\n{}\n\n{}",
-        query, engine_name, formatted_results.len(), results_body, next_step_prompt
+        "# Skill Search Results for '{}' [{}]\n{}Matches Found: {}\n\n{}\n\n{}",
+        query, engine_name, context_section, formatted_results.len(), results_body, next_step_prompt
     ))
 }
 
@@ -60,8 +66,8 @@ pub(crate) fn extract_description(content: &str) -> Option<String> {
             if !val.is_empty() && val != ">" && val != "|" {
                 let normalized = val.replace(['\u{2014}', '\u{2013}'], "-");
                 let first = normalized.split(". ").next().unwrap_or(&normalized).trim();
-                let short = if first.chars().count() > 38 {
-                    let truncated = truncate_chars(first, 35).trim_end();
+                let short = if first.chars().count() > 50 {
+                    let truncated = truncate_chars(first, 47).trim_end();
                     format!("{}...", truncated)
                 } else {
                     first.to_string()

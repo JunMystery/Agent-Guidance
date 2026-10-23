@@ -78,6 +78,7 @@ export const graphVi = {
   'graph.calls_singular': 'lời gọi',
   'graph.calls_plural': 'lời gọi',
   'graph.more_calls': 'lời gọi khác',
+  'graph.semantic_match': 'tương đồng',
   'graph.file_canvas_hint': 'Cuộn để Thu/Phóng • Kéo để Di chuyển • Nhấp node để cô lập • Nhấp nền để đặt lại',
   'graph.function_canvas_hint': 'Cụm trung tâm: Hàm trong tệp • Xanh lục: Lời gọi đi • Tím: Lời gọi đến • Nhấp nền để đặt lại',
 

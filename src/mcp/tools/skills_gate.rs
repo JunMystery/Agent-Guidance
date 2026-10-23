@@ -63,8 +63,8 @@ pub(crate) fn extract_short_usage(name: &str, rel_path: &str, proj_path: &Path) 
                 if !cleaned.is_empty() && cleaned != ">" && cleaned != "|" {
                     let normalized = cleaned.replace(['\u{2014}', '\u{2013}'], "-");
                     let first = normalized.split(". ").next().unwrap_or(&normalized).trim();
-                    return if first.chars().count() > 38 {
-                        let truncated = crate::mcp::tools::helpers::truncate_chars(first, 35).trim_end();
+                    return if first.chars().count() > 50 {
+                        let truncated = crate::mcp::tools::helpers::truncate_chars(first, 47).trim_end();
                         format!("{}...", truncated)
                     } else {
                         first.to_string()
@@ -108,7 +108,7 @@ pub(crate) fn check_confirmation_gate(
         ]
     });
     Some(format!(
-        "# Skill Selection Gate: [select_skills]\n\nStatus: BLOCKED | Error: USER_CONFIRMATION_REQUIRED: You must NEVER auto-select skills on behalf of the user.\n\nTrigger the IDE tool `ask_question` with `is_multi_select: true`:\n```json\nask_question({})\n```\nOnce the user submits their choice, call `select_skills(skills=[...], user_confirmed=true)`.",
+        "# Skill Selection Gate: [select_skills]\n\nStatus: BLOCKED | Error: USER_CONFIRMATION_REQUIRED: You must NEVER auto-select skills on behalf of the user.\n\nTrigger the IDE tool `ask_question` with `is_multi_select: true` so the user selects skills.\n\nCRITICAL MULTILINGUAL MANDATE:\n1. Match User Language: Translate the question and each skill's description into the active conversational language used by the user (e.g. Vietnamese, Japanese, French, English, etc.).\n2. Accents & Diacritics: For languages with diacritics (like Vietnamese), MUST write natural accented text with full diacritics ('tiếng Việt có dấu đầy đủ'). NEVER strip accents or emit unaccented text ('tiếng Việt không dấu').\n3. Option Format: Format each option as `[(Recommended) ]{{name}} - {{translated_short_desc}}` (keep `{{name}}` exact, `{{translated_short_desc}}` <= 50 chars).\n\nSuggested template:\n```json\nask_question({})\n```\nOnce the user submits their choice, call `select_skills(skills=[...], user_confirmed=true)`.",
         serde_json::to_string_pretty(&question_json).unwrap_or_default()
     ))
 }

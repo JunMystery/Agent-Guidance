@@ -131,8 +131,26 @@ function renderEdgeItem(edge, targetProp, onJumpFile) {
   const fileKey = edge[targetProp];
   const shortName = fileKey ? fileKey.split(/[/\\]/).pop() : fileKey;
   const calls = edge.calls || [];
-  const weight = edge.weight || calls.length || 1;
-  const callsLabel = weight > 1 ? t('graph.calls_plural') : t('graph.calls_singular');
+  const isSemantic = edge.origin === 'semantic' || (calls.length === 0 && typeof edge.weight === 'number' && edge.weight > 0 && edge.weight < 1.0);
+
+  let badgeHtml = '';
+  if (isSemantic) {
+    const rawVal = edge.confidence ?? edge.weight ?? 1.0;
+    const pct = Math.round(rawVal <= 1.0 ? rawVal * 100 : rawVal);
+    badgeHtml = `
+      <span style="font-size: 10px; font-weight: 600; color: #ec4899; background: #ec489918; border: 1px solid #ec489935; padding: 1px 5px; border-radius: 3px;">
+        🧠 ${pct}% ${t('graph.semantic_match')}
+      </span>
+    `;
+  } else {
+    const callCount = calls.length || Math.max(1, Math.round(edge.weight || 1));
+    const callsLabel = callCount > 1 ? t('graph.calls_plural') : t('graph.calls_singular');
+    badgeHtml = `
+      <span style="font-size: 10px; color: #38bdf8; background: #0284c718; border: 1px solid #0284c735; padding: 1px 5px; border-radius: 3px;">
+        ${callCount} ${callsLabel}
+      </span>
+    `;
+  }
 
   return `
     <div class="file-edge-link" data-target-file="${escapeHtml(fileKey)}" style="background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px; cursor: pointer;">
@@ -140,9 +158,7 @@ function renderEdgeItem(edge, targetProp, onJumpFile) {
         <span style="font-family: var(--font-mono); font-size: 11px; color: #e2e8f0; font-weight: 500;">
           📁 ${escapeHtml(shortName)}
         </span>
-        <span style="font-size: 10px; color: #38bdf8; background: #0284c718; padding: 1px 5px; border-radius: 3px;">
-          ${weight} ${callsLabel}
-        </span>
+        ${badgeHtml}
       </div>
       ${calls.length ? `
         <div style="margin-top: 4px; font-size: 9px; color: #94a3b8; font-family: var(--font-mono); display: flex; flex-direction: column; gap: 2px;">
@@ -154,7 +170,11 @@ function renderEdgeItem(edge, targetProp, onJumpFile) {
           }).join('')}
           ${calls.length > 3 ? `<div style="color: #64748b; font-style: italic;">+ ${calls.length - 3} ${t('graph.more_calls')}</div>` : ''}
         </div>
-      ` : ''}
+      ` : (edge.description ? `
+        <div style="margin-top: 4px; font-size: 10px; color: #94a3b8; font-style: italic; line-height: 1.3;">
+          ${escapeHtml(edge.description)}
+        </div>
+      ` : '')}
     </div>
   `;
 }

@@ -54,6 +54,8 @@ pub struct ServerState {
     #[serde(default)]
     pub active_task: Option<String>,
     #[serde(default)]
+    pub recent_tasks: Vec<String>,
+    #[serde(default)]
     pub edit_authorized: bool,
     #[serde(default)]
     pub active_architecture_pattern: Option<String>,
@@ -103,6 +105,7 @@ impl Default for ServerState {
             last_risk_level: None,
             active_phase: None,
             active_task: None,
+            recent_tasks: Vec::new(),
             edit_authorized: false,
             active_architecture_pattern: None,
             modified_files: Vec::new(),
@@ -238,6 +241,21 @@ impl ServerState {
             if !self.dirty_files.contains(&clean) {
                 self.dirty_files.push(clean);
             }
+        }
+    }
+
+    /// Records a task to the rolling recent tasks list (max 5).
+    pub fn push_recent_task(&mut self, task: &str) {
+        let t = task.trim();
+        if t.is_empty() || t == "general task" {
+            return;
+        }
+        if self.recent_tasks.last().map(|s| s.as_str()) == Some(t) {
+            return;
+        }
+        self.recent_tasks.push(t.to_string());
+        if self.recent_tasks.len() > 5 {
+            self.recent_tasks.remove(0);
         }
     }
 

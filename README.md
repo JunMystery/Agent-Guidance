@@ -1,6 +1,6 @@
 # 🦀 Agent Guidance MCP Server
 
-[![Version](https://img.shields.io/badge/Version-v1.8.12-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/Version-v1.8.13-blue.svg)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/Language-Rust%202024-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/Security-Policy-blue.svg)](SECURITY.md)
@@ -253,6 +253,14 @@ Daemon & Maintenance:
 - **Informational Q&A Bypass**: Pure informational questions (ending in `?` or starting with question/explanation keywords) automatically bypass skill proposal gates.
 - **Direct Skill Mention Prioritization**: When a user mentions a skill name in prose, it is prioritized at `options[0]` with `(Recommended) ` in the `ask_question` confirmation dialog.
 - **Generative UI Protocol Enforcement**: Mandates visual HTML artifact rendering (`UserFacing: true`) and inline embedding (`<agent-embed>`) before soliciting layout choices, eliminating "blind choice" prompts (`BLIND_UI_CHOICE_PROHIBITED`).
+
+### 🔍 Multi-Entity Cascade Code Search & Vector DB Upgrade (v1.8.13)
+
+- **Layer 1 File Path Matcher (`[file match]`)**: Sub-millisecond lookup in `files` table supporting exact path, basename (`%/target.rs`), and substring matches, enriched with real-time AST outline of top 3–5 symbols and boosted with `score: 2.50`.
+- **Layer 2 Smart Token & Qualifier Expansion**: Automatic decomposition of qualified paths (`Parent::member`, `object.method`), parallel case swapping (`camelCase` ↔ `snake_case`), conversational stop-word removal, and qualifier BM25 boosting (1.35x).
+- **Layer 3 Lexical Content Fallback**: BM25 FTS5 retrieval over code chunks when symbol results are sparse.
+- **Layer 4 Vector DB & Hybrid Fusion**: Rich code chunk previews (`chunk_text`), extended symbol signatures (`parent`, `receiver`, `end_line`), and automatic neural vector retrieval when FTS results are insufficient or score < 0.85.
+- **Accented Multilingual Confirmation**: Guaranteed full diacritics and native language translation for skill proposal dialogs (`ask_question`).
 
 ---
 

@@ -3,6 +3,7 @@
 pub mod idf;
 pub mod intent;
 pub mod scorer;
+pub mod token_expand;
 
 pub use idf::{
     analyze_query_terms, compute_query_downweight_factor, TermDocFreq,
@@ -11,6 +12,7 @@ pub use intent::{
     classify_intent, SearchIntent,
 };
 pub use scorer::{calculate_hit_score, sort_and_dedup_results, RankedResult};
+pub use token_expand::{analyze_query_tokens, strip_conversational_words};
 
 use crate::context::db::CodeGraphDb;
 
@@ -22,24 +24,6 @@ pub struct SearchExecutionResult {
     pub source: &'static str,
     pub term_weights: Vec<TermDocFreq>,
     pub ubiquitous_factor: f64,
-}
-
-pub const CONVERSATIONAL_STOP_WORDS: &[&str] = &[
-    "how", "to", "use", "what", "is", "the", "a", "an", "in", "for",
-    "of", "on", "with", "do", "does", "can", "should", "guide", "docs",
-    "test", "tests", "find", "search", "get", "check", "view", "run",
-];
-
-pub fn strip_conversational_words(query: &str) -> String {
-    query
-        .split_whitespace()
-        .filter(|w| {
-            let lower = w.to_lowercase();
-            let clean = lower.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
-            !CONVERSATIONAL_STOP_WORDS.contains(&clean)
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 pub fn execute_ranked_search<F>(
@@ -59,9 +43,28 @@ where
 
     let term_weights = analyze_query_terms(&db.conn, query);
     let ubiquitous_factor = compute_query_downweight_factor(&term_weights);
-
     let mut candidate_hits = Vec::new();
     let mut primary_source = "symbol_fts";
+
+    // 0. File Path Search (Layer 1: Exact / Basename / Substring path matches)
+    if let Ok(files) = db.search_files(query, 3) {
+        if !files.is_empty() {
+            primary_source = "file_match";
+            for f in files {
+                let score = calculate_hit_score(&f.path, 2.50, query, intent, ubiquitous_factor);
+                let snippet = (!f.top_symbols.is_empty()).then(|| format!("outline: [{}]", f.top_symbols.join(", ")));
+                candidate_hits.push(RankedResult {
+                    path: f.path.clone(),
+                    name: f.path,
+                    line: 1,
+                    end_line: None,
+                    score,
+                    source: "file_match",
+                    snippet,
+                });
+            }
+        }
+    }
 
     // 1. Alias cache lookup (Instant, highest confidence for non-code queries)
     let is_code_query = query.chars().any(|c| {
@@ -110,37 +113,58 @@ where
         }
     }
 
-    // 2. Symbols FTS with BM25 ranking
-    let sym_results = db.search_symbols(query, limit * 2)
-        .or_else(|_| Ok(Vec::new()))
-        .and_then(|res| {
-            if res.is_empty() {
-                let stripped = strip_conversational_words(query);
-                if !stripped.is_empty() && stripped != query {
-                    return db.search_symbols(&stripped, limit * 2);
+    // 2. Symbols FTS with Token Expansion (Layer 2: BM25 ranking + Qualifier + Case variants)
+    let expansion = analyze_query_tokens(query);
+    let mut search_tokens = vec![query.to_string()];
+    if !expansion.symbol_name.is_empty() && expansion.symbol_name != query {
+        search_tokens.push(expansion.symbol_name.clone());
+    }
+    for variant in &expansion.case_variants {
+        if !search_tokens.contains(variant) {
+            search_tokens.push(variant.clone());
+        }
+    }
+
+    let mut sym_hits = Vec::new();
+    for token in &search_tokens {
+        if let Ok(syms) = db.search_symbols(token, limit * 2) {
+            if !syms.is_empty() {
+                sym_hits = syms;
+                break;
+            }
+        }
+    }
+
+    if sym_hits.is_empty() {
+        let stripped = strip_conversational_words(query);
+        if !stripped.is_empty() && stripped != query {
+            if let Ok(syms) = db.search_symbols(&stripped, limit * 2) {
+                sym_hits = syms;
+            }
+        }
+    }
+
+    if !sym_hits.is_empty() {
+        if candidate_hits.is_empty() {
+            primary_source = "symbol_fts";
+        }
+        for (idx, (path, name, line)) in sym_hits.into_iter().enumerate() {
+            let mut raw_score = 1.0 / (1.0 + idx as f64 * 0.1);
+            if let Some(ref q) = expansion.qualifier {
+                if path.contains(q) || name.starts_with(q) {
+                    raw_score *= 1.35;
                 }
             }
-            Ok(res)
-        });
-
-    if let Ok(syms) = sym_results {
-        if !syms.is_empty() {
-            if candidate_hits.is_empty() {
-                primary_source = "symbol_fts";
-            }
-            for (idx, (path, name, line)) in syms.into_iter().enumerate() {
-                let raw_score = 1.0 / (1.0 + idx as f64 * 0.1);
-                let score = calculate_hit_score(&path, raw_score, query, intent, ubiquitous_factor);
-                candidate_hits.push(RankedResult {
-                    path,
-                    name,
-                    line,
-                    end_line: None,
-                    score,
-                    source: "symbol_fts",
-                    snippet: None,
-                });
-            }
+            let score = calculate_hit_score(&path, raw_score, query, intent, ubiquitous_factor);
+            candidate_hits.push(RankedResult {
+                path,
+                name,
+                line,
+                end_line: None,
+                score,
+                source: "symbol_fts",
+                snippet: None,
+            });
         }
     }
 
@@ -181,12 +205,17 @@ where
         }
     }
 
-    // 4. Neural Semantic Vector Fallback (Symbol Signatures)
-    if candidate_hits.is_empty() {
+    // 4. Hybrid Neural Vector Search (Layer 3: Activated if candidate hits low or score weak)
+    let max_score = candidate_hits.iter().map(|r| r.score).fold(0.0, f64::max);
+    let should_vector_search = candidate_hits.len() < limit || max_score < 0.85;
+
+    if should_vector_search {
         if let Some(qv) = embed_fn(query) {
             if let Ok(vec_syms) = db.vector_search_symbols(&qv, limit * 2, 0.60) {
                 if !vec_syms.is_empty() {
-                    primary_source = "symbol_vector";
+                    if candidate_hits.is_empty() {
+                        primary_source = "symbol_vector";
+                    }
                     for v in vec_syms {
                         let score = calculate_hit_score(
                             &v.file_path,
@@ -195,24 +224,32 @@ where
                             intent,
                             ubiquitous_factor,
                         );
+                        let snippet = v.signature.as_ref().map(|s| {
+                            if let Some(ref p) = v.parent {
+                                format!("{} in {}", s, p)
+                            } else {
+                                s.clone()
+                            }
+                        });
                         candidate_hits.push(RankedResult {
                             path: v.file_path,
                             name: v.name,
                             line: v.start_line,
-                            end_line: None,
+                            end_line: v.end_line,
                             score,
                             source: "symbol_vector",
-                            snippet: None,
+                            snippet,
                         });
                     }
                 }
             }
 
-            // 5. Neural Semantic Vector Fallback (Content Chunks)
-            if candidate_hits.is_empty() {
+            if candidate_hits.len() < limit {
                 if let Ok(chunks) = db.vector_search_chunks(&qv, limit * 2, 0.55) {
                     if !chunks.is_empty() {
-                        primary_source = "content_vector";
+                        if candidate_hits.is_empty() {
+                            primary_source = "content_vector";
+                        }
                         for c in chunks {
                             let score = calculate_hit_score(
                                 &c.file_path,
@@ -221,6 +258,7 @@ where
                                 intent,
                                 ubiquitous_factor,
                             );
+                            let snip_preview: String = c.chunk_text.chars().take(120).collect();
                             candidate_hits.push(RankedResult {
                                 path: c.file_path,
                                 name: format!("L{}-{}", c.start_line, c.end_line),
@@ -228,7 +266,7 @@ where
                                 end_line: Some(c.end_line),
                                 score,
                                 source: "content_vector",
-                                snippet: None,
+                                snippet: if snip_preview.is_empty() { None } else { Some(snip_preview) },
                             });
                         }
                     }

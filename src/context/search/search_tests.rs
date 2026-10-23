@@ -208,3 +208,88 @@ fn test_execute_ranked_search_bypasses_alias_on_code_query() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_token_expansion_and_file_search_upgrade() {
+    use super::execute_ranked_search;
+    use super::token_expand::{analyze_query_tokens, strip_conversational_words};
+    use crate::context::db::CodeGraphDb;
+
+    // 1. Verify token expansion
+    let exp1 = analyze_query_tokens("CodeGraphDb::search_files");
+    assert_eq!(exp1.qualifier.as_deref(), Some("CodeGraphDb"));
+    assert_eq!(exp1.symbol_name, "search_files");
+    assert!(exp1.case_variants.contains(&"searchFiles".to_string()));
+
+    let exp2 = analyze_query_tokens("pipeline.execute_stage");
+    assert_eq!(exp2.qualifier.as_deref(), Some("pipeline"));
+    assert_eq!(exp2.symbol_name, "execute_stage");
+
+    let exp3 = analyze_query_tokens("guidanceFormat");
+    assert_eq!(exp3.qualifier, None);
+    assert!(exp3.case_variants.contains(&"guidance_format".to_string()));
+
+    let stripped = strip_conversational_words("how to find handle_search in router");
+    assert_eq!(stripped, "handle_search router");
+
+    // 2. Verify file search + ranked search integration
+    let temp_dir = std::env::temp_dir().join(format!("test_file_search_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let db = CodeGraphDb::open(&temp_dir.join("test.db")).unwrap();
+
+    db.upsert_file("src/context/db/file_search.rs", "h_fs", 100, 0).unwrap();
+    db.insert_symbol_full("s_fs1", "search_files", "function", "src/context/db/file_search.rs", None, 12, 35, Some("pub fn search_files()"), Some("rust"), None, None).unwrap();
+
+    // Direct file search
+    let files = db.search_files("file_search.rs", 3).unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "src/context/db/file_search.rs");
+    assert!(!files[0].top_symbols.is_empty());
+
+    // Execute ranked search for file
+    let res_file = execute_ranked_search(&db, "file_search.rs", None, 5, |_| None);
+    assert_eq!(res_file.results[0].source, "file_match");
+    assert_eq!(res_file.results[0].path, "src/context/db/file_search.rs");
+    assert!(res_file.results[0].snippet.as_ref().unwrap().contains("outline:"));
+
+    // Case variant search: 'searchFiles' finds 'search_files'
+    let res_sym = execute_ranked_search(&db, "searchFiles", None, 5, |_| None);
+    assert!(!res_sym.results.is_empty());
+    assert_eq!(res_sym.results[0].name, "search_files");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_vector_search_chunk_and_symbol_rich_metadata() {
+    use super::execute_ranked_search;
+    use crate::context::db::CodeGraphDb;
+
+    let temp_dir = std::env::temp_dir().join(format!("test_vec_meta_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let db = CodeGraphDb::open(&temp_dir.join("test.db")).unwrap();
+
+    db.upsert_file("src/calc.rs", "h_calc", 100, 0).unwrap();
+    db.insert_symbol_full("s_calc", "calc_vat", "function", "src/calc.rs", Some("Calc"), 10, 25, Some("fn calc_vat(amount: f64) -> f64"), Some("rust"), None, Some("self")).unwrap();
+
+    let vec = vec![1.0f32, 0.0, 0.0, 0.0];
+    db.store_symbol_vector("s_calc", &vec, "v1").unwrap();
+    let chunk_id = db.insert_chunk("src/calc.rs", 10, 25, "hash_c", "pub fn calc_vat(amount: f64) -> f64 { amount * 0.1 }").unwrap();
+    db.store_chunk_vector(chunk_id, &vec, "v1").unwrap();
+
+    let sym_hits = db.vector_search_symbols(&vec, 5, 0.50).unwrap();
+    assert_eq!(sym_hits.len(), 1);
+    assert_eq!(sym_hits[0].parent.as_deref(), Some("Calc"));
+    assert_eq!(sym_hits[0].receiver.as_deref(), Some("self"));
+
+    let chunk_hits = db.vector_search_chunks(&vec, 5, 0.50).unwrap();
+    assert_eq!(chunk_hits.len(), 1);
+    assert!(chunk_hits[0].chunk_text.contains("amount * 0.1"));
+
+    let qvec = vec.clone();
+    let res = execute_ranked_search(&db, "compute taxes", None, 5, move |_| Some(qvec.clone()));
+    assert!(!res.results.is_empty());
+    assert!(res.results.iter().any(|r| r.source == "symbol_vector" || r.source == "content_vector"));
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

@@ -3,6 +3,7 @@ pub mod logger;
 pub mod rollup;
 pub use cleanup::run_auto_cleanup;
 pub use logger::{log_embed_query, log_skill_load, log_tool_call};
+#[allow(unused_imports)]
 pub use rollup::{clean_dashboard_history, rollup_before_prune};
 
 #[cfg(test)]

@@ -91,7 +91,7 @@ impl CodeGraphDb {
         threshold: f32,
     ) -> Result<Vec<SymbolSearchResult>> {
         let mut stmt = self.conn.prepare(
-            "SELECT v.vector, s.name, s.kind, s.file_path, s.start_line, s.signature
+            "SELECT v.vector, s.name, s.kind, s.file_path, s.start_line, s.end_line, s.signature, s.parent, s.receiver
              FROM symbol_vectors v
              JOIN symbols s ON v.symbol_id = s.id",
         )?;
@@ -102,13 +102,16 @@ impl CodeGraphDb {
             let kind: String = row.get(2)?;
             let file_path: String = row.get(3)?;
             let start_line = row.get::<_, i64>(4)? as usize;
-            let signature: Option<String> = row.get(5)?;
-            Ok((blob, name, kind, file_path, start_line, signature))
+            let end_line = row.get::<_, Option<i64>>(5)?.map(|l| l as usize);
+            let signature: Option<String> = row.get(6)?;
+            let parent: Option<String> = row.get(7)?;
+            let receiver: Option<String> = row.get(8)?;
+            Ok((blob, name, kind, file_path, start_line, end_line, signature, parent, receiver))
         })?;
 
         let mut matches = Vec::new();
         for r in rows {
-            let (blob, name, kind, file_path, start_line, signature) = r?;
+            let (blob, name, kind, file_path, start_line, end_line, signature, parent, receiver) = r?;
             let score = dot_similarity_bytes(query_vector, &blob);
             if score >= threshold {
                 matches.push(SymbolSearchResult {
@@ -116,7 +119,10 @@ impl CodeGraphDb {
                     kind,
                     file_path,
                     start_line,
+                    end_line,
                     signature,
+                    parent,
+                    receiver,
                     score,
                 });
             }
@@ -134,7 +140,7 @@ impl CodeGraphDb {
         threshold: f32,
     ) -> Result<Vec<ChunkSearchResult>> {
         let mut stmt = self.conn.prepare(
-            "SELECT v.vector, c.file_path, c.start_line, c.end_line
+            "SELECT v.vector, c.file_path, c.start_line, c.end_line, c.chunk_text
              FROM chunk_vectors v
              JOIN content_chunks c ON v.chunk_id = c.id",
         )?;
@@ -144,18 +150,20 @@ impl CodeGraphDb {
             let file_path: String = row.get(1)?;
             let start_line = row.get::<_, i64>(2)? as usize;
             let end_line = row.get::<_, i64>(3)? as usize;
-            Ok((blob, file_path, start_line, end_line))
+            let chunk_text: String = row.get(4)?;
+            Ok((blob, file_path, start_line, end_line, chunk_text))
         })?;
 
         let mut matches = Vec::new();
         for r in rows {
-            let (blob, file_path, start_line, end_line) = r?;
+            let (blob, file_path, start_line, end_line, chunk_text) = r?;
             let score = dot_similarity_bytes(query_vector, &blob);
             if score >= threshold {
                 matches.push(ChunkSearchResult {
                     file_path,
                     start_line,
                     end_line,
+                    chunk_text,
                     score,
                 });
             }
@@ -174,15 +182,20 @@ pub struct SymbolSearchResult {
     pub kind: String,
     pub file_path: String,
     pub start_line: usize,
+    pub end_line: Option<usize>,
     pub signature: Option<String>,
+    pub parent: Option<String>,
+    pub receiver: Option<String>,
     pub score: f32,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ChunkSearchResult {
     pub file_path: String,
     pub start_line: usize,
     pub end_line: usize,
+    pub chunk_text: String,
     pub score: f32,
 }
 

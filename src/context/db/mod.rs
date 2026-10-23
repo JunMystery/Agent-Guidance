@@ -7,10 +7,13 @@ use std::path::Path;
 pub mod schema;
 pub mod aliases;
 pub mod context_vector;
+pub mod file_search;
 pub mod semantic;
 pub mod storage;
 pub mod vectors;
 
+#[allow(unused_imports)]
+pub use file_search::FileMatchResult;
 pub use vectors::{bytes_to_f32_vec, cosine_similarity};
 
 pub struct CodeGraphDb {

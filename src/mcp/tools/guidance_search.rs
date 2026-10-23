@@ -46,17 +46,23 @@ pub(crate) fn handle_search(
     let tech_stack_arg = arguments.get("tech_stack").and_then(|v| v.as_str()).unwrap_or("");
     let files_arg = arguments.get("files").or_else(|| arguments.get("related_files"));
 
-    let mut query_parts = Vec::new();
-    if !query.trim().is_empty() {
-        query_parts.push(query.trim().to_string());
-    }
-    if !task_arg.trim().is_empty() && !query.contains(task_arg) {
-        query_parts.push(task_arg.trim().to_string());
-    }
-    if !workflow_arg.trim().is_empty() && !query.contains(workflow_arg) {
+    let primary_prompt = if !query.trim().is_empty() {
+        query.trim()
+    } else if !task_arg.trim().is_empty() {
+        task_arg.trim()
+    } else if let Some(active) = &state.active_task {
+        active.as_str()
+    } else if let Some(intent) = &state.user_intent_summary {
+        intent.as_str()
+    } else {
+        "general programming guidance"
+    };
+
+    let mut query_parts = vec![primary_prompt.to_string()];
+    if !workflow_arg.trim().is_empty() && !primary_prompt.contains(workflow_arg) {
         query_parts.push(workflow_arg.trim().to_string());
     }
-    if !tech_stack_arg.trim().is_empty() && !query.contains(tech_stack_arg) {
+    if !tech_stack_arg.trim().is_empty() && !primary_prompt.contains(tech_stack_arg) {
         query_parts.push(tech_stack_arg.trim().to_string());
     }
     if let Some(files) = files_arg {
@@ -71,14 +77,34 @@ pub(crate) fn handle_search(
             query_parts.push(f_str);
         }
     }
-    if query_parts.is_empty() {
-        if let Some(intent) = &state.user_intent_summary {
-            query_parts.push(intent.clone());
+
+    // Collect recent task and work context (Multi-tier context)
+    let mut recent_context_items = Vec::new();
+    if let Some(active) = &state.active_task {
+        if active.as_str() != primary_prompt {
+            recent_context_items.push(format!("Active: {}", active));
         }
     }
-    if query_parts.is_empty() && !state.modified_files.is_empty() {
-        query_parts.push(state.modified_files.join(" "));
+    for t in &state.recent_tasks {
+        if t.as_str() != primary_prompt && !recent_context_items.iter().any(|item| item.contains(t)) {
+            recent_context_items.push(t.clone());
+        }
     }
+    if !state.modified_files.is_empty() {
+        let files_preview: Vec<_> = state.modified_files.iter().take(3).cloned().collect();
+        recent_context_items.push(format!("Files: {}", files_preview.join(", ")));
+    }
+
+    let context_note_str = if !recent_context_items.is_empty() {
+        format!("[{}]", recent_context_items.join(" | "))
+    } else {
+        String::new()
+    };
+    let context_note = if context_note_str.is_empty() {
+        None
+    } else {
+        Some(context_note_str.as_str())
+    };
 
     let all_skills = load_all_skills(&proj_path);
     let skill_names: Vec<String> = all_skills.iter().map(|s| s.name.clone()).collect();
@@ -136,8 +162,8 @@ pub(crate) fn handle_search(
                     } else {
                         item.title
                     };
-                    let short_desc = if desc.chars().count() > 38 {
-                        let t = truncate_chars(&desc, 35).trim_end().to_string();
+                    let short_desc = if desc.chars().count() > 50 {
+                        let t = truncate_chars(&desc, 47).trim_end().to_string();
                         format!("{}...", t)
                     } else {
                         desc
@@ -156,7 +182,7 @@ pub(crate) fn handle_search(
                 }
 
                 state.pending_skill_proposals = proposals;
-                return format_search_output(&search_query, &formatted, &options, "Remote ML Worker (In-Memory AGV1)", is_gen_ui);
+                return format_search_output(&search_query, context_note, &formatted, &options, "Remote ML Worker (In-Memory AGV1)", is_gen_ui);
             }
             Err(e) => {
                 tracing::warn!("Remote skill search failed: {}; attempting fallback", e);
@@ -166,7 +192,12 @@ pub(crate) fn handle_search(
 
     let profile = detect_language_fast(&proj_path, &search_query);
 
-    let stage1_results = hybrid_vector_search(&search_query, &all_skills, 20);
+    let enriched_search_query = if !recent_context_items.is_empty() {
+        format!("{} context: {}", search_query, recent_context_items.join(" "))
+    } else {
+        search_query.clone()
+    };
+    let stage1_results = hybrid_vector_search(&enriched_search_query, &all_skills, 20);
     ensure_not_cancelled(state)?;
 
     let stage1_5_results = crate::ml::skill_graphrag_gate::apply_graphrag_context_gating(
@@ -245,5 +276,5 @@ pub(crate) fn handle_search(
         })
         .collect();
 
-    format_search_output(&search_query, &formatted_results, &options, "3-Stage Hybrid Vector & Cross-Encoder", is_gen_ui)
+    format_search_output(&search_query, context_note, &formatted_results, &options, "3-Stage Hybrid Vector & Cross-Encoder", is_gen_ui)
 }

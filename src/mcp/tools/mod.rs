@@ -270,5 +270,9 @@ mod read_tests;
 mod batch_tests;
 
 #[cfg(test)]
+#[path = "../tools_recent_tasks_tests.rs"]
+mod recent_tasks_tests;
+
+#[cfg(test)]
 #[path = "../tools_context_cluster_tests.rs"]
 mod cluster_tests;
