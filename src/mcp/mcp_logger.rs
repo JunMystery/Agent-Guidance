@@ -107,7 +107,7 @@ pub fn log_mcp(level: LogLevel, source: &str, message: &str, details: Option<&st
     log_mcp_direct(level, source, message, details, project_path);
 }
 
-fn log_mcp_direct(level: LogLevel, source: &str, message: &str, details: Option<&str>, project_path: Option<&str>) {
+pub(crate) fn log_mcp_direct(level: LogLevel, source: &str, message: &str, details: Option<&str>, project_path: Option<&str>) {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let db_path = crate::mcp::db::get_db_path();
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_NO_MUTEX;

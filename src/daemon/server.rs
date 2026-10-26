@@ -77,13 +77,22 @@ pub async fn daemon_main(port: u16, project_path: Option<String>) {
         }
     });
 
-    let startup_timeout_secs: u64 = std::env::var("AGENT_GUIDANCE_IDLE_TIMEOUT")
+    let startup_timeout_secs: u64 = std::env::var("AGENT_GUIDANCE_STARTUP_TIMEOUT")
+        .or_else(|_| std::env::var("AGENT_GUIDANCE_IDLE_TIMEOUT"))
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_STARTUP_TIMEOUT_SECS);
 
     monitor_client_lifecycle(startup_timeout_secs).await;
     let _ = fs::remove_file(&path);
+    crate::mcp::mcp_logger::log_mcp_direct(
+        crate::mcp::mcp_logger::LogLevel::Info,
+        "daemon_lifecycle",
+        "Daemon idle cooldown reached. Shutting down daemon cleanly.",
+        None,
+        None,
+    );
+    std::process::exit(0);
 }
 
 #[cfg(windows)]
@@ -153,12 +162,21 @@ pub async fn daemon_main(port: u16, project_path: Option<String>) {
         }
     });
 
-    let startup_timeout_secs: u64 = std::env::var("AGENT_GUIDANCE_IDLE_TIMEOUT")
+    let startup_timeout_secs: u64 = std::env::var("AGENT_GUIDANCE_STARTUP_TIMEOUT")
+        .or_else(|_| std::env::var("AGENT_GUIDANCE_IDLE_TIMEOUT"))
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_STARTUP_TIMEOUT_SECS);
 
     monitor_client_lifecycle(startup_timeout_secs).await;
+    crate::mcp::mcp_logger::log_mcp_direct(
+        crate::mcp::mcp_logger::LogLevel::Info,
+        "daemon_lifecycle",
+        "Daemon idle cooldown reached. Shutting down daemon cleanly.",
+        None,
+        None,
+    );
+    std::process::exit(0);
 }
 
 fn checkpoint_usage_db() {

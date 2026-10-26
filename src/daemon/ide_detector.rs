@@ -4,7 +4,7 @@
 //! environments (VS Code, Cursor, Antigravity, Windsurf, Claude, Zed, JetBrains, etc.).
 //! Ensures the singleton daemon stays alive as long as at least one IDE remains running.
 
-use sysinfo::System;
+use sysinfo::{Process, ProcessRefreshKind, System, UpdateKind};
 
 /// Known IDE process binary names (normalized lowercase without .exe suffix).
 pub const KNOWN_IDE_BINARIES: &[&str] = &[
@@ -34,6 +34,9 @@ pub const KNOWN_IDE_BINARIES: &[&str] = &[
     "rider",
     "rider64",
     "studio64",
+    "agy",
+    "gemini",
+    "codex",
 ];
 
 /// Checks if a raw process name matches a recognized IDE.
@@ -52,21 +55,43 @@ pub fn is_ide_process_name(name: &str) -> bool {
     false
 }
 
+/// Checks if a process is an active primary IDE instance (filtering out crashpad handlers, background tunnels, and utility workers).
+pub fn is_active_ide_process(proc: &Process) -> bool {
+    if !is_ide_process_name(proc.name()) {
+        return false;
+    }
+
+    let cmd = proc.cmd();
+    for arg in cmd {
+        let arg_lower = arg.to_lowercase();
+        if arg_lower.contains("--type=crashpad-handler")
+            || arg_lower.contains("crashpad_handler")
+            || arg_lower.contains("--type=utility")
+            || arg_lower.contains("code-tunnel")
+            || arg_lower.contains("--ms-enable-electron-run-as-node")
+        {
+            return false;
+        }
+    }
+
+    true
+}
+
 #[cfg(test)]
 pub fn count_running_ide_processes(sys: &mut System) -> usize {
-    sys.refresh_processes();
+    sys.refresh_processes_specifics(ProcessRefreshKind::new().with_cmd(UpdateKind::OnlyIfNotSet));
     sys.processes()
         .values()
-        .filter(|p| is_ide_process_name(p.name()))
+        .filter(|p| is_active_ide_process(p))
         .count()
 }
 
 /// Returns true if at least one recognized IDE is currently running.
 pub fn has_running_ide_processes(sys: &mut System) -> bool {
-    sys.refresh_processes();
+    sys.refresh_processes_specifics(ProcessRefreshKind::new().with_cmd(UpdateKind::OnlyIfNotSet));
     sys.processes()
         .values()
-        .any(|p| is_ide_process_name(p.name()))
+        .any(is_active_ide_process)
 }
 
 #[cfg(test)]
@@ -89,6 +114,9 @@ mod tests {
         assert!(is_ide_process_name("rustrover64.exe"));
         assert!(is_ide_process_name("trae.exe"));
         assert!(is_ide_process_name("zed.exe"));
+        assert!(is_ide_process_name("agy.exe"));
+        assert!(is_ide_process_name("gemini.exe"));
+        assert!(is_ide_process_name("codex.exe"));
 
         assert!(!is_ide_process_name("chrome.exe"));
         assert!(!is_ide_process_name("node.exe"));

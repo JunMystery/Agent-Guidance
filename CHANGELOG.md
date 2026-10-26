@@ -2,6 +2,36 @@
 
 All notable changes to Agent Guidance Rust MCP Server will be documented in this file.
 
+## [1.8.14] - 2026-10-26
+
+### 🛑 MCP Daemon Auto-Shutdown & Hard Idle Cap
+- **Max Idle Timeout Cap (`src/daemon/lifecycle.rs`)**:
+  - Added `DEFAULT_MAX_IDLE_COOLDOWN_SECS = 180s` (3 minutes, overridable via `AGENT_GUIDANCE_MAX_IDLE_TIMEOUT`).
+  - Added countdown when `ACTIVE_CLIENTS == 0`: even if background/tray IDE processes (`has_ides_fn`) report true, daemon cleanly terminates after 180 seconds of 0 clients.
+  - Added unit test `test_daemon_max_idle_cooldown_triggers_shutdown_despite_ide_running`.
+- **Deep Process Filtering & Command-Line Inspection (`src/daemon/ide_detector.rs`)**:
+  - Upgraded process refresh to `sys.refresh_processes_specifics(ProcessRefreshKind::new().with_cmd(UpdateKind::OnlyIfNotSet))` to reliably inspect command line arguments.
+  - Filtered out non-primary helper processes: `--type=crashpad-handler`, `crashpad_handler`, `--type=utility`, `code-tunnel`, `--ms-enable-electron-run-as-node`.
+  - Added CLI binaries to detection whitelist: `"agy"`, `"gemini"`, `"codex"`.
+- **Synchronous SQLite Shutdown Logging & Clean Exit (`src/daemon/server.rs`, `src/mcp/mcp_logger.rs`)**:
+  - Made `log_mcp_direct` crate-visible (`pub(crate)`) for synchronous SQLite logging to `usage.db`.
+  - Added explicit shutdown event logging upon cooldown expiration.
+  - Added `std::process::exit(0)` on both Unix and Windows targets to cleanly tear down background threads (system tray message loops and tiny_http listeners).
+
+## [1.8.13] - 2026-10-23
+
+### 🔍 Multi-Entity Cascade Code Search & Vector DB Upgrade
+- **Layer 1 File Path Matcher (`src/context/db/file_search.rs`)**:
+  - Sub-millisecond lookup in `files` table supporting exact path, basename, and substring matching with AST outline integration and 2.50 score boost.
+- **Layer 2 Smart Token & Qualifier Expansion (`src/context/search/token_expand.rs`)**:
+  - Decomposition of qualified paths (`Parent::member`, `object.method`), case swapping (`camelCase` / `snake_case`), stop-word removal, and qualifier BM25 boosting (1.35x).
+- **Layer 3 Lexical Content Fallback (`src/context/search/mod.rs`)**:
+  - BM25 FTS5 retrieval over code chunks when symbol results are sparse.
+- **Layer 4 Vector DB & Hybrid Fusion (`src/context/db/vectors.rs`)**:
+  - Rich code chunk previews (`chunk_text`), extended symbol signatures (`parent`, `receiver`, `end_line`), and neural vector fallback.
+- **Accented Multilingual Confirmation (`src/mcp/tools/guidance_search.rs`)**:
+  - Full diacritics and native language translation for skill proposal dialogs (`ask_question`).
+
 ## [1.8.12] - 2026-10-23
 
 ### 🛡️ Grill-Me Protocol & Plan Approval Separation

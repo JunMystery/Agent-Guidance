@@ -1,6 +1,6 @@
 # 🦀 Agent Guidance MCP Server
 
-[![Version](https://img.shields.io/badge/Version-v1.8.13-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/Version-v1.8.14-blue.svg)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/Language-Rust%202024-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/Security-Policy-blue.svg)](SECURITY.md)
@@ -261,6 +261,12 @@ Daemon & Maintenance:
 - **Layer 3 Lexical Content Fallback**: BM25 FTS5 retrieval over code chunks when symbol results are sparse.
 - **Layer 4 Vector DB & Hybrid Fusion**: Rich code chunk previews (`chunk_text`), extended symbol signatures (`parent`, `receiver`, `end_line`), and automatic neural vector retrieval when FTS results are insufficient or score < 0.85.
 - **Accented Multilingual Confirmation**: Guaranteed full diacritics and native language translation for skill proposal dialogs (`ask_question`).
+
+### 🛑 MCP Daemon Auto-Shutdown & Hard Idle Cap (v1.8.14)
+
+- **Hard Max Idle Cap (`DEFAULT_MAX_IDLE_COOLDOWN_SECS = 180s`)**: Automatically terminates the daemon if 0 clients remain connected for 3 minutes, even when lingering IDE background processes or system tray services are detected.
+- **Deep Process Filtering & Command-Line Inspection**: Inspects process arguments via `ProcessRefreshKind::new().with_cmd(...)`, filtering out `--type=crashpad-handler`, `--type=utility`, `code-tunnel`, and recognizing CLI tools (`agy`, `gemini`, `codex`).
+- **Synchronous SQLite Shutdown Logging & Clean Exit**: Flushes lifecycle events synchronously to `usage.db` via `log_mcp_direct` before terminating background threads cleanly via `std::process::exit(0)`.
 
 ---
 
