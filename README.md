@@ -23,16 +23,26 @@ Installers provide an interactive mode selector:
 - **`[2] Lightweight Client`**: Zero-ML footprint (~15 MB RAM), forwards queries to Remote Worker.
 - **`[3] Dedicated Server Worker`**: Central ML worker daemon with systemd / launchd / Windows Scheduled Task.
 
-### Automatic One-Line Install
+### Quick Install & Run
 
-**Windows (PowerShell):**
-```powershell
-powershell -ExecutionPolicy Bypass -Command "iex (irm https://raw.githubusercontent.com/JunMystery/Agent-Guidance/main/scripts/install.ps1)"
+**Universal (Windows, macOS, Linux via NPX / NPM):**
+```bash
+npx -y agent-guidance --setup
 ```
 
-**Linux / macOS (Bash):**
+**Linux / macOS (Bash & Curl):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/JunMystery/Agent-Guidance/main/scripts/install.sh | bash
+```
+
+**Windows Native (Winget):**
+```bash
+winget install JunMystery.AgentGuidance
+```
+
+**macOS Homebrew:**
+```bash
+brew install JunMystery/tap/agent-guidance
 ```
 
 ### Manual Cargo Build

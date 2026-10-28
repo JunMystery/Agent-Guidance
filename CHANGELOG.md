@@ -15,6 +15,17 @@ All notable changes to Agent Guidance Rust MCP Server will be documented in this
 - **Test Suite Updates (`src/mcp/tools_guidance_tests.rs`)**:
   - Added unit test `test_guidance_search_slash_command_strips_and_gen_ui_prohibits_questions` ensuring `ask_question` is strictly prohibited on `/generative_ui` queries.
 
+### 📦 Cross-Platform NPM Runner & Secure Install Flow
+- **NPM Package Runner (`packaging/npm/`)**:
+  - Published lightweight cross-platform launcher package `agent-guidance` with zero external dependencies.
+  - Automatically identifies host platform/architecture (`win32-x64`, `darwin-arm64`, `darwin-x64`, `linux-x64`), downloads corresponding prebuilt release binary, and manages local versioned caching (`%LOCALAPPDATA%` / `~/.agent-guidance`).
+  - Supports instant execution via `npx -y agent-guidance --setup` and global install (`npm install -g agent-guidance`).
+- **Security Hardening (`README.md`)**:
+  - Replaced legacy `powershell -ExecutionPolicy Bypass` one-liner with secure `npx` launcher, eliminating execution policy bypass warnings and corporate firewall/EDR restrictions.
+  - Retained Native `curl | bash` installer for Unix/Linux environments.
+- **Automated Publishing Workflow (`.github/workflows/release.yml`)**:
+  - Added `publish-npm` job to automatically deploy the npm wrapper to registry on release tags.
+
 ## [1.8.14] - 2026-10-26
 
 ### 🛑 MCP Daemon Auto-Shutdown & Hard Idle Cap
