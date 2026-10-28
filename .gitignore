@@ -10,7 +10,8 @@
 .claude/
 dist/
 /dist
-bin/
 /bin
+!packaging/npm/bin/
 *.zip
 *.tar.gz
+__pycache__/

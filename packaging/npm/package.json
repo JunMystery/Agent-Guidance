@@ -12,7 +12,7 @@
     "README.md"
   ],
   "scripts": {
-    "test": "node --check bin/agent-guidance.js && node --check lib/runner.js"
+    "test": "node --check bin/agent-guidance.js && node --check lib/runner.js && node --check lib/wizard.js"
   },
   "repository": {
     "type": "git",

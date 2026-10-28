@@ -1,4 +1,3 @@
-#Requires -Version 5.1
 <#
 .SYNOPSIS
     Installer for Agent Guidance Rust (Windows).
@@ -96,7 +95,14 @@ function Try-DownloadPrebuilt {
                 Expand-Archive -Path $zipPath -DestinationPath $tmpDir -Force -ErrorAction Stop
                 $bin = Join-Path $tmpDir "agent-guidance.exe"
                 if (Test-Path $bin) {
-                    Copy-Item $bin "$localBin\agent-guidance.exe" -Force
+                    try {
+                        Copy-Item $bin "$localBin\agent-guidance.exe" -Force -ErrorAction Stop
+                    } catch {
+                        $oldBin = "$localBin\agent-guidance.exe.old"
+                        try { if (Test-Path $oldBin) { Remove-Item $oldBin -Force -ErrorAction SilentlyContinue } } catch {}
+                        try { Move-Item "$localBin\agent-guidance.exe" $oldBin -Force -ErrorAction SilentlyContinue } catch {}
+                        Copy-Item $bin "$localBin\agent-guidance.exe" -Force
+                    }
                     Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
                     Write-Host "  OK Downloaded and installed $asset ($version)" -ForegroundColor Green
                     return $true

@@ -1,13 +1,8 @@
 # 🦀 Agent Guidance MCP Server
 
-[![Version](https://img.shields.io/badge/Version-v1.8.15-blue.svg)](Cargo.toml)
-[![Rust](https://img.shields.io/badge/Language-Rust%202024-orange.svg)](https://www.rust-lang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Security Policy](https://img.shields.io/badge/Security-Policy-blue.svg)](SECURITY.md)
-[![Contributing](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
-[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
-[![MCP Compliant](https://img.shields.io/badge/Protocol-Model%20Context%20Protocol-green.svg)](https://modelcontextprotocol.io/)
-[![Token Reduction](https://img.shields.io/badge/Tokens%20Saved-~80%25-brightgreen.svg)](#-surgical-skill-rag-slicing-token-savings)
+[![Version](https://img.shields.io/badge/version-1.8.15-blue.svg)](https://github.com/JunMystery/Agent-Guidance/releases)
+[![NPM Version](https://img.shields.io/npm/v/agent-guidance.svg?color=crimson)](https://www.npmjs.com/package/agent-guidance)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ![Agent Guidance Hero Banner](docs/images/hero-banner.png)
 
@@ -25,23 +20,25 @@ Installers provide an interactive mode selector:
 
 ### Quick Install & Run
 
-**Universal (Windows, macOS, Linux via NPX / NPM):**
+**Universal NPM Runner (Windows, macOS, Linux — Interactive Wizard & Profiles):**
 ```bash
-# Run directly via GitHub repo (works everywhere, zero setup):
-npx -y github:JunMystery/Agent-Guidance --setup
+# Interactive setup wizard (Select profile: Standalone, Client, Server, or Uninstall):
+npx -y agent-guidance
 
-# Or via NPM registry:
+# Or run commands directly:
 npx -y agent-guidance --setup
+npx -y agent-guidance --set-server http://<SERVER_IP>:11998
+npx -y agent-guidance --uninstall
+```
+
+**Windows (PowerShell In-Memory — Safe, no ExecutionPolicy bypass):**
+```powershell
+irm https://raw.githubusercontent.com/JunMystery/Agent-Guidance/main/scripts/install.ps1 | iex
 ```
 
 **Linux / macOS (Bash & Curl):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/JunMystery/Agent-Guidance/main/scripts/install.sh | bash
-```
-
-**Windows Native (Winget):**
-```bash
-winget install JunMystery.AgentGuidance
 ```
 
 **macOS Homebrew:**

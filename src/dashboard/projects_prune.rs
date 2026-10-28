@@ -55,6 +55,7 @@ pub fn prune_missing_projects(db_path: &Path) -> Result<usize> {
                     params![p, norm],
                 );
                 let _ = conn.execute("DELETE FROM tracked_projects WHERE project_path = ?", params![p]);
+                pruned_count += 1;
             } else {
                 let root_name = Path::new(&norm).file_name().and_then(|n| n.to_str()).unwrap_or("project");
                 let _ = conn.execute(
@@ -66,7 +67,6 @@ pub fn prune_missing_projects(db_path: &Path) -> Result<usize> {
                 "UPDATE tool_calls SET project_path = ? WHERE project_path = ?",
                 params![norm, p],
             );
-            pruned_count += 1;
         }
     }
 

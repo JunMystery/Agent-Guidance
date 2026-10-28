@@ -73,6 +73,7 @@ fn test_prune_missing_projects() {
     let real_proj = temp_dir.join("active_proj");
     std::fs::create_dir_all(&real_proj).unwrap();
     let real_proj_str = real_proj.to_str().unwrap();
+    let norm_real = normalize_project_path(real_proj_str);
 
     let fake_proj_str = "C:/fake/path/that/does/not/exist_prune";
 
@@ -80,7 +81,7 @@ fn test_prune_missing_projects() {
         "INSERT INTO tracked_projects (project_path, project_name, first_seen, last_active, total_calls, total_tokens_saved)
          VALUES (?1, 'ActiveProj', 1000, 2000, 5, 500),
                 (?2, 'MissingProj', 1000, 1500, 2, 200)",
-        [real_proj_str, fake_proj_str],
+        [&norm_real, fake_proj_str],
     ).unwrap();
 
     let pruned = prune_missing_projects(&db_path).unwrap();

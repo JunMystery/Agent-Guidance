@@ -107,24 +107,6 @@ def main():
         f'res.set("ProductVersion", "{version}.0");'
     )
 
-    # 5. packaging/winget/JunMystery.AgentGuidance.locale.en-US.yaml
-    replace_in_file(
-        root / "packaging" / "winget" / "JunMystery.AgentGuidance.locale.en-US.yaml",
-        r'PackageVersion:\s*\S+',
-        f'PackageVersion: {version}'
-    )
-
-    # 5. packaging/winget/JunMystery.AgentGuidance.installer.yaml
-    replace_in_file(
-        root / "packaging" / "winget" / "JunMystery.AgentGuidance.installer.yaml",
-        r'PackageVersion:\s*\S+',
-        f'PackageVersion: {version}'
-    )
-    replace_in_file(
-        root / "packaging" / "winget" / "JunMystery.AgentGuidance.installer.yaml",
-        r'releases/download/v[^/]+/',
-        f'releases/download/{v_version}/'
-    )
 
     # 6. packaging/homebrew/agent-guidance.rb
     replace_in_file(

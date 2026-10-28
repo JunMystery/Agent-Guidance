@@ -52,6 +52,28 @@ function getCacheDir() {
   return path.join(home, '.agent-guidance', 'bin', `v${VERSION}`);
 }
 
+function syncSystemPath(binPath) {
+  if (process.platform !== 'win32') return;
+  try {
+    const localApp = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    const targetDir = path.join(localApp, 'Programs', 'agent-guidance', 'bin');
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+    const targetFile = path.join(targetDir, 'agent-guidance.exe');
+    try {
+      fs.copyFileSync(binPath, targetFile);
+    } catch (_) {
+      const oldFile = `${targetFile}.old`;
+      try { if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile); } catch (_) {}
+      try {
+        fs.renameSync(targetFile, oldFile);
+        fs.copyFileSync(binPath, targetFile);
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+
 function downloadFile(url, destPath) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(destPath);
@@ -98,6 +120,7 @@ async function ensureBinary() {
   const binPath = path.join(cacheDir, target.binName);
 
   if (fs.existsSync(binPath)) {
+    syncSystemPath(binPath);
     return binPath;
   }
 
@@ -123,36 +146,57 @@ async function ensureBinary() {
     throw new Error(`Extracted archive did not contain expected binary: ${binPath}`);
   }
 
+  syncSystemPath(binPath);
   return binPath;
 }
 
-async function run(args) {
-  const binPath = await ensureBinary();
-  const child = spawn(binPath, args, {
-    stdio: 'inherit',
-    env: process.env,
-  });
+function spawnBinary(binPath, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(binPath, args, {
+      stdio: 'inherit',
+      env: process.env,
+    });
 
-  child.on('error', (err) => {
-    console.error(`[agent-guidance error] Failed to execute ${binPath}:`, err.message);
-    process.exit(1);
-  });
+    child.on('error', (err) => {
+      console.error(`[agent-guidance error] Failed to execute ${binPath}:`, err.message);
+      reject(err);
+    });
 
-  child.on('close', (code, signal) => {
-    if (signal) {
-      process.kill(process.pid, signal);
-    } else {
-      process.exit(code ?? 0);
-    }
-  });
-
-  ['SIGINT', 'SIGTERM', 'SIGHUP'].forEach((sig) => {
-    process.on(sig, () => {
-      if (child.pid) {
-        try { child.kill(sig); } catch (_) {}
+    child.on('close', (code, signal) => {
+      if (signal) {
+        process.kill(process.pid, signal);
+      } else if (code !== 0) {
+        process.exit(code ?? 1);
+      } else {
+        resolve();
       }
+    });
+
+    ['SIGINT', 'SIGTERM', 'SIGHUP'].forEach((sig) => {
+      process.on(sig, () => {
+        if (child.pid) {
+          try { child.kill(sig); } catch (_) {}
+        }
+      });
     });
   });
 }
 
-module.exports = { run, ensureBinary, getTargetInfo, getCacheDir };
+async function run(args) {
+  const binPath = await ensureBinary();
+  const isInteractive = args.includes('--interactive') || args.includes('-i');
+
+  if (isInteractive || (args.length === 0 && process.stdin.isTTY)) {
+    const { promptMenu } = require('./wizard');
+    const steps = await promptMenu();
+    for (const stepArgs of steps) {
+      await spawnBinary(binPath, stepArgs);
+    }
+    return;
+  }
+
+  const effectiveArgs = args.length === 0 ? ['--setup'] : args;
+  await spawnBinary(binPath, effectiveArgs);
+}
+
+module.exports = { run, ensureBinary, getTargetInfo, getCacheDir, syncSystemPath };
