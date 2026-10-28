@@ -27,6 +27,10 @@ Installers provide an interactive mode selector:
 
 **Universal (Windows, macOS, Linux via NPX / NPM):**
 ```bash
+# Run directly via GitHub repo (works everywhere, zero setup):
+npx -y github:JunMystery/Agent-Guidance --setup
+
+# Or via NPM registry:
 npx -y agent-guidance --setup
 ```
 

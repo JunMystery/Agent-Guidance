@@ -1,0 +1,39 @@
+{
+  "name": "agent-guidance",
+  "version": "1.8.15",
+  "description": "Cross-platform launcher for Agent Guidance Rust MCP Server & GraphRAG Intelligence Engine",
+  "main": "packaging/npm/bin/agent-guidance.js",
+  "bin": {
+    "agent-guidance": "packaging/npm/bin/agent-guidance.js"
+  },
+  "files": [
+    "packaging/npm/bin/",
+    "packaging/npm/lib/",
+    "packaging/npm/README.md"
+  ],
+  "scripts": {
+    "test": "node --check packaging/npm/bin/agent-guidance.js && node --check packaging/npm/lib/runner.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JunMystery/Agent-Guidance.git"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "agent",
+    "guidance",
+    "rust",
+    "graphrag",
+    "ai-agent",
+    "claude",
+    "cursor",
+    "antigravity"
+  ],
+  "author": "Jun Mystery <contact@junmystery.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/JunMystery/Agent-Guidance/issues"
+  },
+  "homepage": "https://github.com/JunMystery/Agent-Guidance#readme"
+}
