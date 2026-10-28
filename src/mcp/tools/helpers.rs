@@ -1,8 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use crate::context::db::CodeGraphDb;
 use crate::context::scanner::scan_project;
 use crate::context::watcher::{is_watching, start_watching};
 use crate::mcp::state::ServerState;
+
+#[allow(unused_imports)]
+pub use super::helpers_path::{
+    detect_parent_process_cwd, detect_project_path, is_generic_home_dir, validate_path,
+};
 
 pub fn ensure_not_cancelled(state: &ServerState) -> Result<(), (i32, String)> {
     if state.is_cancelled() {
@@ -10,122 +15,6 @@ pub fn ensure_not_cancelled(state: &ServerState) -> Result<(), (i32, String)> {
     } else {
         Ok(())
     }
-}
-
-/// Validate that a relative path stays within the base directory root
-pub fn validate_path(base_path: &Path, rel_path: &str) -> Result<PathBuf, String> {
-    if rel_path.contains("..") {
-        return Err("Path traversal (..) is strictly prohibited.".to_string());
-    }
-
-    let canonical_base = base_path
-        .canonicalize()
-        .map_err(|e| format!("Invalid project path: {}", e))?;
-
-    let clean_base = canonical_base.to_string_lossy();
-    let clean_base_str = clean_base.strip_prefix(r"\\?\").unwrap_or(&clean_base);
-    let p_clean_base = Path::new(clean_base_str);
-
-    let p_rel = Path::new(rel_path);
-    let stripped = if p_rel.is_absolute() {
-        if let Ok(sub) = p_rel.strip_prefix(base_path) {
-            sub.to_string_lossy().to_string()
-        } else if let Ok(sub) = p_rel.strip_prefix(&canonical_base) {
-            sub.to_string_lossy().to_string()
-        } else if let Ok(sub) = p_rel.strip_prefix(p_clean_base) {
-            sub.to_string_lossy().to_string()
-        } else if let Ok(can_rel) = p_rel.canonicalize() {
-            if let Ok(sub) = can_rel.strip_prefix(&canonical_base) {
-                sub.to_string_lossy().to_string()
-            } else {
-                let candidate = rel_path.trim_start_matches(|c| c == '/' || c == '\\');
-                let joined = canonical_base.join(candidate);
-                if joined.exists() && joined.canonicalize().map(|p| p.starts_with(&canonical_base)).unwrap_or(false) {
-                    candidate.to_string()
-                } else {
-                    return Err("Target path resolves outside workspace root.".to_string());
-                }
-            }
-        } else {
-            let candidate = rel_path.trim_start_matches(|c| c == '/' || c == '\\');
-            let joined = canonical_base.join(candidate);
-            if joined.starts_with(&canonical_base) {
-                candidate.to_string()
-            } else {
-                return Err("Target path resolves outside workspace root.".to_string());
-            }
-        }
-    } else {
-        rel_path.to_string()
-    };
-
-    // 2. Strip leading slashes and normalize separators
-    let clean_rel = stripped
-        .trim()
-        .trim_start_matches(|c| c == '/' || c == '\\')
-        .replace('\\', "/");
-
-    if clean_rel.is_empty() {
-        return Ok(canonical_base);
-    }
-
-    let full_path = canonical_base.join(&clean_rel);
-
-    if full_path.exists() {
-        let canonical_full = full_path
-            .canonicalize()
-            .map_err(|e| format!("Invalid target path: {}", e))?;
-
-        if !canonical_full.starts_with(&canonical_base) {
-            return Err("Target path resolves outside workspace root.".to_string());
-        }
-        Ok(canonical_full)
-    } else {
-        if full_path.starts_with(&canonical_base) {
-            Ok(full_path)
-        } else {
-            Err("Target path resolves outside workspace root.".to_string())
-        }
-    }
-}
-
-pub fn detect_parent_process_cwd() -> Option<PathBuf> {
-    use sysinfo::{Pid, System};
-    let mut sys = System::new_all();
-    sys.refresh_all();
-
-    let my_pid = Pid::from_u32(std::process::id());
-    if let Some(proc_) = sys.process(my_pid) {
-        if let Some(parent_pid) = proc_.parent() {
-            if let Some(parent_proc) = sys.process(parent_pid) {
-                if let Some(cwd) = parent_proc.cwd() {
-                    if cwd.is_dir() && !cwd.to_string_lossy().to_lowercase().contains("antigravity") {
-                        return Some(cwd.to_path_buf());
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-pub fn is_generic_home_dir(p: &Path) -> bool {
-    if let Some(home) = dirs::home_dir() {
-        if p == home {
-            return true;
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        if p == Path::new(&home) {
-            return true;
-        }
-    }
-    if let Ok(userprofile) = std::env::var("USERPROFILE") {
-        if p == Path::new(&userprofile) {
-            return true;
-        }
-    }
-    false
 }
 
 pub fn detect_project_architecture(proj_path: &Path) -> String {
@@ -215,49 +104,7 @@ pub fn resolve_architecture_pattern(raw_pattern: &str, proj_path: &Path, state: 
     }
 }
 
-pub fn detect_project_path(explicit_path: &str, state: &ServerState) -> PathBuf {
-    if explicit_path != "." && !explicit_path.trim().is_empty() {
-        let p = PathBuf::from(explicit_path);
-        if !is_generic_home_dir(&p) {
-            return crate::dashboard::projects_path::find_project_root(&p);
-        }
-    }
 
-    if let Some(ref sp) = state.project_path {
-        let p = PathBuf::from(sp);
-        if !is_generic_home_dir(&p) {
-            return crate::dashboard::projects_path::find_project_root(&p);
-        }
-    }
-
-    if let Some(first_root) = state.workspace_roots.first() {
-        let p = PathBuf::from(first_root);
-        if !is_generic_home_dir(&p) {
-            return crate::dashboard::projects_path::find_project_root(&p);
-        }
-    }
-
-    if let Ok(cwd) = std::env::current_dir() {
-        if !is_generic_home_dir(&cwd) {
-            return crate::dashboard::projects_path::find_project_root(&cwd);
-        }
-    }
-
-    if let Some(parent_cwd) = detect_parent_process_cwd() {
-        if !is_generic_home_dir(&parent_cwd) {
-            return crate::dashboard::projects_path::find_project_root(&parent_cwd);
-        }
-    }
-
-    if let Some(gp) = ServerState::read_global_project_path() {
-        let p = PathBuf::from(&gp);
-        if !is_generic_home_dir(&p) {
-            return crate::dashboard::projects_path::find_project_root(&p);
-        }
-    }
-
-    PathBuf::from(".")
-}
 
 pub fn ensure_indexed(proj_path: &Path) -> Option<CodeGraphDb> {
     let _ = crate::context::graph_rag::jit_sync::ensure_fresh_graph(proj_path, 15);

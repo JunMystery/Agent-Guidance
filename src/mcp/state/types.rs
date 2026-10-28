@@ -284,4 +284,13 @@ impl ServerState {
             .unwrap_or(false)
     }
 
+    #[allow(dead_code)]
+    pub fn is_path_inside_workspace(&self, target: &Path) -> bool {
+        let clean = target.canonicalize().unwrap_or_else(|_| target.to_path_buf());
+        self.workspace_roots.iter().any(|r| {
+            clean.starts_with(Path::new(r).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(r)))
+        }) || self.project_path.as_deref().map_or(false, |p| {
+            clean.starts_with(Path::new(p).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(p)))
+        })
+    }
 }

@@ -6,6 +6,7 @@ use tracing::info;
 use crate::mcp::state::ServerState;
 use crate::optimizer::compressor::{compress_markdown, estimate_tokens};
 
+pub mod helpers_path;
 mod helpers;
 pub use helpers::*;
 
@@ -276,3 +277,7 @@ mod recent_tasks_tests;
 #[cfg(test)]
 #[path = "../tools_context_cluster_tests.rs"]
 mod cluster_tests;
+
+#[cfg(test)]
+#[path = "../tools_workspace_tests.rs"]
+mod workspace_tests;
