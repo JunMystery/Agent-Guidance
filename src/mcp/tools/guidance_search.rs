@@ -1,11 +1,8 @@
 use serde_json::Value;
 
-use crate::catalog::language_detector::detect_language_fast;
 use crate::catalog::store::{SkillSource, load_all_skills};
 use crate::config::current_config;
 use crate::mcp::state::ServerState;
-use crate::ml::embeddings::hybrid_vector_search;
-use crate::ml::llm_selector::LLMSelector;
 use super::guidance_format::{extract_description, format_search_output};
 use super::guidance_intent::analyze_query_intent;
 use super::helpers::{detect_project_path, ensure_not_cancelled, truncate_chars};
@@ -198,63 +195,28 @@ pub(crate) fn handle_search(
         }
     }
 
-    let profile = detect_language_fast(&proj_path, &search_query);
-
-    let enriched_search_query = if !recent_context_items.is_empty() {
-        format!("{} context: {}", search_query, recent_context_items.join(" "))
-    } else {
-        search_query.clone()
-    };
-    let stage1_results = hybrid_vector_search(&enriched_search_query, &all_skills, 20);
-    ensure_not_cancelled(state)?;
-
-    let stage1_5_results = crate::ml::skill_graphrag_gate::apply_graphrag_context_gating(
+    let (ranked_results, _profile) = super::guidance_search_stages::discover_skills_two_stage(
         &proj_path,
         &search_query,
-        stage1_results,
-        20,
+        &all_skills,
+        &intent.mentioned_skills,
     );
     ensure_not_cancelled(state)?;
 
-    let selector = LLMSelector::new();
-    let reranked = selector.rerank(&search_query, stage1_5_results, &profile, 20);
-    ensure_not_cancelled(state)?;
+    let tiered_results = super::guidance_search_stages::tier_skill_results(
+        ranked_results,
+        &intent.mentioned_skills,
+        6,
+    );
 
-    let final_results = crate::ml::skill_analytics::apply_analytics_boost(reranked, &proj_path);
-
-    let mut seen_names = std::collections::HashSet::new();
-    let mut deduped_results = Vec::new();
-
-    // 1. Prioritize explicitly mentioned skills to the front with score 1.0
-    for mentioned in &intent.mentioned_skills {
-        if let Some(item) = all_skills.iter().find(|s| s.name == *mentioned) {
-            if seen_names.insert(item.name.clone()) {
-                deduped_results.push((1.0, item.clone()));
-            }
-        }
-    }
-
-    // 2. Add algorithmic results
-    for (score, item) in final_results {
-        if score < 0.65 {
-            continue;
-        }
-        if seen_names.insert(item.name.clone()) {
-            deduped_results.push((score, item));
-            if deduped_results.len() >= 6 {
-                break;
-            }
-        }
-    }
-
-    state.pending_skill_proposals = deduped_results
+    state.pending_skill_proposals = tiered_results
         .iter()
         .map(|(score, item)| {
             (item.name.clone(), item.relative_path.clone(), *score)
         })
         .collect();
 
-    let options: Vec<String> = deduped_results
+    let options: Vec<String> = tiered_results
         .iter()
         .enumerate()
         .map(|(idx, (_score, item))| {
@@ -270,7 +232,7 @@ pub(crate) fn handle_search(
         })
         .collect();
 
-    let formatted_results: Vec<String> = deduped_results
+    let formatted_results: Vec<String> = tiered_results
         .into_iter()
         .map(|(score, item)| {
             let source_tag = match &item.source {
@@ -284,5 +246,5 @@ pub(crate) fn handle_search(
         })
         .collect();
 
-    format_search_output(&search_query, context_note, &formatted_results, &options, "3-Stage Hybrid Vector & Cross-Encoder", is_gen_ui)
+    format_search_output(&search_query, context_note, &formatted_results, &options, "Two-Stage Tiered Hybrid Vector & Cross-Encoder", is_gen_ui)
 }

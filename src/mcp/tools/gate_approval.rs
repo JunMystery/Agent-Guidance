@@ -64,6 +64,20 @@ pub(crate) fn handle_approve_plan(
 
     let paths = super::gate_edit::extract_target_paths(arguments);
     if !paths.is_empty() {
+        let allow_cross = arguments
+            .get("allow_cross_workspace")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if let Some(blocked_msg) = super::helpers_path::check_cross_workspace_guard(
+            proj_path,
+            &paths,
+            state,
+            allow_cross,
+        ) {
+            return blocked_msg;
+        }
+
         let _ = state.set_stage("Build");
         let raw_arch = arguments
             .get("architecture_pattern")

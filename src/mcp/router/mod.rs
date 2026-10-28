@@ -17,6 +17,20 @@ pub fn handle_request(
                 if let Some(name) = p.get("clientInfo").and_then(|c| c.get("name")).and_then(|n| n.as_str()) {
                     state.agent_client_name = Some(name.to_string());
                 }
+                if let Some(id) = p.get("sessionId")
+                    .or_else(|| p.get("session_id"))
+                    .or_else(|| p.get("conversationId"))
+                    .or_else(|| p.get("conversation_id"))
+                    .or_else(|| p.get("chatId"))
+                    .or_else(|| p.get("chat_id"))
+                    .or_else(|| p.get("clientInfo").and_then(|c| c.get("id")))
+                    .and_then(|v| v.as_str())
+                {
+                    let clean_id = id.trim();
+                    if !clean_id.is_empty() {
+                        state.session_id = clean_id.to_string();
+                    }
+                }
             }
             Ok(json!({
                 "protocolVersion": "2024-11-05",
@@ -47,6 +61,17 @@ pub fn handle_request(
             let params = params.ok_or((-32602, "Missing params".to_string()))?;
             let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+
+            if let Some(id) = arguments.get("conversation_id")
+                .or_else(|| arguments.get("session_id"))
+                .or_else(|| arguments.get("chat_id"))
+                .and_then(|v| v.as_str())
+            {
+                let clean_id = id.trim();
+                if !clean_id.is_empty() && state.session_id != clean_id {
+                    state.session_id = clean_id.to_string();
+                }
+            }
 
             if let Err(err_msg) = state.can_call_tool(name, &arguments) {
                 return Err((-32001, err_msg));

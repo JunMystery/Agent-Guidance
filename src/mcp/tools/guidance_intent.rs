@@ -53,6 +53,21 @@ pub fn strip_slash_commands(text: &str) -> (String, Vec<String>) {
     (remaining_words.join(" "), slash_commands)
 }
 
+pub fn is_tooling_skill(skill_name: &str) -> bool {
+    let s = skill_name.to_lowercase();
+    s.contains("git")
+        || s.contains("github")
+        || s.contains("docker")
+        || s.contains("ci")
+        || s.contains("cd")
+        || s.contains("bash")
+        || s.contains("shell")
+        || s.contains("powershell")
+        || s.contains("deploy")
+        || s.contains("release")
+        || s.contains("docs")
+}
+
 fn normalize_identifier(name: &str) -> String {
     name.trim().to_lowercase().replace('-', "_")
 }

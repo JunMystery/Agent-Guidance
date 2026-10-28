@@ -1,6 +1,6 @@
 # 🦀 Agent Guidance MCP Server
 
-[![Version](https://img.shields.io/badge/version-1.8.15-blue.svg)](https://github.com/JunMystery/Agent-Guidance/releases)
+[![Version](https://img.shields.io/badge/version-1.8.16-blue.svg)](https://github.com/JunMystery/Agent-Guidance/releases)
 [![NPM Version](https://img.shields.io/npm/v/agent-guidance.svg?color=crimson)](https://www.npmjs.com/package/agent-guidance)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -284,6 +284,21 @@ Daemon & Maintenance:
 - **Zero-Block Generative UI Flow**: Completely prohibits `ask_question` tool invocations whenever `/generative_ui` is active or detected.
 - **Skill Proposal & Modal Bypass**: Automatically bypasses skill proposal dialogs on `/generative_ui` tasks, eliminating blocking confirmation modals in Antigravity and Gemini.
 - **Immediate Inline Preview Mandate**: Directs agents to immediately create self-contained HTML artifacts (`UserFacing: true`) and embed them inline via `<agent-embed>` without soliciting premature layout choices.
+
+### 🎯 Two-Stage Tiered Skill Engine & Context Bleed Isolation (v1.8.16)
+
+- **Two-Stage Skill Query Discovery**:
+  - *Stage 1 (Clean Prompt Search)*: Directly evaluates the user prompt without historically polluted `recent_tasks` or modified files string concatenation, eliminating false-positive matches (such as `video-editing` leaking into backend tasks).
+  - *Stage 2 (Tech Stack Expansion)*: Intelligently expands query with repository profile technologies and languages only if Stage 1 yields partial relevance, preserving zero false-positives on conversational prompts.
+- **Tiered Multi-Intent Ranking**:
+  - Automatically classifies candidate skills into Core Domain/Feature skills (prioritized at `options[0]` with `(Recommended)`) and Tooling skills (Git, CI/CD, Docs) as secondary options.
+- **Negative Domain Filtering**:
+  - Strips `"media"` from universal keywords and enforces negative domain blocking to prevent video/audio/3D/game skills from intruding on Rust/backend/CLI repositories.
+- **Workspace Boundary Guard & Cross-Workspace Warning Gate**:
+  - Scopes active workspace roots over global memory to prevent cross-workspace context bleed.
+  - Warns and blocks accidental external file modifications unless explicit `allow_cross_workspace=true` is declared.
+- **Multi-IDE & Agent Native ID Tracking**:
+  - Automatically detects and binds native conversation and session UUIDs (`conversation_id`, `session_id`, `chat_id`) across Antigravity, Gemini, Claude Code, Cursor, and VS Code.
 
 ---
 

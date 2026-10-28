@@ -74,38 +74,13 @@ pub(crate) fn handle_authorize_edit(
         .unwrap_or(false);
 
     // Cross-Workspace Boundary Guard: Protect against cross-workspace bleed unless explicit
-    if !allow_cross {
-        if let Some(session_root_str) = state.workspace_roots.first() {
-            let session_root = Path::new(session_root_str);
-            let proj_canonical = proj_path.canonicalize().unwrap_or_else(|_| proj_path.clone());
-            let sess_canonical = session_root.canonicalize().unwrap_or_else(|_| session_root.to_path_buf());
-
-            let mut cross_file: Option<String> = None;
-            if !proj_canonical.starts_with(&sess_canonical) {
-                cross_file = Some(proj_path.display().to_string());
-            } else {
-                for p_str in &paths {
-                    let p = Path::new(p_str);
-                    if p.is_absolute() {
-                        let can_p = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-                        if !can_p.starts_with(&sess_canonical) {
-                            cross_file = Some(p_str.clone());
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if let Some(target_loc) = cross_file {
-                return format!(
-                    "# Edit Approval Gate Authorization\n\n- Status: BLOCKED (CROSS_WORKSPACE_WARNING)\n- Active Workspace: `{}`\n- Target Location: `{}`\n- Target Files: `{}`\n\n> [!WARNING] **Cross-Workspace Modification Detected**:\n> Target file is outside active workspace (`{}`).\n> To authorize editing in an external workspace, re-run with `allow_cross_workspace=true`.",
-                    session_root.display(),
-                    target_loc,
-                    paths.join(", "),
-                    session_root.display()
-                );
-            }
-        }
+    if let Some(blocked_msg) = super::helpers_path::check_cross_workspace_guard(
+        &proj_path,
+        &paths,
+        state,
+        allow_cross,
+    ) {
+        return blocked_msg;
     }
 
     state.update_project_path(&proj_path);

@@ -218,6 +218,9 @@ impl ServerState {
         if self.project_path.as_deref() == Some(path_str.as_str()) {
             return;
         }
+        if !self.workspace_roots.is_empty() && !self.is_path_inside_workspace(path) {
+            return;
+        }
         self.project_path = Some(path_str.clone());
 
         // Write to global persistent memory for cross-session AI agent inheritance
@@ -284,7 +287,6 @@ impl ServerState {
             .unwrap_or(false)
     }
 
-    #[allow(dead_code)]
     pub fn is_path_inside_workspace(&self, target: &Path) -> bool {
         let clean = target.canonicalize().unwrap_or_else(|_| target.to_path_buf());
         self.workspace_roots.iter().any(|r| {

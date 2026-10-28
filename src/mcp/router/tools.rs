@@ -11,6 +11,7 @@ pub fn get_tools_list() -> Value {
                     "properties": {
                         "task": { "type": "string", "description": "The task description or goal" },
                         "project_path": { "type": "string", "description": "Absolute path of your active working repository (e.g. 'E:/Github/Device-Ping')" },
+                        "conversation_id": { "type": "string", "description": "Optional native conversation or session UUID from host IDE/Agent to bind session state" },
                         "phase": { "type": "string", "enum": ["plan", "build", "implement", "test", "debug", "review", "refactor"], "description": "Active development phase for per-phase context reset" }
                     },
                     "required": ["task", "project_path", "phase"]
@@ -146,6 +147,10 @@ pub fn get_tools_list() -> Value {
                         "session_id": {
                             "type": "string",
                             "description": "Target session ID to switch to (for 'switch' operation)"
+                        },
+                        "conversation_id": {
+                            "type": "string",
+                            "description": "Target conversation UUID to switch to or bind (alias for session_id)"
                         },
                         "learning": {
                             "type": "string",

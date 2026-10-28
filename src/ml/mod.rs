@@ -1,6 +1,7 @@
 pub mod cross_encoder;
 pub mod embeddings;
 pub mod llm_selector;
+pub mod llm_selector_filter;
 pub mod onnx_engine;
 pub mod skill_analytics;
 pub mod skill_graphrag_gate;

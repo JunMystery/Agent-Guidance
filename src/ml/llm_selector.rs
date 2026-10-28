@@ -2,7 +2,7 @@ use crate::catalog::store::SkillItem;
 use rayon::prelude::*;
 pub use super::cross_encoder::cached_cross_encoder;
 
-const MAX_CROSS_ENCODER_CANDIDATES: usize = 4;
+const MAX_CROSS_ENCODER_CANDIDATES: usize = 10;
 
 pub struct LLMSelector;
 
@@ -25,90 +25,11 @@ impl LLMSelector {
         limit: usize,
     ) -> Vec<(f32, SkillItem)> {
         let task_lower = task.to_lowercase();
-        let candidate_filter = |skill: &SkillItem| -> bool {
-            let name_lower = skill.name.to_lowercase();
-            let relative_lower = skill.relative_path.to_lowercase();
-
-            // Direct mention in prompt bypasses filtering (unless generic stopword)
-            if task_lower.contains(&name_lower) && !super::is_generic_skill_stopword(&name_lower) {
-                return true;
-            }
-
-            // Universal/general skills always pass
-            let universal_keywords = [
-                "workflow", "guidance", "agent", "flow", "test", "review", "git", "cost", "media",
-                "doc",
-            ];
-            if universal_keywords
-                .iter()
-                .any(|k| name_lower.contains(k) || relative_lower.contains(k))
-            {
-                return true;
-            }
-
-            // Check language affinity
-            let lang_keywords = [
-                ("rust", "rust"),
-                ("python", "python"),
-                ("javascript", "javascript"),
-                ("typescript", "typescript"),
-                ("go", "go"),
-                ("golang", "go"),
-                ("java", "java"),
-                ("cpp", "c++"),
-                ("c++", "c++"),
-                ("ruby", "ruby"),
-                ("php", "php"),
-            ];
-
-            let mut skill_langs = Vec::new();
-            for (kw, lang) in lang_keywords {
-                if name_lower.contains(kw) || relative_lower.contains(kw) {
-                    skill_langs.push(lang);
-                }
-            }
-
-            if !skill_langs.is_empty() {
-                // Skill is language-bound -> must match project's primary languages or direct prompt mention
-                if !profile.primary_languages.is_empty() {
-                    let matches_primary = skill_langs
-                        .iter()
-                        .any(|l| profile.primary_languages.contains(*l));
-                    if !matches_primary {
-                        return false;
-                    }
-                }
-            }
-
-            // Check domain tech affinity (e.g. database, sql, docker, frontend)
-            let domain_keywords = [
-                ("database", "database"),
-                ("sql", "sql"),
-                ("docker", "docker"),
-                ("devops", "devops"),
-                ("frontend", "frontend"),
-                ("web", "web"),
-                ("bash", "bash"),
-                ("shell", "shell"),
-            ];
-
-            for (kw, domain) in domain_keywords {
-                if name_lower.contains(kw) || relative_lower.contains(kw) {
-                    if !profile.secondary_tech.is_empty()
-                        && !profile.secondary_tech.contains(domain)
-                    {
-                        // Project does not have this domain tech stack
-                        return false;
-                    }
-                }
-            }
-
-            true
-        };
-
         let filtered_candidates: Vec<(f32, SkillItem)> = candidates
             .iter()
-            .filter(|(_, skill)| candidate_filter(skill))
+            .filter(|(_, skill)| {
+                super::llm_selector_filter::is_skill_candidate_compatible(skill, &task_lower, profile)
+            })
             .cloned()
             .collect();
 

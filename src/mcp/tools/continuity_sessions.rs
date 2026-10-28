@@ -21,7 +21,14 @@ pub(crate) fn handle_save(state: &ServerState, proj_path: &Path) -> String {
 }
 
 pub(crate) fn handle_load(state: &mut ServerState, proj_path: &Path) -> String {
-    match ServerState::load_from_dir(proj_path) {
+    let result = if !state.session_id.is_empty() {
+        ServerState::load_session_by_id(proj_path, &state.session_id)
+            .or_else(|_| ServerState::load_from_dir(proj_path))
+    } else {
+        ServerState::load_from_dir(proj_path)
+    };
+
+    match result {
         Ok(loaded) => {
             *state = loaded;
             // Zero-Trust Security: Reset permission flags when loading session
@@ -84,6 +91,8 @@ pub(crate) fn handle_switch(
 ) -> String {
     let target_id = arguments
         .get("session_id")
+        .or_else(|| arguments.get("conversation_id"))
+        .or_else(|| arguments.get("chat_id"))
         .or_else(|| arguments.get("id"))
         .and_then(|s| s.as_str())
         .unwrap_or("");
