@@ -1,6 +1,6 @@
 # 🦀 Agent Guidance MCP Server
 
-[![Version](https://img.shields.io/badge/Version-v1.8.14-blue.svg)](Cargo.toml)
+[![Version](https://img.shields.io/badge/Version-v1.8.15-blue.svg)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/Language-Rust%202024-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/Security-Policy-blue.svg)](SECURITY.md)
@@ -267,6 +267,12 @@ Daemon & Maintenance:
 - **Hard Max Idle Cap (`DEFAULT_MAX_IDLE_COOLDOWN_SECS = 180s`)**: Automatically terminates the daemon if 0 clients remain connected for 3 minutes, even when lingering IDE background processes or system tray services are detected.
 - **Deep Process Filtering & Command-Line Inspection**: Inspects process arguments via `ProcessRefreshKind::new().with_cmd(...)`, filtering out `--type=crashpad-handler`, `--type=utility`, `code-tunnel`, and recognizing CLI tools (`agy`, `gemini`, `codex`).
 - **Synchronous SQLite Shutdown Logging & Clean Exit**: Flushes lifecycle events synchronously to `usage.db` via `log_mcp_direct` before terminating background threads cleanly via `std::process::exit(0)`.
+
+### 🎨 Generative UI Strict ask_question Prohibition (v1.8.15)
+
+- **Zero-Block Generative UI Flow**: Completely prohibits `ask_question` tool invocations whenever `/generative_ui` is active or detected.
+- **Skill Proposal & Modal Bypass**: Automatically bypasses skill proposal dialogs on `/generative_ui` tasks, eliminating blocking confirmation modals in Antigravity and Gemini.
+- **Immediate Inline Preview Mandate**: Directs agents to immediately create self-contained HTML artifacts (`UserFacing: true`) and embed them inline via `<agent-embed>` without soliciting premature layout choices.
 
 ---
 

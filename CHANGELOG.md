@@ -2,6 +2,19 @@
 
 All notable changes to Agent Guidance Rust MCP Server will be documented in this file.
 
+## [1.8.15] - 2026-10-28
+
+### 🎨 Generative UI Strict ask_question Prohibition
+- **Strict ask_question Prohibition (`src/mcp/tools/guidance_search.rs`, `src/mcp/tools/guidance_format.rs`)**:
+  - Implemented high-priority check for `is_gen_ui` that clears skill proposals and returns an explicit mandate prohibiting `ask_question` across all turns.
+  - Stripped `ask_question` JSON template from `guidance_format.rs` output when `is_gen_ui_active` is true.
+  - Bypassed skill proposal modals completely when `/generative_ui` is present, regardless of whether a task description is attached.
+- **Protocol & Rules Harmonization (`src/catalog/rules.rs`, `AGENTS.md`, `GEMINI.md`)**:
+  - Updated phase execution rules to forbid `ask_question` when designing generative UIs or using `/generative_ui`.
+  - Mandated immediate creation of self-contained HTML artifacts (`UserFacing: true`) and `<agent-embed>` inline embedding.
+- **Test Suite Updates (`src/mcp/tools_guidance_tests.rs`)**:
+  - Added unit test `test_guidance_search_slash_command_strips_and_gen_ui_prohibits_questions` ensuring `ask_question` is strictly prohibited on `/generative_ui` queries.
+
 ## [1.8.14] - 2026-10-26
 
 ### 🛑 MCP Daemon Auto-Shutdown & Hard Idle Cap

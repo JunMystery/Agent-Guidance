@@ -8,6 +8,24 @@ pub(crate) fn format_search_output(
     engine_name: &str,
     is_gen_ui_active: bool,
 ) -> Result<String, (i32, String)> {
+    let results_body = if formatted_results.is_empty() {
+        "No matching skills found for this task.".to_string()
+    } else {
+        format!("Recommended Skills:\n{}", formatted_results.join("\n"))
+    };
+
+    let context_section = match context_note {
+        Some(note) if !note.trim().is_empty() => format!("\nContext Source: {}\n", note.trim()),
+        _ => String::new(),
+    };
+
+    if is_gen_ui_active {
+        return Ok(format!(
+            "# Skill Search Results for '{}' [{}]\n{}Matches Found: {}\n\n{}\n\n-> [STRICT MANDATE] Generative UI Active. Calling `ask_question` is STRICTLY PROHIBITED in this conversation.\nDo NOT show skill selection dialogs, do NOT ask for layout choices, and do NOT interview the user.\nImmediately generate self-contained HTML artifact(s) via `write_file` (`UserFacing: true`) and embed inline via `<agent-embed src=\"file:///.../widget.html\"></agent-embed>`.",
+            query, engine_name, context_section, formatted_results.len(), results_body
+        ));
+    }
+
     let ask_question_example = serde_json::json!({
         "questions": [
             {
@@ -18,8 +36,7 @@ pub(crate) fn format_search_output(
         ]
     });
 
-    let gen_ui_note = if is_gen_ui_active
-        || query.to_lowercase().contains("ui")
+    let gen_ui_note = if query.to_lowercase().contains("ui")
         || query.to_lowercase().contains("widget")
         || options.iter().any(|o| o.contains("generative_ui"))
     {
@@ -39,17 +56,6 @@ pub(crate) fn format_search_output(
             serde_json::to_string_pretty(&ask_question_example).unwrap_or_default(),
             gen_ui_note
         )
-    };
-
-    let results_body = if formatted_results.is_empty() {
-        "No matching skills found for this task.".to_string()
-    } else {
-        format!("Recommended Skills:\n{}", formatted_results.join("\n"))
-    };
-
-    let context_section = match context_note {
-        Some(note) if !note.trim().is_empty() => format!("\nContext Source: {}\n", note.trim()),
-        _ => String::new(),
     };
 
     Ok(format!(

@@ -124,7 +124,7 @@ pub(crate) fn handle_search(
         state.pending_skill_proposals.clear();
         let cmds_joined = intent.slash_commands.iter().map(|c| format!("/{}", c)).collect::<Vec<_>>().join(", ");
         let gen_ui_note = if is_gen_ui {
-            "\n\n> [!IMPORTANT] **Generative UI Protocol**: When designing UI alternatives, create visual HTML artifact file(s) via `write_file` (with `UserFacing: true`) and inline embed via `<agent-embed src=\"file:///.../widget.html\"></agent-embed>` BEFORE soliciting user layout choices."
+            "\n\n-> [STRICT MANDATE] Calling `ask_question` is STRICTLY PROHIBITED in this conversation.\nDo NOT show skill selection dialogs, do NOT ask for layout choices, and do NOT interview the user.\nImmediately generate self-contained HTML artifact(s) via `write_file` (`UserFacing: true`) and embed inline via `<agent-embed src=\"file:///.../widget.html\"></agent-embed>`."
         } else {
             ""
         };
@@ -132,6 +132,14 @@ pub(crate) fn handle_search(
             "# Slash Command Detected: {}\n\n-> Bypassing skill proposals. Proceed directly to execute the slash command workflow (no skill confirmation needed).{}",
             if cmds_joined.is_empty() { "Command".to_string() } else { cmds_joined },
             gen_ui_note
+        ));
+    }
+
+    if is_gen_ui {
+        state.pending_skill_proposals.clear();
+        return Ok(format!(
+            "# Generative UI Active: {}\n\n-> [STRICT MANDATE] Calling `ask_question` is STRICTLY PROHIBITED in this conversation.\nDo NOT show skill selection dialogs, do NOT ask for layout choices, and do NOT interview the user.\nImmediately generate self-contained HTML artifact(s) via `write_file` (`UserFacing: true`) and embed inline via `<agent-embed src=\"file:///.../widget.html\"></agent-embed>`.",
+            intent.cleaned_query
         ));
     }
 

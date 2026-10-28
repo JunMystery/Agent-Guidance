@@ -243,22 +243,26 @@ fn test_guidance_search_slash_command_alone_bypasses_proposal() {
 }
 
 #[test]
-fn test_guidance_search_slash_command_with_task_strips_command() {
+fn test_guidance_search_slash_command_strips_and_gen_ui_prohibits_questions() {
     let mut state = ServerState::new();
     let res = handle_tool_call(
         "guidance",
-        json!({
-            "operation": "search",
-            "query": "/generative_ui render 3 cards preview"
-        }),
+        json!({"operation": "search", "query": "/automation backup cron"}),
         &mut state,
     );
-    assert!(res.is_ok());
     let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
-    // Strips slash command from search query
-    assert!(text.contains("render 3 cards preview"));
-    assert!(!text.contains("/generative_ui' ["));
-    assert!(text.contains("Generative UI Protocol"));
+    assert!(text.contains("backup cron") && !text.contains("/automation' ["));
+
+    let res_ui = handle_tool_call(
+        "guidance",
+        json!({"operation": "search", "query": "/generative_ui render cards"}),
+        &mut state,
+    );
+    let text_ui = res_ui.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(text_ui.contains("Generative UI Active"));
+    assert!(text_ui.contains("Calling `ask_question` is STRICTLY PROHIBITED"));
+    assert!(!text_ui.contains("SKILL_PROPOSAL: MANDATORY USER INTERACTION REQUIRED"));
+    assert!(state.pending_skill_proposals.is_empty());
 }
 
 #[test]

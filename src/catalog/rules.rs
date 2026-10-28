@@ -11,14 +11,16 @@ pub fn get_phase_rules(phase: &str) -> &'static str {
             "## Exploration & Context Mandates (Karpathy: Think Before Coding)\n\
             1. **No Silent Assumptions**: Verify codebase facts via `project_context` before touching code. If uncertain or ambiguous, surface tradeoffs and ask rather than guess.\n\
             2. **Token-Bounded Reads**: Use `target_symbol` or AST skeleton mode (max 300 lines per read).\n\
-            3. **No Direct Raw FS**: Route file access through MCP tools rather than raw filesystem dumps."
+            3. **No Direct Raw FS**: Route file access through MCP tools rather than raw filesystem dumps.\n\
+            4. **Generative UI No ask_question**: When `/generative_ui` is active, calling `ask_question` is STRICTLY PROHIBITED; render HTML artifacts and `<agent-embed>` directly."
         }
         "plan" | "architecture" | "design" | "init" => {
             "## Planning & Architecture Mandates (Karpathy: Simplicity First & Goal-Driven)\n\
             1. **Simplicity First**: Design the minimum code that solves the problem. No speculative abstractions, unrequested flexibility, or unused configurability.\n\
             2. **Upfront Architecture & 300 LOC Hard Cap**: All new and modified files MUST remain < 300 LOC (aim for < 150 LOC per sub-module). Plan decomposition of complex views/services from line 1.\n\
             3. **Goal-Driven Milestones**: Define concrete verifiable criteria for each step (`1. [Step] → verify: [check]`).\n\
-            4. **Grill-me & Plan Approval Separation**: Complete `/grill-me` interviews via `ask_question` in separate turns BEFORE writing `implementation_plan.md`. NEVER call `ask_question` and `write_file(implementation_plan.md)` in the same turn (`SIMULTANEOUS_PLAN_AND_QUESTION_PROHIBITED`). Question answers are design inputs, NOT plan approvals (`FALSE_PLAN_APPROVAL_PROHIBITED`). Always present the final plan in a standalone turn with `RequestFeedback: true` and wait for user Proceed."
+            4. **Grill-me & Plan Approval Separation**: Complete `/grill-me` interviews via `ask_question` in separate turns BEFORE writing `implementation_plan.md`. NEVER call `ask_question` and `write_file(implementation_plan.md)` in the same turn (`SIMULTANEOUS_PLAN_AND_QUESTION_PROHIBITED`). Question answers are design inputs, NOT plan approvals (`FALSE_PLAN_APPROVAL_PROHIBITED`). Always present the final plan in a standalone turn with `RequestFeedback: true` and wait for user Proceed.\n\
+            5. **Generative UI Strictly Prohibits ask_question**: When `/generative_ui` is active, calling `ask_question` is STRICTLY PROHIBITED for any reason. Immediately create self-contained HTML artifact(s) (`UserFacing: true`) and embed inline via `<agent-embed>`."
         }
         "build" | "skills" | "implement" | "code" => {
             "## Code Construction Mandates (Karpathy: Surgical Changes & Simplicity First)\n\
