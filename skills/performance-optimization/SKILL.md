@@ -1,350 +1,172 @@
 ---
 name: performance-optimization
-description: Optimizes application performance. Use when performance requirements exist, when you suspect performance regressions, or when Core Web Vitals or load times need improvement. Use when profiling reveals bottlenecks that need fixing.
+description: >
+  Find and fix game performance problems methodically — measure with the engine profiler first,
+  reason about the frame-time budget, locate the CPU-vs-GPU bottleneck, then apply the right fix:
+  object pooling, draw-call batching, fewer allocations/GC spikes, and asset budgets. Engine-
+  neutral method that pairs with each engine's profiler. Use when the user mentions performance,
+  optimize, low/dropping FPS, frame drops, stutter, lag, profiler, frame budget, draw calls,
+  batching, garbage collection/GC spikes, object pooling, or "the game runs slow".
 ---
 
-# Performance Optimization
+# Performance optimization
 
-## Overview
+Performance work is a measurement discipline, not a bag of tricks. The method is always the
+same: **profile → find the one bottleneck → fix that → measure again**. This skill teaches that
+loop and the highest-leverage fixes (pooling, batching, allocation control, asset budgets), and
+points you at each engine's profiler. It pairs with `physics-tuning` for simulation cost.
 
-Measure before optimizing. Performance work without measurement is guessing — and guessing leads to premature optimization that adds complexity without improving what matters. Profile first, identify the actual bottleneck, fix it, measure again. Optimize only what measurements prove matters.
+## When to use
 
-## When to Use
+- Use when the frame rate is low or uneven, the game stutters/hitches, or it must hit a target
+  (60 FPS desktop, 30/60 mobile) and currently doesn't.
+- Use to decide *what* to optimize: profile, read the frame budget, and identify whether the CPU
+  or GPU is the bottleneck before changing any code.
+- Use to apply specific fixes: object pooling, draw-call/batch reduction, removing per-frame
+  allocations and GC spikes, and setting asset budgets.
 
-- Performance requirements exist in the spec (load time budgets, response time SLAs)
-- Users or monitoring report slow behavior
-- Core Web Vitals scores are below thresholds
-- You suspect a change introduced a regression
-- Building features that handle large datasets or high traffic
+**When *not* to use:** for physics jitter/tunneling/timestep specifically, use `physics-tuning`.
+For the engine's concrete profiler UI and rendering settings, use that
+engine skill (`godot-export` covers some build settings; engine cores cover the rest). This skill
+is the cross-engine method and the shared fixes.
 
-**When NOT to use:** Don't optimize before you have evidence of a problem. Premature optimization adds complexity that costs more than the performance it gains.
+## The golden rule: measure first, never guess
 
-## Core Web Vitals Targets
+Most performance "fixes" applied without profiling target the wrong thing and add complexity for
+no gain. **Do not optimize code you have not measured.** Open the profiler, find the single
+biggest cost in a representative scene on representative hardware, and fix that. Re-measure to
+confirm the fix helped before moving on. Profile a **release/optimized build** where it matters —
+editor and debug builds lie (editor overhead, no compiler optimization).
 
-| Metric | Good | Needs Improvement | Poor |
-|--------|------|-------------------|------|
-| **LCP** (Largest Contentful Paint) | ≤ 2.5s | ≤ 4.0s | > 4.0s |
-| **INP** (Interaction to Next Paint) | ≤ 200ms | ≤ 500ms | > 500ms |
-| **CLS** (Cumulative Layout Shift) | ≤ 0.1 | ≤ 0.25 | > 0.25 |
+## Core workflow
 
-## The Optimization Workflow
+1. **Define the target and reproduce.** State the goal (e.g. 60 FPS = 16.67 ms/frame) and find a
+   repeatable worst-case scene. "Sometimes slow" is unfixable; a reproducible spike is fixable.
+2. **Profile before touching code.** Run the engine profiler and read the frame: total frame
+   time, and the split between CPU (game logic, physics, scripts) and GPU (rendering).
+3. **Find the bottleneck — CPU or GPU.** If GPU time ≫ CPU, attack draw calls/overdraw/shaders/
+   resolution. If CPU time dominates, attack scripts/physics/allocations. Fixing the wrong side
+   does nothing.
+4. **Fix the single biggest cost.** Prefer an **algorithmic** win (do less work, cache, spatial
+   partition, run less often) over micro-optimizing a hot line. Apply the matching shared fix
+   (pooling, batching, allocation removal).
+5. **Re-measure on the same scene/hardware.** Confirm the number moved. Keep or revert based on
+   data, not intuition.
+6. **Set budgets so it stays fixed.** Per-frame ms budgets per subsystem, plus asset budgets
+   (texture sizes, triangle counts, draw-call ceilings); add a perf check to verification.
+7. **Report measured numbers.** State before/after frame time, the bottleneck found, and the fix
+   — never "should be faster". If you could only measure in-editor, say so.
 
-```
-1. MEASURE  → Establish baseline with real data
-2. IDENTIFY → Find the actual bottleneck (not assumed)
-3. FIX      → Address the specific bottleneck
-4. VERIFY   → Measure again, confirm improvement
-5. GUARD    → Add monitoring or tests to prevent regression
-```
+## Patterns
 
-### Step 1: Measure
+### 1. Frame budget math (turn "feels slow" into a number)
 
-Two complementary approaches — use both:
-
-- **Synthetic (Lighthouse, DevTools Performance tab):** Controlled conditions, reproducible. Best for CI regression detection and isolating specific issues.
-- **RUM (web-vitals library, CrUX):** Real user data in real conditions. Required to validate that a fix actually improved user experience.
-
-**Frontend:**
-```bash
-# Synthetic: Lighthouse in Chrome DevTools (or CI)
-# Chrome DevTools → Performance tab → Record
-# Chrome DevTools MCP → Performance trace
-
-# RUM: Web Vitals library in code
-import { onLCP, onINP, onCLS } from 'web-vitals';
-
-onLCP(console.log);
-onINP(console.log);
-onCLS(console.log);
-```
-
-**Backend:**
-```bash
-# Response time logging
-# Application Performance Monitoring (APM)
-# Database query logging with timing
-
-# Simple timing
-console.time('db-query');
-const result = await db.query(...);
-console.timeEnd('db-query');
+```text
+target FPS → frame budget:   60 FPS = 16.67 ms   |   30 FPS = 33.3 ms   |   120 FPS = 8.33 ms
+The WHOLE frame (CPU sim + render submit + GPU) must fit the budget; the GPU runs in parallel,
+so the slower of CPU-frame and GPU-frame sets your FPS. Allocate sub-budgets, e.g. @60 FPS:
+  gameplay/scripts ~5 ms · physics ~3 ms · rendering(CPU submit) ~4 ms · UI/other ~2 ms · slack.
+If one subsystem blows its slice, that's your target — not whatever you assumed.
 ```
 
-### Where to Start Measuring
+### 2. Measure with the engine profiler (do this before any fix)
 
-Use the symptom to decide what to measure first:
-
-```
-What is slow?
-├── First page load
-│   ├── Large bundle? --> Measure bundle size, check code splitting
-│   ├── Slow server response? --> Measure TTFB in DevTools Network waterfall
-│   │   ├── DNS long? --> Add dns-prefetch / preconnect for known origins
-│   │   ├── TCP/TLS long? --> Enable HTTP/2, check edge deployment, keep-alive
-│   │   └── Waiting (server) long? --> Profile backend, check queries and caching
-│   └── Render-blocking resources? --> Check network waterfall for CSS/JS blocking
-├── Interaction feels sluggish
-│   ├── UI freezes on click? --> Profile main thread, look for long tasks (>50ms)
-│   ├── Form input lag? --> Check re-renders, controlled component overhead
-│   └── Animation jank? --> Check layout thrashing, forced reflows
-├── Page after navigation
-│   ├── Data loading? --> Measure API response times, check for waterfalls
-│   └── Client rendering? --> Profile component render time, check for N+1 fetches
-└── Backend / API
-    ├── Single endpoint slow? --> Profile database queries, check indexes
-    ├── All endpoints slow? --> Check connection pool, memory, CPU
-    └── Intermittent slowness? --> Check for lock contention, GC pauses, external deps
+```text
+Godot 4.7     : Debugger ▸ Profiler (script/physics time), Visual Profiler (CPU vs GPU render time
+                per pass) and Monitors tab (FPS, draw calls, memory).
+                In code: Performance.get_monitor(Performance.TIME_PROCESS) returns SECONDS
+                (× 1000 for ms); Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME for draw calls.
+Unity 6.3 LTS : Profiler window (CPU/GPU/Memory/Rendering modules) + Frame Debugger for draw calls.
+                In code: ProfilerRecorder on "CPU Main Thread Frame Time" / "GPU Frame Time"
+                (release players need Frame Timing Stats enabled in Player Settings).
+Unreal 5.8    : `stat unit` (Frame / Game / Draw / RHIT / GPU ms), `stat fps`,
+                `stat scenerendering` (draw calls); Unreal Insights for deep traces.
+# Read the split: Game = gameplay thread, Draw = render thread (both CPU), GPU = the graphics card.
+# Whichever is closest to Frame is the bottleneck; that decides the fix.
 ```
 
-### Step 2: Identify the Bottleneck
+### 3. Object pooling (stop allocating/freeing in hot loops)
 
-Common bottlenecks by category:
-
-**Frontend:**
-
-| Symptom | Likely Cause | Investigation |
-|---------|-------------|---------------|
-| Slow LCP | Large images, render-blocking resources, slow server | Check network waterfall, image sizes |
-| High CLS | Images without dimensions, late-loading content, font shifts | Check layout shift attribution |
-| Poor INP | Heavy JavaScript on main thread, large DOM updates | Check long tasks in Performance trace |
-| Slow initial load | Large bundle, many network requests | Check bundle size, code splitting |
-
-**Backend:**
-
-| Symptom | Likely Cause | Investigation |
-|---------|-------------|---------------|
-| Slow API responses | N+1 queries, missing indexes, unoptimized queries | Check database query log |
-| Memory growth | Leaked references, unbounded caches, large payloads | Heap snapshot analysis |
-| CPU spikes | Synchronous heavy computation, regex backtracking | CPU profiling |
-| High latency | Missing caching, redundant computation, network hops | Trace requests through the stack |
-
-### Step 3: Fix Common Anti-Patterns
-
-#### N+1 Queries (Backend)
-
-```typescript
-// BAD: N+1 — one query per task for the owner
-const tasks = await db.tasks.findMany();
-for (const task of tasks) {
-  task.owner = await db.users.findUnique({ where: { id: task.ownerId } });
-}
-
-// GOOD: Single query with join/include
-const tasks = await db.tasks.findMany({
-  include: { owner: true },
-});
+```gdscript
+# Bullets, particles, enemies, damage numbers: reuse a fixed set instead of instantiate()/free()
+# every frame — that thrashes memory and (in C#) feeds the GC.
+var _pool: Array[Node2D] = []                     # Node3D for 3D; both have `visible`
+func acquire() -> Node2D:
+    var n: Node2D = _pool.pop_back() if not _pool.is_empty() else bullet_scene.instantiate()
+    n.set_process(true); n.visible = true
+    return n
+func release(n: Node2D) -> void:
+    n.set_process(false); n.visible = false       # disable + hide; DON'T free
+    _pool.append(n)                                # back to the pool for reuse
+# RIGHT: pre-warm the pool at load; reuse. WRONG: instantiate()/queue_free() per shot.
 ```
 
-#### Unbounded Data Fetching
+### 4. Cut draw calls (the most common GPU-side win)
 
-```typescript
-// BAD: Fetching all records
-const allTasks = await db.tasks.findMany();
-
-// GOOD: Paginated with limits
-const tasks = await db.tasks.findMany({
-  take: 20,
-  skip: (page - 1) * 20,
-  orderBy: { createdAt: 'desc' },
-});
+```text
+Draw calls and render-state changes (material/shader/texture/blend switches) cost CPU submit time;
+thousands of them make the render thread the bottleneck. 2D batchers merge runs of sprites that
+share state (most bind several textures per batch), so ordering and atlasing decide the count.
+- Atlas textures and share materials so sprites/meshes batch into one call.
+- Identical meshes → GPU instancing (Unity; under URP/HDRP the SRP Batcher or GPU Resident Drawer
+  takes precedence), MultiMesh / MultiMeshInstance (Godot), Instanced Static Mesh (Unreal).
+- Static geometry → static batching / baking; mark non-moving objects static.
+- Reduce overdraw: limit large overlapping transparent/particle layers (they re-shade pixels).
+- If fill rate dominates, lower render resolution: 2× pixel ratio means 4× the pixels of 1×.
+  For three.js game defaults and warm-up-aware resolution tuning, read `threejs-scene-setup`.
+- Fewer real-time lights/shadows; bake lighting where it doesn't move.
+Measure draw calls before and after — the count should drop, and so should GPU frame time.
 ```
 
-#### Missing Image Optimization (Frontend)
+### 5. Kill per-frame allocations (GC spikes = stutter)
 
-```html
-<!-- BAD: No dimensions, no format optimization -->
-<img src="/hero.jpg" />
-
-<!-- GOOD: Hero / LCP image — art direction + resolution switching, high priority -->
-<!--
-  Two techniques combined:
-  - Art direction (media): different crop/composition per breakpoint
-  - Resolution switching (srcset + sizes): right file size per screen density
--->
-<picture>
-  <!-- Mobile: portrait crop (8:10) -->
-  <source
-    media="(max-width: 767px)"
-    srcset="/hero-mobile-400.avif 400w, /hero-mobile-800.avif 800w"
-    sizes="100vw"
-    width="800"
-    height="1000"
-    type="image/avif"
-  />
-  <source
-    media="(max-width: 767px)"
-    srcset="/hero-mobile-400.webp 400w, /hero-mobile-800.webp 800w"
-    sizes="100vw"
-    width="800"
-    height="1000"
-    type="image/webp"
-  />
-  <!-- Desktop: landscape crop (2:1) -->
-  <source
-    srcset="/hero-800.avif 800w, /hero-1200.avif 1200w, /hero-1600.avif 1600w"
-    sizes="(max-width: 1200px) 100vw, 1200px"
-    width="1200"
-    height="600"
-    type="image/avif"
-  />
-  <source
-    srcset="/hero-800.webp 800w, /hero-1200.webp 1200w, /hero-1600.webp 1600w"
-    sizes="(max-width: 1200px) 100vw, 1200px"
-    width="1200"
-    height="600"
-    type="image/webp"
-  />
-  <img
-    src="/hero-desktop.jpg"
-    width="1200"
-    height="600"
-    fetchpriority="high"
-    alt="Hero image description"
-  />
-</picture>
-
-<!-- GOOD: Below-the-fold image — lazy loaded + async decoding -->
-<img
-  src="/content.webp"
-  width="800"
-  height="400"
-  loading="lazy"
-  decoding="async"
-  alt="Content image description"
-/>
+```csharp
+// Unity 6.3 LTS (C#). Allocating every frame fills the managed heap; the GC then stalls a frame.
+// WRONG (new array + scene walk every call):
+//   foreach (var e in FindObjectsByType<Enemy>(FindObjectsSortMode.None)) ...  // + LINQ, new[]
+// (FindObjectsOfType is obsolete in Unity 6.3; its replacement still allocates.)
+// RIGHT: cache references once, reuse buffers, avoid LINQ/boxing in Update.
+void Update() {
+    _hits = Physics.RaycastNonAlloc(ray, _hitBuffer);   // reuse a preallocated array
+    for (int i = 0; i < _hits; i++) { /* ... */ }       // no per-frame allocation
+}   // hit order is undefined and a full buffer may miss the nearest hit: size it, sort if needed
+// Godot/GDScript: avoid building new arrays/dictionaries every frame in _process; reuse them.
 ```
 
-#### Unnecessary Re-renders (React)
+## Pitfalls
 
-```tsx
-// BAD: Creates new object on every render, causing children to re-render
-function TaskList() {
-  return <TaskFilters options={{ sortBy: 'date', order: 'desc' }} />;
-}
+- **Optimizing without profiling.** The intuitive culprit is usually wrong. Measure first, every
+  time.
+- **Profiling the editor / a debug build.** Editor overhead and unoptimized code mislead. Profile
+  a release build on target hardware for real numbers.
+- **Fixing the wrong side.** Micro-optimizing CPU code when the GPU is the bottleneck (or vice
+  versa) changes nothing. Check the CPU-vs-GPU split first.
+- **Micro-optimizing over algorithm.** Shaving a function when an O(n²) loop or a per-frame
+  full-scene query is the real cost. Reduce the work, don't polish it.
+- **Instantiate/free in hot loops.** Spawning and destroying bullets/particles every frame causes
+  fragmentation and GC spikes. Pool them.
+- **Per-frame allocations / LINQ / boxing in `Update`** (C#) feed the GC → periodic hitches.
+  Cache and reuse.
+- **Draw-call explosion** from unique materials and unbatched sprites/meshes. Atlas, share
+  materials, instance, batch.
+- **Unity "Enable GPU Instancing" with no effect** under URP/HDRP: the SRP Batcher takes
+  precedence for compatible shaders. Check the Frame Debugger; for many identical meshes use the
+  GPU Resident Drawer (Forward+, compute-capable APIs, not OpenGL ES).
+- **Overdraw** from stacked transparents/particles/full-screen effects re-shading pixels.
+- **No budgets.** Without per-subsystem ms and asset ceilings, performance silently regresses;
+  enforce them in your build/CI checks.
+- **Optimizing too early.** Don't contort a prototype for performance before it's fun or measured.
 
-// GOOD: Stable reference
-const DEFAULT_OPTIONS = { sortBy: 'date', order: 'desc' } as const;
-function TaskList() {
-  return <TaskFilters options={DEFAULT_OPTIONS} />;
-}
+## References
 
-// Use React.memo for expensive components
-const TaskItem = React.memo(function TaskItem({ task }: Props) {
-  return <div>{/* expensive render */}</div>;
-});
+- For per-engine profiler walkthroughs, the CPU-vs-GPU triage flowchart, a complete pooling
+  manager, batching/instancing rules per engine, allocation/GC guidance, LOD/culling, and asset
+  budgets (texture sizes, triangle counts, audio, mobile thermals), read
+  `references/profiling-and-budgets.md`.
 
-// Use useMemo for expensive computations
-function TaskStats({ tasks }: Props) {
-  const stats = useMemo(() => calculateStats(tasks), [tasks]);
-  return <div>{stats.completed} / {stats.total}</div>;
-}
-```
+## Related skills
 
-#### Large Bundle Size
-
-```typescript
-// Modern bundlers (Vite, webpack 5+) handle named imports with tree-shaking automatically,
-// provided the dependency ships ESM and is marked `sideEffects: false` in package.json.
-// Profile before changing import styles — the real gains come from splitting and lazy loading.
-
-// GOOD: Dynamic import for heavy, rarely-used features
-const ChartLibrary = lazy(() => import('./ChartLibrary'));
-
-// GOOD: Route-level code splitting wrapped in Suspense
-const SettingsPage = lazy(() => import('./pages/Settings'));
-
-function App() {
-  return (
-    <Suspense fallback={<Spinner />}>
-      <SettingsPage />
-    </Suspense>
-  );
-}
-```
-
-#### Missing Caching (Backend)
-
-```typescript
-// Cache frequently-read, rarely-changed data
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-let cachedConfig: AppConfig | null = null;
-let cacheExpiry = 0;
-
-async function getAppConfig(): Promise<AppConfig> {
-  if (cachedConfig && Date.now() < cacheExpiry) {
-    return cachedConfig;
-  }
-  cachedConfig = await db.config.findFirst();
-  cacheExpiry = Date.now() + CACHE_TTL;
-  return cachedConfig;
-}
-
-// HTTP caching headers for static assets
-app.use('/static', express.static('public', {
-  maxAge: '1y',           // Cache for 1 year
-  immutable: true,        // Never revalidate (use content hashing in filenames)
-}));
-
-// Cache-Control for API responses
-res.set('Cache-Control', 'public, max-age=300'); // 5 minutes
-```
-
-## Performance Budget
-
-Set budgets and enforce them:
-
-```
-JavaScript bundle: < 200KB gzipped (initial load)
-CSS: < 50KB gzipped
-Images: < 200KB per image (above the fold)
-Fonts: < 100KB total
-API response time: < 200ms (p95)
-Time to Interactive: < 3.5s on 4G
-Lighthouse Performance score: ≥ 90
-```
-
-**Enforce in CI:**
-```bash
-# Bundle size check
-npx bundlesize --config bundlesize.config.json
-
-# Lighthouse CI
-npx lhci autorun
-```
-
-## See Also
-
-For detailed performance checklists, optimization commands, and anti-pattern reference, see `references/performance-checklist.md`.
-
-
-## Common Rationalizations
-
-| Rationalization | Reality |
-|---|---|
-| "We'll optimize later" | Performance debt compounds. Fix obvious anti-patterns now, defer micro-optimizations. |
-| "It's fast on my machine" | Your machine isn't the user's. Profile on representative hardware and networks. |
-| "This optimization is obvious" | If you didn't measure, you don't know. Profile first. |
-| "Users won't notice 100ms" | Research shows 100ms delays impact conversion rates. Users notice more than you think. |
-| "The framework handles performance" | Frameworks prevent some issues but can't fix N+1 queries or oversized bundles. |
-
-## Red Flags
-
-- Optimization without profiling data to justify it
-- N+1 query patterns in data fetching
-- List endpoints without pagination
-- Images without dimensions, lazy loading, or responsive sizes
-- Bundle size growing without review
-- No performance monitoring in production
-- `React.memo` and `useMemo` everywhere (overusing is as bad as underusing)
-
-## Verification
-
-After any performance-related change:
-
-- [ ] Before and after measurements exist (specific numbers)
-- [ ] The specific bottleneck is identified and addressed
-- [ ] Core Web Vitals are within "Good" thresholds
-- [ ] Bundle size hasn't increased significantly
-- [ ] No N+1 queries in new data fetching code
-- [ ] Performance budget passes in CI (if configured)
-- [ ] Existing tests still pass (optimization didn't break behavior)
+- `physics-tuning` — simulation cost, fixed-step budget, sleeping bodies, broadphase layers.
+- `godot-export` — release/build settings that affect measured performance.
+- `procedural-gen`, `game-ai` — common CPU hotspots (generation, pathfinding) to budget and defer.
+- `roguelike`, `tower-defense`, `survival-crafting` — entity-heavy genres that need pooling/budgets.

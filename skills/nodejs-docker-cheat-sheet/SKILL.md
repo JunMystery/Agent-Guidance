@@ -254,7 +254,7 @@ To provide a better experience, we can do the following:
 2. The handler waits for clean up operations like database connections, ongoing HTTP requests and others.
 3. The handler then terminates the Node.js process.
 
-Specifically with Fastify, we can have our handler call on [fastify.close()](https://www.fastify.io/docs/latest/Server/) which returns a promise that we will await, and Fastify will also take care to respond to every new connection with the HTTP status code 503 to signal that the application is unavailable.
+Specifically with Fastify, we can have our handler call on [fastify.close()](https://fastify.dev/docs/latest/Reference/Server/#close) which returns a promise that we will await, and Fastify will also take care to respond to every new connection with the HTTP status code 503 to signal that the application is unavailable.
 
 Let’s add our event handler:
 
@@ -273,7 +273,7 @@ Admittedly, this is more of a generic web application concern than Dockerfile re
 
 ## 7) Find and fix security vulnerabilities in your Node.js docker image
 
-See [Docker Security Cheat Sheet - Use static analysis tools](https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html#rule-9-use-static-analysis-tools)
+See [Docker Security Cheat Sheet - Use static analysis tools](https://cheatsheetseries.owasp.org/cheatsheets/Docker_Security_Cheat_Sheet.html#rule-9-integrate-container-scanning-tools-into-your-cicd-pipeline)
 
 ## 8) Use multi-stage builds
 
@@ -476,3 +476,8 @@ And finally, the command that builds the Node.js Docker image:
 **Note:** Secrets are a new feature in Docker and if you’re using an older version, you might need to enable it Buildkit as follows:
 
     DOCKER_BUILDKIT=1 docker build . -t nodejs-tutorial --build-arg NPM_TOKEN=1234 --secret id=npmrc,src=.npmrc
+
+## References
+
+- [Node.js Docker: Best Practices](https://github.com/nodejs/docker-node/blob/main/docs/BestPractices.md)
+- [Docker: Build secrets](https://docs.docker.com/build/building/secrets/)

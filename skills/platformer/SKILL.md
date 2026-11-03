@@ -2,7 +2,8 @@
 name: platformer
 description: >
   Build a 2D platformer: run/jump control with coyote time, jump buffering, and variable jump
-  height, plus tiled levels and hazards. Use for a platformer or Mario/Celeste-like, or tuning jump feel.
+  height, wall slide and wall jump, plus tiled levels and hazards. Use for a platformer or
+  Mario/Celeste-like, or tuning jump feel.
 ---
 
 # Platformer
@@ -54,6 +55,7 @@ Tune these by **outcome** (height in tiles, time to apex in seconds), not by raw
 | Apex hang | brief float at the top for air control | reduce gravity ×0.5 near `|vy|`<threshold |
 | Ground accel / friction | responsiveness vs. ice | reach top speed in 0.05–0.1 s |
 | Corner correction | nudge past a ledge clipped by 1–2 px | nudge up to ~4 px sideways |
+| Wall slide / wall jump | controlled descent and kick-off | wall grace, kick/steering lock, air-jump refresh policy; see refs §9 |
 
 Derive gravity and jump velocity from the *feel* values rather than guessing — see Pattern 1.
 
@@ -73,6 +75,9 @@ fall_gravity  = gravity * 1.8   # heavier on the way down → less floaty
 ```
 
 ### 2. Coyote time + jump buffer + variable height (the feel core)
+
+For wall or air jumps, replace this simple jump resolver with the unified resolver in refs §9;
+keep variable-height and gravity integration only once per tick.
 
 ```python
 # Pseudocode in the per-frame update. dt = seconds since last frame.
@@ -94,24 +99,36 @@ if buffer_timer > 0 and coyote_timer > 0:
 if jump_released_this_frame and velocity.y < 0:
     velocity.y *= 0.45
 
-# Asymmetric gravity: snappier fall than rise.
+# Asymmetric gravity: snappier fall than rise; clamp to a terminal speed.
 g = fall_gravity if velocity.y > 0 else gravity
-velocity.y += g * dt
+velocity.y = min(velocity.y + g * dt, MAX_FALL_SPEED)
 ```
 
 ### 3. One-way platforms
 
-Solid from above, pass-through from below. Most engines expose a "one-way collision" flag on
-the tile/collider; enable it and let the player **drop through** by disabling that collision
-for a few frames when the player holds Down + Jump. Do not re-implement collision math.
+Solid from above, pass-through from below. Use the engine's flag rather than collision math:
+Godot `CollisionShape2D.one_way_collision` (or the one-way option on a TileSet collision
+polygon), Unity a `PlatformEffector2D` with **Use One Way** on a collider set to be used by the
+effector, Phaser Arcade `platform.body.checkCollision.down = false` (plus `left`/`right` for thin
+ledges). Let the player **drop through** by ignoring that platform for ~0.1–0.2 s when they hold
+Down + Jump (refs §5).
 
 ## Pitfalls / failure modes
 
 - **Per-frame movement not scaled by `dt`** → speed changes with frame rate. Every velocity
   integration and timer must use `dt`. (See `physics-tuning`.)
+- **Jump height differs between machines** → the jump runs on a variable render `dt`. Simple
+  per-step integration lands a few percent short of the designed height, by a different amount
+  at each frame rate. Run the controller on the fixed physics tick (Godot `_physics_process`,
+  Unity `FixedUpdate`) or use the half-step update in refs §1.
+- **Player is flung off or doubles speed leaving a moving platform** → platform velocity added
+  twice. Godot's `CharacterBody2D` already carries the body and adds the platform's velocity on
+  leave (`platform_on_leave`); don't add it again in script (refs §6).
 - **Floaty jumps** → symmetric gravity. Make fall gravity heavier than rise gravity.
 - **"The jump didn't register"** → no input buffering. Buffer presses for ~0.1 s before landing.
 - **"I fell off and couldn't jump"** → no coyote time. Allow a jump for ~0.1 s after leaving ground.
+- **Wall jump overrides a ground jump or consumes the double jump** → resolve one buffered
+  press in ground/coyote → wall → air order, with an explicit air-jump refresh policy (refs §9).
 - **Sticking to walls / catching on tile seams** → use a single capsule/box collider, not
   per-tile colliders, and add corner correction.
 - **Tunneling through floors at high speed** → enable continuous collision / smaller fixed
@@ -132,5 +149,5 @@ for a few frames when the player holds Down + Jump. Do not re-implement collisio
 
 ## References
 
-- For jump math derivation, a full feel-tuning table, corner correction, moving/one-way
+- For jump math derivation, wall slide/jump, a full feel-tuning table, corner correction, moving/one-way
   platforms, and camera follow, read `references/feel-tuning.md`.

@@ -130,7 +130,7 @@ impl LLMSelector {
                     if field.is_empty() {
                         return false;
                     }
-                    if kw.len() >= 4 && field.contains(kw) {
+                    if kw.len() >= 5 && field.contains(kw) {
                         return true;
                     }
                     field.split_whitespace().any(|tok| {
@@ -142,7 +142,7 @@ impl LLMSelector {
                     if name_lower == *kw {
                         bonus += 0.4;
                         has_name_match = true;
-                    } else if kw.len() >= 4 && name_lower.contains(kw) {
+                    } else if kw.len() >= 5 && name_lower.contains(kw) {
                         bonus += 0.2;
                         has_name_match = true;
                     }

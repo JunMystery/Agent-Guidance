@@ -166,6 +166,15 @@ pub fn is_generic_skill_stopword(word: &str) -> bool {
             | "đến"
             | "ở"
             | "tại"
+            | "liên"
+            | "quan"
+            | "hoàn"
+            | "toàn"
+            | "gợi"
+            | "lên"
+            | "tránh"
+            | "làm"
+            | "phiền"
     )
 }
 

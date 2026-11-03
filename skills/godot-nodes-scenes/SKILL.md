@@ -37,6 +37,14 @@ decoupling → `godot-signals-groups`; physics bodies/collisions → `godot-phys
 5. **Use autoloads for global state/services** (game state, audio, scene switching) —
    registered in Project Settings > Globals (Autoload), accessible by name everywhere.
 6. **Free nodes with `queue_free()`** and guard later access with `is_instance_valid()`.
+7. **Check references before you finish.** After creating, moving or renaming scenes,
+   resources or scripts, run `python scripts/check_godot_project.py <project-dir>` (no
+   Godot install needed; `--json` for machine-readable output). Fix every `ERROR` (missing
+   or wrong-case `res://` paths, undeclared `ExtResource`/`SubResource` ids, bad `parent=`
+   paths, missing main scene or autoload) and re-run until it exits 0. Warnings such as a
+   stale `path=` that Godot still finds by uid are safe but worth fixing. Run the script
+   path relative to this skill directory, or resolve the installed skill path first. It
+   needs Python 3.10+ and nothing else, and it does not replace opening the project in Godot.
 
 ## Patterns
 
@@ -105,15 +113,20 @@ func go_to_level_2() -> void:
   An autoload can't depend on the main scene existing yet.
 - **`instance()` was renamed** to `instantiate()` in Godot 4. `preload` runs at parse
   time (path must be constant); `load` runs at runtime (path can be a variable).
-- **`change_scene_to_file()` is deferred**, not immediate — Godot swaps and frees the old
-  scene at the end of the current frame. Any code after the call still runs against the _old_
-  tree, and `get_tree().current_scene` isn't the new scene until next frame. Don't read the new
-  scene's nodes on the same line; do it from the new scene's `_ready()`.
+- **`change_scene_to_file()` is deferred, and the old scene leaves the tree at once.** The
+  outgoing scene is removed from the tree immediately (its `get_tree()` now returns `null`,
+  and `get_tree().current_scene` is `null`), then at the end of the frame it is freed and the
+  new scene is added. Code after the call must not touch `get_tree()` from the old scene. To
+  act on the new scene, do it from the new scene's `_ready()`, or from an autoload with
+  `await get_tree().scene_changed` (Godot 4.5+). `change_scene_to_node(node)` (4.6+) swaps
+  in a node you have already instanced and configured.
 
 ## References
 
 - For scene inheritance, `owner`/ownership when saving scenes from code, groups vs
   unique names, and node-path edge cases, read `references/tree-and-instancing.md`.
+- `scripts/check_godot_project.py` — read-only reference checker for a Godot 4.x project;
+  `--help` lists every check and the exit codes.
 
 ## Related skills
 

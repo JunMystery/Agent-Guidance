@@ -3,9 +3,10 @@ name: threejs-scene-setup
 description: >
   Stand up a three.js scene: import maps and the three/addons path, the
   Scene/PerspectiveCamera/WebGLRenderer trio, the setAnimationLoop render loop,
-  responsive resize, and OrbitControls. Use when starting or debugging a three.js
-  app — when the user mentions three.js, THREE.Scene, WebGLRenderer,
-  PerspectiveCamera, the render loop, resizing, or OrbitControls. For models use
+  responsive resize, OrbitControls, and opting into WebGPURenderer. Use when
+  starting or debugging a three.js app — when the user mentions three.js,
+  THREE.Scene, WebGLRenderer, WebGPURenderer, PerspectiveCamera, the render loop,
+  resizing, or OrbitControls. For models use
   threejs-gltf-loading; for materials/lights use threejs-materials-lighting.
 ---
 
@@ -29,9 +30,10 @@ changing an existing project because examples and addons move across releases.
 
 ## Core workflow
 
-1. **Load three.js as an ES module with an import map.** Since r147 the bare
-   specifier `'three'` and `'three/addons/'` must be mapped (in HTML or by a
-   bundler). Addons (controls, loaders) live under `three/addons/...`.
+1. **Load three.js as an ES module with an import map.** Since r137 the bare
+   specifier `'three'` must be resolved by an import map (in HTML) or a bundler;
+   map `'three/addons/'` too. Addons (controls, loaders) live under
+   `three/addons/...`.
 2. **Create the trio.** A `Scene` (root of the graph), a `PerspectiveCamera(fov,
    aspect, near, far)` moved back from the origin, and a `WebGLRenderer` whose
    `domElement` is in the DOM. Set size and `pixelRatio`.
@@ -54,8 +56,8 @@ changing an existing project because examples and addons move across releases.
 <script type="importmap">
 {
   "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.186.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.0/examples/jsm/"
+    "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
   }
 }
 </script>
@@ -73,7 +75,7 @@ import * as THREE from 'three';
 
 const canvas = document.querySelector('#c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // cap for perf
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // starting budget; profile on target hardware
 renderer.setSize(window.innerWidth, window.innerHeight);
 
 const scene = new THREE.Scene();
@@ -101,15 +103,23 @@ scene.add(cube);
 const timer = new THREE.Timer();        // replaces the deprecated THREE.Clock (r183+)
 timer.connect(document);                // optional: no huge delta after a hidden tab
 
-renderer.setAnimationLoop((time) => {
-  timer.update(time);                   // call once per frame, before getDelta()
-  const dt = timer.getDelta();          // seconds since last frame
+renderer.setAnimationLoop(() => {
+  timer.update();                      // use performance.now(), like visibility reset
+  const dt = Math.min(Math.max(timer.getDelta(), 0), 0.1); // seconds; bound stalls and negative deltas
   cube.rotation.x += dt;                // frame-rate independent
   cube.rotation.y += dt * 0.7;
   renderer.render(scene, camera);
 });
 // renderer.setAnimationLoop(null); // stop the loop
+// timer.dispose();                 // remove visibility listener when tearing down
 ```
+
+In r186, visibility reset samples `performance.now()`. A supplied animation-frame
+timestamp can precede that reset and produce a negative delta. Using `update()`
+keeps the clock source consistent; the lower clamp also protects a fixed-step
+accumulator. Feed the bounded `dt` into simulation, not raw `getDelta()`.
+The 0.1-second upper bound deliberately drops excess time after a stall; tune it
+to the game's catch-up policy rather than using it for real-world deadlines.
 
 ### 4. Responsive resize
 
@@ -138,6 +148,44 @@ renderer.setAnimationLoop(() => {
 });
 ```
 
+### 6. Opting into WebGPURenderer (only when you need it)
+
+`WebGLRenderer` stays the default choice for compatibility. Switch to
+`WebGPURenderer` when the project needs TSL node materials or compute shaders; it
+falls back to a WebGL 2 backend where WebGPU is unavailable.
+
+```js
+// Official WebGPU examples map both "three" and "three/webgpu" to
+// build/three.webgpu.js, plus "three/tsl" to build/three.tsl.js.
+import * as THREE from 'three/webgpu';
+
+const renderer = new THREE.WebGPURenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // starting budget; profile on target hardware
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+await renderer.init();                  // required before direct render()/compute()
+
+renderer.setAnimationLoop(() => renderer.render(scene, camera));
+```
+
+Scenes, cameras, built-in `Mesh*Material`s, and most addons carry over; custom
+GLSL (`ShaderMaterial`, `onBeforeCompile`) does not.
+
+### 7. Resolution is a performance budget
+
+A ratio of 2 draws four times as many pixels as 1 at the same CSS size. A cap
+of 2 does nothing on a 2× display. Start games around 1.25–1.5, expose a resolution
+setting, and profile the target device; these are tuning defaults, not an FPS guarantee.
+Lower resolution helps fill-rate bottlenecks, not CPU-bound simulation.
+
+For adaptive resolution, measure several seconds of frame time after assets and
+shader warm-up. Ignore hidden-tab intervals and loading stalls. If sustained
+GPU/fill-rate pressure exceeds the budget, lower the ratio in 0.25 steps to a
+chosen floor (for example 1), never above the device ratio or user setting.
+Use a cooldown and a separate recovery threshold before raising it again to avoid
+oscillation. Reapply the chosen ratio on display/DPR changes and resize render
+targets or postprocessing buffers consistently with the renderer.
+
 ## Pitfalls
 
 - **`Failed to resolve module specifier "three"`** → missing import map (or bundler
@@ -149,14 +197,27 @@ renderer.setAnimationLoop(() => {
   call `setAnimationLoop` but render outside it.
 - **Stretched / squashed view on resize** → you resized the renderer but didn't
   update `camera.aspect` + `updateProjectionMatrix()`.
-- **Blurry or jagged on HiDPI** → set `renderer.setPixelRatio(...)`; cap it (≈2) so
-  4K/retina screens don't tank performance.
+- **Blurry or slow on HiDPI** → balance sharpness against fill rate with a resolution
+  setting. Start around 1.25–1.5; a cap of 2 still renders 4× the pixels of 1×.
+- **Simulation freezes after restoring a tab** → r186 can mix a frame timestamp
+  with visibility-reset time. Use `timer.update()` and clamp simulation delta to
+  `[0, 0.1]` as above so a negative delta cannot drain the fixed-step accumulator.
 - **OrbitControls feel dead** → with `enableDamping = true` you must call
   `controls.update()` every frame.
-- **Old tutorials use `<script src="three.min.js">`** → since r147 three.js ships
-  ES modules only; use `type="module"` + import maps.
+- **Old tutorials use `<script src="three.min.js">` or `examples/js/...`** →
+  `examples/js` was removed in r148 and `build/three.min.js` in r161; use
+  `type="module"` + import maps.
+- **`.render() called before the backend is initialized`** (WebGPURenderer) → call
+  `await renderer.init()` before any direct `render()`/`compute()`, or render only
+  from `setAnimationLoop`, which initializes first.
+- **`Material "ShaderMaterial" is not compatible`, or an `onBeforeCompile` patch is
+  ignored** (WebGPURenderer) → it renders node materials only; port the effect to
+  TSL, or stay on `WebGLRenderer`.
 
 ## References
+
+- Primary sources: [r186 Timer implementation](https://github.com/mrdoob/three.js/blob/r186/src/core/Timer.js)
+  and [r186 responsive rendering manual](https://github.com/mrdoob/three.js/blob/r186/manual/pages/responsive.html).
 
 - For coordinate conventions, the scene-graph (`Group`, parent/child transforms,
   `Object3D` add/remove), `OrthographicCamera` for 2.5D, and disposing of

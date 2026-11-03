@@ -79,16 +79,17 @@ pub fn hybrid_vector_search(
                 }
 
                 for w in &words {
-                    if crate::ml::is_generic_skill_stopword(w) {
+                    let clean_w = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+                    if crate::ml::is_generic_skill_stopword(clean_w) || clean_w.len() < 3 {
                         continue;
                     }
-                    if name_lower.contains(w) {
+                    if name_lower.contains(clean_w) {
                         score += 0.1;
                     }
-                    if actions_lower.contains(w) {
+                    if actions_lower.contains(clean_w) {
                         score += 0.12;
                     }
-                    if intent_lower.contains(w) {
+                    if intent_lower.contains(clean_w) {
                         score += 0.08;
                     }
                 }
@@ -137,31 +138,32 @@ pub fn hybrid_vector_search(
         }
 
         for w in &words {
-            if crate::ml::is_generic_skill_stopword(w) || w.len() < 3 {
+            let clean_w = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+            if crate::ml::is_generic_skill_stopword(clean_w) || clean_w.len() < 3 {
                 continue;
             }
-            if name_lower.contains(w) {
+            if name_lower.contains(clean_w) {
                 score += 0.4;
             }
-            if actions_lower.contains(w) {
+            if actions_lower.contains(clean_w) {
                 score += 0.35;
             }
-            if intent_lower.contains(w) {
+            if intent_lower.contains(clean_w) {
                 score += 0.25;
             }
-            if triggers_lower.contains(w) {
+            if triggers_lower.contains(clean_w) {
                 score += 0.25;
             }
-            if rules_lower.contains(w) {
+            if rules_lower.contains(clean_w) {
                 score += 0.2;
             }
-            if desc_lower.contains(w) {
+            if desc_lower.contains(clean_w) {
                 score += 0.15;
             }
-            if keywords_lower.contains(w) {
+            if keywords_lower.contains(clean_w) {
                 score += 0.2;
             }
-            if content_lower.contains(w) {
+            if content_lower.contains(clean_w) {
                 score += 0.05;
             }
         }
