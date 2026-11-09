@@ -6,6 +6,14 @@ This project runs as a high-performance **100% Native Rust 2024 Edition** MCP se
 
 ## Automatic Install
 
+### Universal NPX / GitHub Runner (Zero-Setup)
+Run directly via GitHub repository (always fetches the latest release):
+```bash
+npx -y github:JunMystery/Agent-Guidance --setup
+```
+
+### Native Platform Installers
+
 Use the one-line installer script:
 
 **Windows (PowerShell / CMD):**

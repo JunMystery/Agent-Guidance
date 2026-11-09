@@ -69,6 +69,19 @@ if (-not (Test-Path $localBin)) { New-Item -ItemType Directory -Path $localBin -
 $stagingDir = Join-Path $HOME ".agent-guidance\staging"
 if (-not (Test-Path $stagingDir)) { New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null }
 
+# Pre-flight check: Windows 11 Smart App Control (SAC)
+try {
+    $ciPolicy = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy" -ErrorAction SilentlyContinue
+    if ($ciPolicy -and $ciPolicy.VerifiedAndReputablePolicyState -eq 1) {
+        Write-Host "`n[!] ATTENTION: Windows 11 Smart App Control (SAC) is active and ENFORCING." -ForegroundColor Yellow
+        Write-Host "    SAC blocks self-signed or unverified binaries (error 0xc0e90002)." -ForegroundColor Yellow
+        Write-Host "    If 'agent-guidance.exe' is blocked by language_server.exe or your shell:" -ForegroundColor Yellow
+        Write-Host "    1. Open Windows Security > App & browser control > Smart App Control settings" -ForegroundColor Cyan
+        Write-Host "    2. Set Smart App Control to 'Off' (recommended by Microsoft for dev machines)" -ForegroundColor Cyan
+        Write-Host "    3. Re-run this installer or restart your IDE.`n" -ForegroundColor Cyan
+    }
+} catch {}
+
 function Try-DownloadPrebuilt {
     param([string]$Prof)
     $repo = "JunMystery/Agent-Guidance"

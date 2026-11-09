@@ -6,12 +6,12 @@ Cross-platform runner and installer for **Agent Guidance Rust MCP Server & Graph
 
 Run instantly without installation:
 ```bash
-npx -y agent-guidance --setup
+npx -y github:JunMystery/Agent-Guidance --setup
 ```
 
 Or install globally:
 ```bash
-npm install -g agent-guidance
+npm install -g github:JunMystery/Agent-Guidance
 agent-guidance --setup
 ```
 
@@ -24,7 +24,7 @@ Add to your MCP client configuration (`claude_desktop_config.json`, `~/.agent-co
   "mcpServers": {
     "agent-guidance": {
       "command": "npx",
-      "args": ["-y", "agent-guidance"]
+      "args": ["-y", "github:JunMystery/Agent-Guidance"]
     }
   }
 }

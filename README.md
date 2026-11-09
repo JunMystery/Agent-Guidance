@@ -1,7 +1,6 @@
 # 🦀 Agent Guidance MCP Server
 
 [![Releases](https://img.shields.io/github/v/release/JunMystery/Agent-Guidance?style=flat-square)](https://github.com/JunMystery/Agent-Guidance/releases)
-[![npm](https://img.shields.io/npm/v/agent-guidance?style=flat-square)](https://www.npmjs.com/package/agent-guidance)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 ![Agent Guidance Hero Banner](docs/images/hero-banner.png)
@@ -15,13 +14,16 @@
 
 Installers automatically detect and configure all supported IDEs (Claude Code, Claude Desktop, Cursor, Gemini, Antigravity, Windsurf).
 
-### Universal NPM Runner (Windows, macOS, Linux)
+### Universal NPX / GitHub Runner (Windows, macOS, Linux)
 ```bash
-# Interactive setup wizard (detects installed IDEs and configures MCP):
-npx -y agent-guidance
+# Run directly via GitHub repo (always fetches latest main):
+npx -y github:JunMystery/Agent-Guidance
 
 # Or configure directly:
-npx -y agent-guidance --setup
+npx -y github:JunMystery/Agent-Guidance --setup
+
+# Or install globally:
+npm install -g github:JunMystery/Agent-Guidance
 ```
 
 ### Platform Installers

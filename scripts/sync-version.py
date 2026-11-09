@@ -107,6 +107,18 @@ def main():
         f'res.set("ProductVersion", "{version}.0");'
     )
 
+    # 5. package.json manifests (Root & NPM Runner)
+    replace_in_file(
+        root / "package.json",
+        r'"version":\s*"[^"]+"',
+        f'"version": "{version}"'
+    )
+    replace_in_file(
+        root / "packaging" / "npm" / "package.json",
+        r'"version":\s*"[^"]+"',
+        f'"version": "{version}"'
+    )
+
 
     # 6. packaging/homebrew/agent-guidance.rb
     replace_in_file(
