@@ -1,9 +1,9 @@
 use serde_json::Value;
-use std::path::Path;
 
 use crate::mcp::state::ServerState;
 use super::gate_edit_batch::handle_batch_authorize;
 use super::gate_edit_single::evaluate_single_file_auth;
+pub use super::gate_exemptions::is_exempt_from_loc_limit;
 use super::helpers::{detect_project_path, resolve_architecture_pattern};
 
 pub(crate) fn extract_target_paths(arguments: &Value) -> Vec<String> {
@@ -131,6 +131,7 @@ pub(crate) fn handle_authorize_edit(
         justification,
         &arch_pattern,
         state,
+        false,
     );
 
     if !outcome.is_passed {
@@ -182,26 +183,4 @@ pub(crate) fn handle_authorize_edit(
     }
 
     resp
-}
-
-pub fn is_exempt_from_loc_limit(rel_path: &str) -> bool {
-    let path = Path::new(rel_path);
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        let ext_lower = ext.to_lowercase();
-        matches!(
-            ext_lower.as_str(),
-            "md" | "markdown" | "mdown" | "mdx" | "txt" | "rst" | "adoc" | "doc" | "docx" | "pdf"
-            | "json" | "json5" | "jsonl" | "csv" | "tsv" | "yaml" | "yml" | "xml" | "toml" | "lock"
-            | "sql" | "env" | "ini" | "cfg" | "properties" | "parquet" | "dataset" | "arrow" | "proto" | "graphql" | "gql"
-            | "html" | "htm" | "css" | "scss" | "sass" | "less" | "svg" | "png" | "jpg" | "jpeg" | "gif" | "ico" | "webp"
-            | "log" | "diff" | "patch"
-        )
-    } else {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let name_upper = name.to_uppercase();
-        matches!(
-            name_upper.as_str(),
-            "LICENSE" | "LICENCE" | "README" | "CHANGELOG" | "AUTHORS" | "CONTRIBUTING" | ".GITIGNORE" | ".ENV"
-        )
-    }
 }

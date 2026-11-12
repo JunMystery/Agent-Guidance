@@ -38,6 +38,7 @@ mod continuity_sessions;
 mod gate;
 mod gate_stage;
 mod gate_approval;
+pub(crate) mod gate_exemptions;
 pub(crate) mod gate_edit;
 pub(crate) mod gate_edit_single;
 pub(crate) mod gate_edit_batch;

@@ -2,6 +2,38 @@
 
 All notable changes to Agent Guidance Rust MCP Server will be documented in this file.
 
+## [1.8.17] - 2026-11-12
+
+### ⚡ 300 LOC Modular Decomposition Enforcement & Priority Override
+- **300 LOC Decomposition Priority Override (`src/catalog/rules.rs`, `AGENTS.md`, `GEMINI.md`, `CLAUDE.md`)**:
+  - Added explicit Priority Override across `build` and `fix` phases: modifying any non-exempt file $\ge 300$ LOC strictly overrides Karpathy's "Surgical Changes (touch only what you must)". Monolithic files must be decomposed into sub-modules (< 150 LOC) even during bugfixes.
+- **Single-File Edit Prohibition & Paired Batch Mandate (`src/mcp/tools/gate_edit_single.rs`, `gate_edit_batch.rs`)**:
+  - Strictly blocked single-file edit authorization on files $\ge 300$ LOC (`!in_batch_with_new_file`), preventing monolithic degradation through single-file patches.
+  - Mandated paired batch authorization (`workflow_gate(action="authorize_edit", relative_paths=[...])`) containing the monolithic target file alongside at least one newly created sub-module file (< 150 LOC) with `refactor_intent`.
+- **Direct Post-Edit 300 LOC Verification Trap (`src/mcp/tools/guidance_verify.rs`, `gate_stage.rs`)**:
+  - Wired `check_post_edit_300_loc_trap` directly into `guidance(operation="verify")`, returning `300_LOC_CAP_EXCEEDED` and blocking task completion if any modified code file remains $\ge 300$ LOC.
+- **Dedicated Exemption Filter Module (`src/mcp/tools/gate_exemptions.rs`)**:
+  - Extracted `is_exempt_from_loc_limit` into a dedicated module (< 60 LOC) covering docs, markdown, data files, configs (`.env.*`, `.conf`, `.sum`, `Makefile`, `Dockerfile`, `.dockerignore`, `.editorconfig`).
+- **Clustered Read & Blueprint Decomposition Banners (`src/mcp/tools/context_read_cluster.rs`, `src/catalog/blueprint.rs`)**:
+  - Injected prominent decomposition mandate warnings into clustered read outputs when inspecting $\ge 300$ LOC files.
+
+### 🛡️ MCP Micro-Rules Subordination & Rule Precedence Hierarchy
+- **Micro-Rules Demotion & Precedence Clause (`src/mcp/tools/micro_rules.rs`)**:
+  - Demoted tool micro-rules banner severity from `[!IMPORTANT] **Tool Execution Mandate**` to `[!NOTE] **Tool Micro-Rule (`{}`) [{}] (Lower Priority than User's Main RULES)**`.
+  - Injected an explicit precedence notice: `*(Precedence Notice: User's main RULES in AGENTS.md, RULES.md, or system prompt ALWAYS take precedence over tool micro-rules.)*`.
+- **3-Tier Rule Precedence Hierarchy (`AGENTS.md`, `GEMINI.md`, `CLAUDE.md`)**:
+  - Codified the universal rule hierarchy across all agent instructions:
+    1. **User's Main RULES (`AGENTS.md`, `RULES.md`, system prompt `<user_rules>`)**: HIGHEST PRIORITY (Absolute precedence).
+    2. **Runtime Safety Gates (`workflow_gate`, `guidance(verify)`)**: Enforced by server runtime logic.
+    3. **MCP Tool Micro-Rules (`task_pipeline`, `project_context`, etc.)**: ADVISORY / LOWEST PRIORITY (Subordinate to user rules).
+- **Dashboard UI Notice (`src/dashboard_src/js/render/rulesView.js`)**:
+  - Added precedence clarification banner to the Tool Micro-Rules editor in the Web Dashboard.
+
+### 🐧 Ubuntu / GNOME System Tray Icon Fix
+- **AppIndicator Pixmap Fallback & Standard Sizing (`src/daemon/tray_linux.rs`)**:
+  - Cleared `icon_name()` (`""`) instead of returning `"agent-guidance"` (which prevented GNOME `ubuntu-appindicators` from falling back to `icon_pixmap` and caused the missing `Gio.ThemedIcon` `...` fallback `image-loading-symbolic`).
+  - Resized embedded `LOGO_PNG` into standard square tray pixmaps (`32x32` and `64x64` ARGB32) instead of transmitting raw 509x491 (~1MB) over D-Bus.
+
 ## [1.8.16] - 2026-10-28
 
 ### 🎯 Two-Stage Tiered Skill Engine & Context Bleed Isolation

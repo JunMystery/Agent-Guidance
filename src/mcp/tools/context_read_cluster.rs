@@ -74,12 +74,14 @@ pub(crate) fn handle_cluster_read(
                 if total_lines > 300 && !is_exempt {
                     let skeleton = crate::optimizer::skeleton::generate_code_skeleton(&content, &clean_path);
                     sections.push(format!(
-                        "### [{}/{}] File: `{}`\n```{}\n{}\n```\n[ag: AST Structural Skeleton ({} lines) | Token Saver Mode: use target_symbol or line range for full body]",
+                        "### [{}/{}] File: `{}`\n```{}\n{}\n```\n[ag: AST Structural Skeleton ({} lines) | Token Saver Mode: use target_symbol or line range for full body]\n\n---\n**ARCHITECTURE MANDATE (300 LOC Cap Exceeded)**: File `{}` has **{} total lines** (capped at 300 lines).\n**MANDATORY ACTION**: Do NOT add new logic directly into this file. Decompose into sub-modules upfront (< 150 LOC each) via paired batch authorization (`workflow_gate`).",
                         idx + 1,
                         max_files,
                         clean_path,
                         lang,
                         skeleton,
+                        total_lines,
+                        clean_path,
                         total_lines
                     ));
                 } else {

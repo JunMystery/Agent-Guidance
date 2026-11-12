@@ -184,8 +184,9 @@ pub fn format_decomposition_guidance(rel_path: &str, loc: usize, arch_pattern: &
 
     guidance.push_str(
         "\n**Action Required**:\n\
-        1. Create the new sub-module file(s) aligned with the structure above.\n\
-        2. To modify the existing file for decomposition (delegating to sub-modules), pass `justification: \"Refactor/Decompose: [explanation]\"`.\n"
+        1. Authorize edits via BATCH `workflow_gate(action=\"authorize_edit\", relative_paths=[\"<target_file>\", \"<new_submodule_file>\"], justification=\"Refactor/Decompose: [explanation]\")`.\n\
+        2. Create the new sub-module file(s) (< 150 LOC each) aligned with the structure above.\n\
+        3. Decompose the existing file by delegating to the new sub-modules, stripping it down to a thin coordinator (< 100 LOC).\n"
     );
 
     guidance

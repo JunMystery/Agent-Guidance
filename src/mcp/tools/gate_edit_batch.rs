@@ -17,6 +17,15 @@ pub(crate) fn handle_batch_authorize(
     state.edit_authorized = true;
     state.active_architecture_pattern = Some(arch_pattern.to_string());
 
+    let has_new_file = paths.iter().any(|p| {
+        let clean = p.trim().replace('\\', "/");
+        if clean.is_empty() {
+            return false;
+        }
+        let full = proj_path.join(&clean);
+        !full.exists()
+    });
+
     let mut passed_count = 0;
     let mut blocked_count = 0;
     let mut details = Vec::new();
@@ -34,6 +43,7 @@ pub(crate) fn handle_batch_authorize(
             justification,
             arch_pattern,
             state,
+            has_new_file,
         );
 
         if outcome.is_passed {

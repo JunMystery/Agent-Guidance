@@ -183,8 +183,8 @@ fn test_workflow_gate_allows_300_loc_refactoring() {
     state.plan_approved = true;
     state.set_stage("Build").unwrap();
 
-    // 2. Edit with explicit refactoring/decomposition justification is PASSED
-    let res = handle_tool_call(
+    // 1. Single-file edit even with refactoring justification is now strictly BLOCKED
+    let single_res = handle_tool_call(
         "workflow_gate",
         json!({
             "action": "authorize_edit",
@@ -195,11 +195,44 @@ fn test_workflow_gate_allows_300_loc_refactoring() {
         }),
         &mut state,
     );
-    assert!(res.is_ok());
-    let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
-    assert!(text.contains("PASSED (DECOMPOSITION / REFACTOR MODE)"));
-    assert!(text.contains("CLI_Pipeline Architecture"));
-    assert!(text.contains("320 lines"));
+    assert!(single_res.is_ok());
+    let single_text = single_res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(single_text.contains("BLOCKED (300_LOC_CAP_EXCEEDED)"));
+    assert!(single_text.contains("Single-file edit authorization on files >= 300 LOC is strictly blocked"));
+
+    // 2. Batch edit with a new sub-module file and refactoring justification is PASSED
+    let batch_res = handle_tool_call(
+        "workflow_gate",
+        json!({
+            "action": "authorize_edit",
+            "relative_paths": ["MainController.rs", "MainSubHandler.rs"],
+            "justification": "Refactor and decompose handler logic into sub-modules",
+            "architecture_pattern": "CLI_Pipeline",
+            "project_path": temp_dir.to_str().unwrap()
+        }),
+        &mut state,
+    );
+    assert!(batch_res.is_ok());
+    let text = batch_res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(text.contains("PASSED (2/2 authorized)"));
+    assert!(text.contains("`MainController.rs`"));
+    assert!(text.contains("`MainSubHandler.rs`"));
+
+    // 3. Post-edit verification trap blocks verification if MainController.rs still has 320 lines
+    let verify_res = handle_tool_call(
+        "guidance",
+        json!({
+            "operation": "verify",
+            "verification_command": "cargo test",
+            "expected_output_keyword": "ok",
+            "project_path": temp_dir.to_str().unwrap()
+        }),
+        &mut state,
+    );
+    assert!(verify_res.is_ok());
+    let verify_text = verify_res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(verify_text.contains("BLOCKED (300_LOC_CAP_EXCEEDED)"));
+    assert!(verify_text.contains("MainController.rs"));
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

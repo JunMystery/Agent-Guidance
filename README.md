@@ -143,8 +143,8 @@ Agent Guidance forces autonomous agents to follow an enterprise engineering life
 
 1. **Priority & Architecture Gate (`task_pipeline`)**: Detects project architecture, flags monolithic files ($\ge 200$ LOC), and generates modular blueprints.
 2. **Human-in-the-Loop Plan Approval**: Code modification remains strictly locked until user approves the plan.
-3. **Write-Through Authorization (`workflow_gate`)**: Creates pre-edit rollback snapshots, blocks compound plural containers, and enforces the 300 LOC ceiling.
-4. **Fix Circuit Breaker**: Automatically trips after 3 consecutive failed test attempts, halting hallucinated fix spirals.
+3. **Write-Through Authorization (`workflow_gate`)**: Creates pre-edit rollback snapshots, blocks compound plural containers, blocks single-file edits on $\ge 300$ LOC files (requiring paired batch decomposition with new sub-modules), and enforces the 300 LOC ceiling.
+4. **Post-Edit Verification Trap & Fix Circuit Breaker**: Blocks `guidance(operation="verify")` if any modified code file remains $\ge 300$ LOC, and trips the circuit breaker after 3 consecutive failed test attempts.
 
 ---
 
@@ -190,7 +190,7 @@ Daemon & Maintenance:
 Agent Guidance includes a local real-time Command Deck at **`http://127.0.0.1:11997`**:
 
 - **Telemetry & Token Metrics**: Persistent timeframe controls (`24H` / `7D` / `30D` / `ALL`) tracking agent token savings, tool distributions, and execution latency waves.
-- **Tool Micro-Rules Editor (`/#rules`)**: Visual toggles and markdown editors to configure per-project or global tool execution mandates without prompt bloat.
+- **Tool Micro-Rules Editor (`/#rules`)**: Visual toggles and markdown editors to configure per-project or global tool guidance (subordinate to user's main rules in `AGENTS.md` / `RULES.md`) without prompt bloat.
 - **In-Browser Skill Registry (`/#skills`)**: Author, test, and live-preview custom domain skills with instant staging precedence (`~/.agent-guidance/staging/skills/`).
 
 ---

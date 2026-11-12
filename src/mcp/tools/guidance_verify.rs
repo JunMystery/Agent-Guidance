@@ -5,6 +5,23 @@ pub(crate) fn handle_verify(
     arguments: &Value,
     state: &mut ServerState,
 ) -> Result<String, (i32, String)> {
+    let proj_path_arg = arguments
+        .get("project_path")
+        .and_then(|p| p.as_str())
+        .unwrap_or(".");
+    let proj_path = super::helpers::detect_project_path(proj_path_arg, state);
+
+    if let Err((file_rel, loc)) = super::gate_stage::check_post_edit_300_loc_trap(&proj_path, state) {
+        return Ok(format!(
+            "# Anti-Hallucination Verification: BLOCKED (300_LOC_CAP_EXCEEDED)\n\n\
+            - Target File: `{}` (Current Length: **{} lines** / hard limit: 300 lines)\n\n\
+            **Error: 300_LOC_LIMIT_EXCEEDED**: Newly created or modified code file '{}' has {} lines, which breaches the 300 LOC hard ceiling.\n\
+            You cannot verify or complete this task until this file is decomposed into modular sub-modules (< 150 LOC each).\n\n\
+            **Action Required**: Decompose `{}` into focused sub-modules via BATCH `workflow_gate(action=\"authorize_edit\", relative_paths=[\"{}\", \"<path_to_new_submodule>\"], justification=\"Refactor/Decompose: ...\")`.",
+            file_rel, loc, file_rel, loc, file_rel, file_rel
+        ));
+    }
+
     let v_cmd = arguments
         .get("verification_command")
         .and_then(|v| v.as_str());

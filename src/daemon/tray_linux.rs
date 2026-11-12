@@ -20,7 +20,9 @@ impl Tray for LinuxTray {
     }
 
     fn icon_name(&self) -> String {
-        "agent-guidance".into()
+        // Leave empty so GNOME AppIndicator falls back to icon_pixmap instead of
+        // creating a missing Gio.ThemedIcon that renders '...' (image-loading-symbolic).
+        String::new()
     }
 
     fn tool_tip(&self) -> ToolTip {
@@ -36,24 +38,31 @@ impl Tray for LinuxTray {
             return Vec::new();
         };
 
-        let decoded = img.into_rgba8();
-        let (width, height) = decoded.dimensions();
-        let raw_rgba = decoded.into_raw();
+        [32, 64]
+            .into_iter()
+            .map(|size| {
+                let decoded = img
+                    .resize_exact(size, size, image::imageops::FilterType::Lanczos3)
+                    .into_rgba8();
+                let (width, height) = decoded.dimensions();
+                let raw_rgba = decoded.into_raw();
 
-        // FreeDesktop SNI: ARGB32 in network byte order (Alpha, Red, Green, Blue)
-        let mut argb_data = Vec::with_capacity(raw_rgba.len());
-        for chunk in raw_rgba.chunks_exact(4) {
-            argb_data.push(chunk[3]); // Alpha
-            argb_data.push(chunk[0]); // Red
-            argb_data.push(chunk[1]); // Green
-            argb_data.push(chunk[2]); // Blue
-        }
+                // FreeDesktop SNI: ARGB32 in network byte order (Alpha, Red, Green, Blue)
+                let mut argb_data = Vec::with_capacity(raw_rgba.len());
+                for chunk in raw_rgba.chunks_exact(4) {
+                    argb_data.push(chunk[3]); // Alpha
+                    argb_data.push(chunk[0]); // Red
+                    argb_data.push(chunk[1]); // Green
+                    argb_data.push(chunk[2]); // Blue
+                }
 
-        vec![Icon {
-            width: width as i32,
-            height: height as i32,
-            data: argb_data,
-        }]
+                Icon {
+                    width: width as i32,
+                    height: height as i32,
+                    data: argb_data,
+                }
+            })
+            .collect()
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
@@ -161,7 +170,7 @@ mod tests {
         let tray = LinuxTray { port: 8080 };
         assert_eq!(tray.id(), "agent-guidance-mcp");
         assert_eq!(tray.title(), format!("Agent Guidance v{}", env!("CARGO_PKG_VERSION")));
-        assert_eq!(tray.icon_name(), "agent-guidance");
+        assert_eq!(tray.icon_name(), "");
 
         let tip = tray.tool_tip();
         assert_eq!(tip.title, format!("Agent Guidance v{}", env!("CARGO_PKG_VERSION")));
@@ -171,12 +180,11 @@ mod tests {
         assert_eq!(menu.len(), 5);
 
         let icons = tray.icon_pixmap();
-        assert_eq!(icons.len(), 1);
-        assert!(icons[0].width > 0);
-        assert!(icons[0].height > 0);
-        assert_eq!(
-            icons[0].data.len(),
-            (icons[0].width * icons[0].height * 4) as usize
-        );
+        assert_eq!(icons.len(), 2);
+        for (icon, expected_size) in icons.iter().zip([32, 64]) {
+            assert_eq!(icon.width, expected_size);
+            assert_eq!(icon.height, expected_size);
+            assert_eq!(icon.data.len(), (expected_size * expected_size * 4) as usize);
+        }
     }
 }

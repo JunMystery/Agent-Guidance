@@ -39,6 +39,7 @@ pub(crate) fn evaluate_single_file_auth(
     justification: &str,
     arch_pattern: &str,
     state: &mut ServerState,
+    in_batch_with_new_file: bool,
 ) -> SingleFileAuthOutcome {
     let mut outcome = SingleFileAuthOutcome {
         rel_path: rel_path.to_string(),
@@ -80,14 +81,32 @@ pub(crate) fn evaluate_single_file_auth(
         }
     }
 
-    if outcome.target_loc >= 300 && !is_exempt && !refactor_intent {
-        let msg = crate::catalog::blueprint::format_decomposition_guidance(
-            rel_path,
-            outcome.target_loc,
-            arch_pattern,
-        );
-        outcome.error_msg = Some(msg);
-        return outcome;
+    if outcome.target_loc >= 300 && !is_exempt {
+        if !in_batch_with_new_file {
+            let guidance = crate::catalog::blueprint::format_decomposition_guidance(
+                rel_path,
+                outcome.target_loc,
+                arch_pattern,
+            );
+            let msg = format!(
+                "{}\n\n**Single-File Prohibition**: Single-file edit authorization on files >= 300 LOC is strictly blocked to prevent monolithic degradation.\n\
+                You MUST authorize via BATCH (`relative_paths`) containing `{}` alongside at least one NEW sub-module file (< 150 LOC) to receive extracted logic:\n\
+                `workflow_gate(action=\"authorize_edit\", project_path=\"{}\", relative_paths=[\"{}\", \"<path_to_new_submodule>\"], justification=\"Refactor/Decompose: [explanation]\")`",
+                guidance, rel_path, proj_path.display(), rel_path
+            );
+            outcome.error_msg = Some(msg);
+            return outcome;
+        }
+
+        if !refactor_intent {
+            let msg = crate::catalog::blueprint::format_decomposition_guidance(
+                rel_path,
+                outcome.target_loc,
+                arch_pattern,
+            );
+            outcome.error_msg = Some(msg);
+            return outcome;
+        }
     }
 
     if impact.risk_level == RiskLevel::High

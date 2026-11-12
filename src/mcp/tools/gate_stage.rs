@@ -14,6 +14,25 @@ pub(crate) fn count_file_lines(path: &Path) -> usize {
     }
 }
 
+pub(crate) fn check_post_edit_300_loc_trap(
+    proj_path: &Path,
+    state: &ServerState,
+) -> Result<(), (String, usize)> {
+    for file_rel in &state.modified_files {
+        if is_exempt_from_loc_limit(file_rel) {
+            continue;
+        }
+        let full = proj_path.join(file_rel);
+        if full.exists() && full.is_file() {
+            let loc = count_file_lines(&full);
+            if loc >= 300 {
+                return Err((file_rel.clone(), loc));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn handle_set_stage(
     state: &mut ServerState,
     stage_target: Option<&str>,
@@ -64,20 +83,11 @@ pub(crate) fn handle_advance(
 
     // 300 LOC Post-Edit Hard Trap: Block advancing if any modified/created code file >= 300 LOC
     if target_stage == "Proposal" || target_stage == "Review" {
-        for file_rel in &state.modified_files {
-            if is_exempt_from_loc_limit(file_rel) {
-                continue;
-            }
-            let full = proj_path.join(file_rel);
-            if full.exists() && full.is_file() {
-                let loc = count_file_lines(&full);
-                if loc >= 300 {
-                    return format!(
-                        "# Workflow Gate: BLOCKED (300_LOC_CAP_EXCEEDED)\n\n- Target File: `{}` (Current Length: **{} lines** / limit: 300 lines)\n\n**Error: 300_LOC_LIMIT_EXCEEDED**: Newly created or modified code file '{}' has {} lines, which breaches the 300 LOC limit. You cannot advance workflow stages until this file is decomposed into modular sub-files (< 150 LOC each).\n\n**Action Required**: Decompose `{}` into focused sub-modules using `workflow_gate(action=\"authorize_edit\", justification=\"Refactor/Decompose: ...\")`.",
-                        file_rel, loc, file_rel, loc, file_rel
-                    );
-                }
-            }
+        if let Err((file_rel, loc)) = check_post_edit_300_loc_trap(proj_path, state) {
+            return format!(
+                "# Workflow Gate: BLOCKED (300_LOC_CAP_EXCEEDED)\n\n- Target File: `{}` (Current Length: **{} lines** / limit: 300 lines)\n\n**Error: 300_LOC_LIMIT_EXCEEDED**: Newly created or modified code file '{}' has {} lines, which breaches the 300 LOC limit. You cannot advance workflow stages until this file is decomposed into modular sub-files (< 150 LOC each).\n\n**Action Required**: Decompose `{}` into focused sub-modules via batch `workflow_gate(action=\"authorize_edit\", relative_paths=[\"{}\", \"<new_submodule>\"], justification=\"Refactor/Decompose: ...\")`.",
+                file_rel, loc, file_rel, loc, file_rel, file_rel
+            );
         }
     }
 

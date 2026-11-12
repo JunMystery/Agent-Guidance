@@ -21,6 +21,14 @@ mod tests {
         assert!(is_exempt_from_loc_limit("Cargo.lock"));
         assert!(is_exempt_from_loc_limit("query.sql"));
         assert!(is_exempt_from_loc_limit(".env"));
+        assert!(is_exempt_from_loc_limit(".env.local"));
+        assert!(is_exempt_from_loc_limit(".env.production"));
+        assert!(is_exempt_from_loc_limit("Makefile"));
+        assert!(is_exempt_from_loc_limit("Dockerfile"));
+        assert!(is_exempt_from_loc_limit(".dockerignore"));
+        assert!(is_exempt_from_loc_limit(".editorconfig"));
+        assert!(is_exempt_from_loc_limit("server.conf"));
+        assert!(is_exempt_from_loc_limit("go.sum"));
 
         // Assets & Static files
         assert!(is_exempt_from_loc_limit("index.html"));

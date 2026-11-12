@@ -45,6 +45,9 @@ function buildRulesHtml(container, data, project) {
         <div style="font-size:12px;color:var(--text-secondary);">
           ${isGlobal ? (t('rules.global_desc') || 'Default rules applied to all workspaces.') : (t('rules.project_desc') || 'Custom rules for this project:') + ' <code>' + project + '</code>'}
         </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+          Precedence: User's main rules (AGENTS.md, RULES.md) always override tool micro-rules.
+        </div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
         ${revertBtnHtml}

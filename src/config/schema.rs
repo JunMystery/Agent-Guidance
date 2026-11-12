@@ -193,7 +193,7 @@ impl ToolRulesConfig {
             "task_pipeline".to_string(),
             ToolRuleItem::new(
                 true,
-                "CALL FIRST before coding. Reset phase state, detect architecture, and verify modularity blueprint (<300 LOC cap).",
+                "CALL FIRST before coding. Reset phase state, detect architecture, and verify modularity blueprint (<300 LOC cap across all phases).",
             ),
         );
         m.insert(
@@ -214,14 +214,14 @@ impl ToolRulesConfig {
             "project_context".to_string(),
             ToolRuleItem::new(
                 true,
-                "Read bounded code (max 300 LOC). Use clustered read for related files. Never use native IDE/shell tools to read code.",
+                "Read bounded code (max 300 LOC). Files >= 300 LOC are monolithic: decompose into sub-modules (< 150 LOC) rather than adding code.",
             ),
         );
         m.insert(
             "workflow_gate".to_string(),
             ToolRuleItem::new(
                 true,
-                "Always authorize file edits (prefer batch). Block additions to files >= 300 LOC.",
+                "Always authorize file edits (prefer batch). Files >= 300 LOC require paired batch auth with new sub-module file(s) (< 150 LOC).",
             ),
         );
         m.insert(

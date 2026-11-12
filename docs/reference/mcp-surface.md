@@ -220,7 +220,8 @@ $$\text{Context} \longrightarrow \text{Plan} \longrightarrow \text{Ask\_Revise} 
 * **Build Gate**: Transitioning to `Build` or editing files requires `plan_approved = true`.
 * **Fix Circuit Breaker**: Exceeding 3 consecutive fix attempts trips the circuit breaker, resetting stage to `Ask_Revise`, resetting `plan_approved = false`, and requiring user intervention.
 * **Modularity Gate (New Files)**: Rejects 40 compound plural container suffixes (`*modals`, `*services`, `*handlers`, `*views`, `*helpers`, etc.) with `COMPOUND_FILE_NAME_PROHIBITED` and multi-component descriptions with `MULTI_COMPONENT_NEW_FILE_PROHIBITED`.
-* **300 LOC Refactor Bypass**: Files with $\ge 300$ LOC cannot receive new code unless `justification` contains explicit refactoring keywords (`refactor`, `decompose`, `extract`, `split`, `tách file`).
+* **300 LOC Modular Decomposition & Paired Batch Mandate**: Single-file edit authorization on non-exempt files with $\ge 300$ LOC is strictly blocked. Modifying monolithic files requires paired batch authorization (`relative_paths=[target, new_submodule]`) alongside at least one new sub-module file (< 150 LOC) and refactoring keywords (`refactor`, `decompose`, `extract`, `split`, `tách file`). Docs, data, and configs (`.md`, `.toml`, `.env.*`, `.conf`, `.sum`, `Makefile`, `Dockerfile`, `.dockerignore`, `.editorconfig`) are exempt.
+* **Rule Precedence Hierarchy**: User's main rules (`AGENTS.md`, `RULES.md`, system prompt) strictly take precedence over injected tool micro-rules. Tool micro-rules appear as `[!NOTE]` advisories.
 * **Critical Hub Guard**: Files with $> 8$ dependents require `justification` with $\ge 10$ characters.
 
 **Examples:**
@@ -287,7 +288,7 @@ The MCP server returns standardized domain error codes in response text when exe
 | `USER_CONFIRMATION_REQUIRED` | `select_skills` | Skill selection invoked while proposals were pending without confirmation | Pass `user_confirmed=True` after user confirms selection. |
 | `RELATIVE_PATH_REQUIRED` | `workflow_gate` | `authorize_edit` called without file path | Pass exact relative file path in `relative_path`. |
 | `PATH_TRAVERSAL_PROHIBITED` | `workflow_gate` | Path escapes workspace root via `..` or invalid symlink | Specify relative path inside project boundaries. |
-| `300_LOC_CAP_EXCEEDED` | `workflow_gate` | Attempted to advance stage to `Proposal`/`Review` while a modified file has $\ge 300$ LOC | Decompose file into sub-modules (< 150 LOC each). |
+| `300_LOC_CAP_EXCEEDED` | `workflow_gate`, `guidance(verify)` | Attempted to verify (`guidance(operation="verify")`) or advance to `Proposal`/`Review` while a modified non-exempt code file has $\ge 300$ LOC | Decompose file into sub-modules (< 150 LOC each) via paired batch authorization. |
 | `COMPOUND_FILE_NAME_PROHIBITED` | `workflow_gate` | New file name contains a compound plural container suffix (`*modals`, `*services`, etc.) | Name files for a single responsibility. |
 | `MULTI_COMPONENT_NEW_FILE_PROHIBITED` | `workflow_gate` | New file justification describes multiple distinct components | Decompose into separate single-responsibility files. |
 | `HIGH_RISK_JUSTIFICATION_REQUIRED` | `workflow_gate` | Modifying a critical hub file (>8 dependents) with justification < 10 chars | Provide detailed rationale and test verification plan in `justification`. |

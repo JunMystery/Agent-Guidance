@@ -132,15 +132,17 @@ Calculate blast radius and generate Mermaid DAG:
 }
 ```
 
-### Authorize File Edit (Individual File Gate)
+### Authorize File Edit (Single File & Paired Batch Decomposition)
+
+Single-file authorization is blocked for non-exempt files $\ge 300$ LOC; pass `relative_paths` alongside a new sub-module (< 150 LOC) with refactoring justification:
 
 ```json
 {
   "action": "authorize_edit",
   "project_path": "/absolute/path/to/project",
-  "relative_path": "src/auth/token_service.rs",
+  "relative_paths": ["src/auth/token_service.rs", "src/auth/token_validator.rs"],
   "risk_level": "LOW",
-  "justification": "Add token expiry check in auth middleware"
+  "justification": "Refactor/Decompose token validation into focused sub-module"
 }
 ```
 
@@ -210,7 +212,8 @@ Outputs a structured provenance report:
 
 ## Token Guidance & Best Practices
 
-- **Enforce 300 LOC Cap**: All source files must remain strictly under 300 LOC (aim for < 150 LOC per sub-module).
+- **Enforce 300 LOC Cap**: All non-exempt source files must remain strictly under 300 LOC (aim for < 150 LOC per sub-module). Modifying $\ge 300$ LOC files requires paired batch authorization with new sub-module creation; docs, data, and configs are exempt.
+- **Rule Precedence Hierarchy**: User's main rules (`AGENTS.md`, `RULES.md`, system prompt) always take precedence over injected MCP tool micro-rules.
 - **Targeted Reads**: Prefer `target_symbol` or `start_line`/`end_line` ranges over whole-file dumps.
 - **Tree Scans**: Use `max_depth=3` (default) for balanced project overview.
 - **Avoid Duplication**: Search for existing utilities with `project_context(operation="reusable")` before adding new helper logic.
