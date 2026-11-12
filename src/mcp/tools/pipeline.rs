@@ -192,7 +192,23 @@ pub(crate) fn handle(
         format!("\n\n## Dynamic Split Blueprint\n{}", dynamic_blueprint)
     };
 
-    let next_step_prompt = if phase == "plan" {
+    let should_bundle_skills = !is_approval_msg && matches!(raw_phase, None | Some("plan"));
+    let skills_section = if should_bundle_skills {
+        match super::guidance_search::handle_search(&arguments, &task.to_lowercase(), state) {
+            Ok(out) => format!("\n\n{}", out),
+            Err(_) => String::new(),
+        }
+    } else {
+        String::new()
+    };
+
+    let next_step_prompt = if !skills_section.is_empty() {
+        if skills_section.contains("SKILL_PROPOSAL: MANDATORY USER INTERACTION REQUIRED") {
+            "-> NEXT STEP: Ask user via `ask_question` using the bundled Skill Proposal above, then invoke `select_skills(skills=[...], user_confirmed=true)`."
+        } else {
+            "-> NEXT STEP: Skill discovery complete (no confirmation needed). Proceed directly to task planning or codebase inspection (`project_context`)."
+        }
+    } else if phase == "plan" {
         "-> NEXT STEP: Call `guidance(operation=\"search\", task=\"...\")` FIRST to discover and propose required domain skills. When skills are proposed, ask user via `ask_question` before invoking `select_skills(skills=[...], user_confirmed=true)`. If no matching skills are found, proceed directly to task planning or codebase inspection (`project_context`) without asking."
     } else if phase == "build" || phase == "fix" || phase == "refactor" {
         "-> NEXT STEP: If codebase inspection is needed, use `project_context(operation=\"search\" | \"read\")`. When ready to write code, obtain authorization via `workflow_gate(action=\"authorize_edit\", ...)`."
@@ -212,7 +228,7 @@ pub(crate) fn handle(
 
     state.record_call(800, 300);
     Ok(format!(
-        "# Task Pipeline Activated\n\nTask: {}\nActive Phase: {}\nProject: {} ({} files scanned{}){}{}\n\n## Architecture Guidance\n- Active Pattern: {}\n- Enforce: Create thin dispatcher main + sub-module files from line 1 (Upfront Architecture, 300 LOC Cap)\n\n{}\n\nPriority Gate: PASSED\nStatus: Ready for execution.\n\n{}",
+        "# Task Pipeline Activated\n\nTask: {}\nActive Phase: {}\nProject: {} ({} files scanned{}){}{}\n\n## Architecture Guidance\n- Active Pattern: {}\n- Enforce: Create thin dispatcher main + sub-module files from line 1 (Upfront Architecture, 300 LOC Cap)\n\n{}{}\n\nPriority Gate: PASSED\nStatus: Ready for execution.\n\n{}",
         task,
         display_phase,
         proj_path.display(),
@@ -222,6 +238,7 @@ pub(crate) fn handle(
         blueprint_section,
         detected_arch,
         core_rules_checklist,
+        skills_section,
         next_step_prompt
     ))
 }
@@ -249,5 +266,31 @@ mod tests {
         assert_eq!(infer_or_normalize_phase(Some("plan"), "Lên kế hoạch sửa lỗi crash"), "plan");
         assert_eq!(infer_or_normalize_phase(Some("plan"), "Design architecture for payment"), "plan");
         assert_eq!(infer_or_normalize_phase(Some("plan"), "general planning task"), "plan");
+    }
+
+    #[test]
+    fn test_task_pipeline_bundles_skill_discovery() {
+        let temp_dir = std::env::temp_dir().join(format!("pipeline_bundle_test_{}", std::process::id()));
+        let skill_dir = temp_dir.join(".agents").join("skills").join("sql-safety");
+        let _ = std::fs::create_dir_all(&skill_dir);
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: sql-safety\ndescription: SQL safety rules.\n---\n# SQL Safety\n",
+        ).unwrap();
+
+        let mut state = ServerState::new();
+        let res = handle(
+            serde_json::json!({
+                "task": "Use sql-safety to fix SQL queries",
+                "project_path": temp_dir.to_str().unwrap(),
+                "phase": "plan"
+            }),
+            &mut state,
+        );
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let out = res.unwrap();
+        assert!(out.contains("Skill Search Results"));
+        assert!(out.contains("sql-safety"));
+        assert!(!out.contains("Call `guidance(operation=\"search\""));
     }
 }

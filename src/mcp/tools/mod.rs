@@ -112,6 +112,7 @@ pub fn handle_tool_call(
             .map(|s| s.to_string())
             .or_else(|| {
                 if name == "select_skills" || name == "select_skill" {
+                    let is_skip = |s: &str| matches!(s.trim().to_ascii_lowercase().as_str(), "none" | "null" | "skip" | "no skills" | "n/a" | "cancel");
                     let skills_val = arguments
                         .get("skills")
                         .or_else(|| arguments.get("skill"))
@@ -122,7 +123,7 @@ pub fn handle_tool_call(
                         let names: Vec<String> = arr
                             .iter()
                             .filter_map(|v| v.as_str().map(skills::clean_skill_identifier))
-                            .filter(|c| !c.is_empty())
+                            .filter(|c| !c.is_empty() && !is_skip(c))
                             .collect();
                         if !names.is_empty() {
                             Some(names.join(", "))
@@ -131,7 +132,7 @@ pub fn handle_tool_call(
                         }
                     } else if let Some(s) = skills_val.and_then(|v| v.as_str()) {
                         let clean = skills::clean_skill_identifier(s);
-                        if !clean.is_empty() {
+                        if !clean.is_empty() && !is_skip(&clean) {
                             Some(clean)
                         } else {
                             Some("none".to_string())

@@ -168,6 +168,18 @@ pub fn run_upgrade() -> Result<()> {
         fs::set_permissions(&target_bin, perms)?;
     }
 
+    // Remove legacy cargo-installed binary to prevent PATH shadowing
+    if let Some(home) = dirs::home_dir() {
+        let cargo_bin = home.join(".cargo").join("bin").join(if cfg!(windows) {
+            "agent-guidance.exe"
+        } else {
+            "agent-guidance"
+        });
+        if cargo_bin.exists() && cargo_bin != target_bin {
+            let _ = fs::remove_file(&cargo_bin);
+        }
+    }
+
     let _ = fs::remove_dir_all(&tmp_dir);
     if let Ok(mut entries) = fs::read_dir(&staging_root) {
         if entries.next().is_none() {

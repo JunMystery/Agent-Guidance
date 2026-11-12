@@ -12,7 +12,7 @@ All code inspection, modification, and execution tools require `task_pipeline` t
 
 ### 1. `task_pipeline` -- Call First (Unlocks Priority Gate)
 
-One-stop context preparation and priority gate unlocker. Initializes workspace boundaries, detects project architectural patterns, synthesizes dynamic split blueprints (< 300 LOC mandate), and injects memorized project learnings in an ultra-fast, token-bounded response (< 250 tokens).
+One-stop context preparation, Turn 1 skill discovery, and priority gate unlocker. Initializes workspace boundaries, detects project architectural patterns, auto-bundles skill search proposals (`phase="plan"`), synthesizes dynamic split blueprints (< 300 LOC mandate), and injects memorized project learnings in a single token-bounded response (eliminating a separate `guidance(operation="search")` roundtrip).
 
 ```python
 task_pipeline(

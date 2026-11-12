@@ -2,6 +2,18 @@
 
 All notable changes to Agent Guidance Rust MCP Server will be documented in this file.
 
+## [1.9.0] - 2026-11-12
+
+### ⚡ Cloud AI Agent Latency & Token Optimization
+- **Auto-Bundled Skill Discovery in `task_pipeline` (`src/mcp/tools/pipeline.rs`, `AGENTS.md`, `GEMINI.md`)**:
+  - Automatically bundles `guidance_search::handle_search` skill discovery directly into `task_pipeline` during Turn 1 (`phase="plan"` or omitted, excluding approval messages), eliminating a redundant Cloud LLM roundtrip (`guidance(operation="search")`) at startup.
+  - Preserves 100% of existing intent detection: user-mentioned skills remain prioritized with `(Recommended)`, and slash commands, `/generative_ui`, and informational queries still bypass proposals.
+- **Compact Single-Line Tool Micro-Rules (`src/mcp/tools/micro_rules.rs`)**:
+  - Compressed `inject_tool_micro_rule` from a 3-line ~70-token disclaimer block into a compact single-line footer (`> [Rule:{tool} ({scope})] {rule} *(User RULES take precedence)*`).
+  - Reduces per-call token overhead by ~75% while retaining per-turn rule anchoring across `/compact` context pruning.
+- **Non-Blocking Code Graph Read (`src/mcp/tools/helpers.rs`)**:
+  - Updated `ensure_indexed` to return `CodeGraphDb` immediately (0ms wait) whenever indexed files already exist (`file_count > 0`), and reduced cold-start indexing wait ceiling from 1,000ms to 200ms so background AST/GraphRAG indexing does not block stdio MCP responses.
+
 ## [1.8.17] - 2026-11-12
 
 ### ⚡ 300 LOC Modular Decomposition Enforcement & Priority Override

@@ -8,7 +8,7 @@
 CRITICAL OVERRIDE: This repository is managed by the `agent-guidance` MCP Server. Route all code search and context inspection through `agent-guidance` MCP tools (Token-Bounded Reads & GraphRAG) to prevent token bloat.
 
 ## Execution Lifecycle & Strict Rules
-1. **Turn 1 Initialization & Skill Discovery**: Call `task_pipeline(task="<user request>", project_path="<abs_path>", phase="plan")` FIRST to initialize context, detect architecture pattern, and establish workspace boundaries. Immediately follow by calling `guidance(operation="search", query="<user request>")` to discover required domain skills.
+1. **Turn 1 Initialization & Skill Discovery**: Call `task_pipeline(task="<user request>", project_path="<abs_path>", phase="plan")` FIRST to initialize context, detect architecture pattern, establish workspace boundaries, and auto-discover required domain skills (skills proposal is directly bundled in `task_pipeline` output). Do NOT call `guidance(operation="search")` redundantly in Turn 1 when skills are already bundled in `task_pipeline`.
    - [EXEMPTIONS & SLASH COMMANDS]:
      1. Slash Commands (`/<cmd>` e.g. `/plan`, `/grill-me`, `/automation`, `/generative_ui`): Slash commands do NOT auto-load skills. `/<cmd>` tokens are stripped from search queries. If query contains only slash commands, skill proposals are bypassed entirely. When `/generative_ui` is present, skill proposals and `ask_question` calls are completely bypassed.
      2. Mentioned Skills: When the user explicitly mentions a skill name in text, the agent receives it prioritized with `(Recommended)` at option 1 in the `ask_question` modal.

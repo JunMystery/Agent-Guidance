@@ -111,13 +111,17 @@ pub fn ensure_indexed(proj_path: &Path) -> Option<CodeGraphDb> {
     if !is_watching(proj_path) {
         start_watching(proj_path);
     }
-    let start = std::time::Instant::now();
-    while crate::context::graph_rag::jit_sync::is_indexing(proj_path)
-        && start.elapsed() < std::time::Duration::from_millis(1000)
-    {
-        std::thread::sleep(std::time::Duration::from_millis(10));
+    let db = CodeGraphDb::open_for_project(proj_path).ok()?;
+    let has_files = db.file_count().map(|c| c > 0).unwrap_or(false);
+    if !has_files && crate::context::graph_rag::jit_sync::is_indexing(proj_path) {
+        let start = std::time::Instant::now();
+        while crate::context::graph_rag::jit_sync::is_indexing(proj_path)
+            && start.elapsed() < std::time::Duration::from_millis(200)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
-    CodeGraphDb::open_for_project(proj_path).ok()
+    Some(db)
 }
 
 pub fn embed_query(query: &str) -> Option<Vec<f32>> {

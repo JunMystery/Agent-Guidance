@@ -10,8 +10,8 @@ Common usage patterns and workflows for AI agents using the Agent Guidance MCP s
 
 Every coding task follows a strict 6-step execution lifecycle:
 
-1. **Initialize Context**: Call `task_pipeline(task="...", project_path="...", phase="plan")` to initialize project boundaries, detect architecture, and unlock the priority gate.
-2. **Inject Skills (Optional)**: Select and load on-demand skill guides with `select_skills(skills=[...])`.
+1. **Initialize Context & Discover Skills**: Call `task_pipeline(task="...", project_path="...", phase="plan")` to initialize project boundaries, detect architecture, auto-bundle domain skill proposals, and unlock the priority gate.
+2. **Inject Skills (Optional)**: Confirm proposed skills via `ask_question` and load on-demand guides with `select_skills(skills=[...], user_confirmed=true)`.
 3. **Inspect Code Graph**: Search and read symbols using token-bounded operations via `project_context(operation="search"|"read"|"symbols"|"callers"|"blast_radius", ...)` (< 300 LOC cap).
 4. **Plan & Get User Approval**: Create/update `implementation_plan.md` and obtain explicit user consensus.
 5. **Authorize Edit**: Before creating or modifying any file, call `workflow_gate(action="authorize_edit", project_path="...", relative_path="...", risk_level="LOW", justification="...")`.

@@ -152,7 +152,7 @@ Agent Guidance forces autonomous agents to follow an enterprise engineering life
 
 | Tool Name | Role | Primary Developer Capabilities |
 | :--- | :--- | :--- |
-| **`task_pipeline`** | **Entrypoint Orchestrator** | CALL FIRST. Unlocks priority gate, detects architecture, injects memorized learnings, and synthesizes upfront modular blueprints (<300 LOC mandate). |
+| **`task_pipeline`** | **Entrypoint Orchestrator** | CALL FIRST. Unlocks priority gate, detects architecture, auto-bundles Turn 1 skill discovery, injects memorized learnings, and synthesizes upfront modular blueprints (<300 LOC mandate). |
 | **`project_context`** | **GraphRAG & Bounded Reader** | Hierarchical Leiden GraphRAG (`drift`, `global`, `local`), Subgraph Bundling (<250 LOC definition + 1-hop callers/callees), AST skeletonization, and 6-phase instant search cascade (<100ms). |
 | **`workflow_gate`** | **Stage & Edit Guard** | Enforces 300 LOC hard ceiling, blocks compound plural containers (`*utils`, `*services`), creates rollback snapshots, and manages fix circuit breakers. |
 | **`guidance`** | **Standards & Skill Catalog** | 2-stage Candle BERT vector search + Cross-Encoder reranking over embedded domain skills, pre-code architecture checklists, and empirical verification contracts. |

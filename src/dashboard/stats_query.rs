@@ -107,9 +107,9 @@ pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>, timeframe: &
         }
     }
     let tc_sql = if is_proj {
-        "SELECT operation, COUNT(*) FROM tool_calls WHERE started_at >= ?1 AND (tool_name = 'select_skills' OR tool_name = 'select_skill') AND operation IS NOT NULL AND operation != 'none' AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE) GROUP BY operation"
+        "SELECT operation, COUNT(*) FROM tool_calls WHERE started_at >= ?1 AND (tool_name = 'select_skills' OR tool_name = 'select_skill') AND operation IS NOT NULL AND operation != 'none' COLLATE NOCASE AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE) GROUP BY operation"
     } else {
-        "SELECT operation, COUNT(*) FROM tool_calls WHERE started_at >= ?1 AND (tool_name = 'select_skills' OR tool_name = 'select_skill') AND operation IS NOT NULL AND operation != 'none' GROUP BY operation"
+        "SELECT operation, COUNT(*) FROM tool_calls WHERE started_at >= ?1 AND (tool_name = 'select_skills' OR tool_name = 'select_skill') AND operation IS NOT NULL AND operation != 'none' COLLATE NOCASE GROUP BY operation"
     };
     if let Ok(mut tc_stmt) = conn.prepare(tc_sql) {
         let mapper = |r: &rusqlite::Row| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?));
@@ -241,7 +241,8 @@ fn map_recent_action(row: &rusqlite::Row) -> rusqlite::Result<Value> {
 
 fn normalize_skill_name(raw: &str) -> Option<String> {
     let clean = crate::mcp::tools::skills::clean_skill_identifier(raw);
-    if clean.is_empty() {
+    let lower = clean.trim().to_ascii_lowercase();
+    if clean.is_empty() || matches!(lower.as_str(), "none" | "null" | "skip" | "no skills" | "n/a" | "cancel") {
         None
     } else {
         Some(clean)

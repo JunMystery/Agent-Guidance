@@ -19,6 +19,14 @@ static DB_MUTEX: Mutex<()> = Mutex::new(());
 static DB_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 pub fn get_db_path() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("ag_test_usage_{}.db", std::process::id()));
+    }
+    if let Ok(p) = std::env::var("AGENT_GUIDANCE_DB_PATH") {
+        if !p.trim().is_empty() {
+            return PathBuf::from(p.trim());
+        }
+    }
     dirs::home_dir()
         .map(|h| h.join(".agent-guidance").join("usage.db"))
         .unwrap_or_else(|| PathBuf::from("usage.db"))

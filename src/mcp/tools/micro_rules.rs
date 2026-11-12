@@ -71,10 +71,10 @@ pub fn inject_tool_micro_rule(
     }
 
     let banner = format!(
-        "\n\n> [!NOTE] **Tool Micro-Rule (`{}`) [{}] (Lower Priority than User's Main RULES)**:\n> {}\n> *(Precedence Notice: User's main RULES in AGENTS.md, RULES.md, or system prompt ALWAYS take precedence over tool micro-rules.)*",
+        "\n\n> [Rule:{} ({})] {} *(User RULES take precedence)*",
         canonical,
         scope.label(),
-        item.rule.trim().replace('\n', "\n> ")
+        item.rule.trim().replace('\n', " ")
     );
 
     if let Some(arr) = output.get_mut("content").and_then(|c| c.as_array_mut()) {
@@ -128,9 +128,8 @@ mod tests {
 
         inject_tool_micro_rule("task_pipeline", None, &mut val);
         let text = val["content"][1]["text"].as_str().unwrap();
-        assert!(text.contains("Tool Micro-Rule (`task_pipeline`) [Default Rule]"));
-        assert!(text.contains("Lower Priority than User's Main RULES"));
-        assert!(text.contains("Precedence Notice"));
+        assert!(text.contains("[Rule:task_pipeline (Default Rule)]"));
+        assert!(text.contains("User RULES take precedence"));
         assert!(text.contains("Initial output."));
     }
 }
