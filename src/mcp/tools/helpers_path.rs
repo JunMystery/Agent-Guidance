@@ -10,22 +10,12 @@ pub fn is_generic_home_dir(p: &Path) -> bool {
         return true;
     }
     let clean_p = p_lossy.trim_end_matches(['/', '\\']);
-    if let Some(home) = dirs::home_dir() {
-        if clean_p.eq_ignore_ascii_case(home.to_string_lossy().trim_end_matches(['/', '\\'])) {
-            return true;
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        if clean_p.eq_ignore_ascii_case(home.trim_end_matches(['/', '\\'])) {
-            return true;
-        }
-    }
-    if let Ok(userprofile) = std::env::var("USERPROFILE") {
-        if clean_p.eq_ignore_ascii_case(userprofile.trim_end_matches(['/', '\\'])) {
-            return true;
-        }
-    }
-    false
+    let check_match = |var_val: Option<String>| {
+        var_val.map(|v| clean_p.eq_ignore_ascii_case(v.trim_end_matches(['/', '\\']))).unwrap_or(false)
+    };
+    check_match(dirs::home_dir().map(|h| h.to_string_lossy().to_string()))
+        || check_match(std::env::var("HOME").ok())
+        || check_match(std::env::var("USERPROFILE").ok())
 }
 
 fn is_ide_install_dir(p: &Path) -> bool {
@@ -58,6 +48,15 @@ pub fn detect_parent_process_cwd() -> Option<PathBuf> {
 
 /// Detects the active project path with strict session workspace isolation.
 pub fn detect_project_path(explicit_path: &str, state: &ServerState) -> PathBuf {
+    detect_project_path_with_targets(explicit_path, &[], state)
+}
+
+/// Detects the active project path with target path inference and session workspace isolation.
+pub fn detect_project_path_with_targets(
+    explicit_path: &str,
+    target_paths: &[String],
+    state: &ServerState,
+) -> PathBuf {
     let trimmed = explicit_path.trim();
     let is_dot = trimmed.is_empty() || trimmed == "." || trimmed == "./" || trimmed == ".\\";
 
@@ -73,7 +72,29 @@ pub fn detect_project_path(explicit_path: &str, state: &ServerState) -> PathBuf 
         }
     }
 
-    // 2. Strict Session Workspace Root: Bound directly by IDE initialize handshake
+    // 2. Target path inference: if target is absolute, resolve its project root
+    for target in target_paths {
+        let p_target = Path::new(target.trim());
+        if p_target.is_absolute() {
+            let start_dir = if p_target.is_dir() {
+                p_target
+            } else {
+                p_target.parent().unwrap_or(p_target)
+            };
+            if !is_generic_home_dir(start_dir) {
+                let inferred = crate::dashboard::projects_path::find_project_root(start_dir);
+                if !is_generic_home_dir(&inferred) {
+                    if state.workspace_roots.is_empty()
+                        || state.workspace_roots.iter().any(|r| inferred.starts_with(r))
+                    {
+                        return inferred;
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Strict Session Workspace Root: Bound directly by IDE initialize handshake
     if let Some(first_root) = state.workspace_roots.first() {
         let p = PathBuf::from(first_root);
         if !is_generic_home_dir(&p) {
@@ -81,21 +102,7 @@ pub fn detect_project_path(explicit_path: &str, state: &ServerState) -> PathBuf 
         }
     }
 
-    // 3. Process CWD (the exact working directory the IDE process spawned this MCP server in)
-    if let Ok(cwd) = std::env::current_dir() {
-        if !is_generic_home_dir(&cwd) {
-            return crate::dashboard::projects_path::find_project_root(&cwd);
-        }
-    }
-
-    // 4. Parent process CWD
-    if let Some(parent_cwd) = detect_parent_process_cwd() {
-        if !is_generic_home_dir(&parent_cwd) {
-            return crate::dashboard::projects_path::find_project_root(&parent_cwd);
-        }
-    }
-
-    // 5. Explicit state project path previously established in this session
+    // 4. Explicit session project path previously established in this session (e.g. task_pipeline)
     if let Some(ref sp) = state.project_path {
         let p = PathBuf::from(sp);
         if !is_generic_home_dir(&p) {
@@ -103,7 +110,21 @@ pub fn detect_project_path(explicit_path: &str, state: &ServerState) -> PathBuf 
         }
     }
 
-    // 6. Global persistent fallback ONLY if running headless CLI without IDE workspace
+    // 5. Process CWD (fallback only if no session project path set)
+    if let Ok(cwd) = std::env::current_dir() {
+        if !is_generic_home_dir(&cwd) {
+            return crate::dashboard::projects_path::find_project_root(&cwd);
+        }
+    }
+
+    // 6. Parent process CWD
+    if let Some(parent_cwd) = detect_parent_process_cwd() {
+        if !is_generic_home_dir(&parent_cwd) {
+            return crate::dashboard::projects_path::find_project_root(&parent_cwd);
+        }
+    }
+
+    // 7. Global persistent fallback ONLY if running headless CLI without IDE workspace
     if state.workspace_roots.is_empty() {
         if let Some(gp) = ServerState::read_global_project_path() {
             let p = PathBuf::from(&gp);
@@ -199,17 +220,13 @@ pub fn validate_path_scoped(base_path: &Path, rel_path: &str, allow_cross_worksp
     let p_clean_base = Path::new(clean_base_str);
 
     let stripped = if p_rel.is_absolute() {
-        if let Ok(sub) = p_rel.strip_prefix(base_path) {
-            sub.to_string_lossy().to_string()
-        } else if let Ok(sub) = p_rel.strip_prefix(&canonical_base) {
-            sub.to_string_lossy().to_string()
-        } else if let Ok(sub) = p_rel.strip_prefix(p_clean_base) {
+        if let Ok(sub) = p_rel.strip_prefix(base_path).or_else(|_| p_rel.strip_prefix(&canonical_base)).or_else(|_| p_rel.strip_prefix(p_clean_base)) {
             sub.to_string_lossy().to_string()
         } else if let Ok(can_rel) = p_rel.canonicalize() {
             if let Ok(sub) = can_rel.strip_prefix(&canonical_base) {
                 sub.to_string_lossy().to_string()
             } else {
-                let candidate = rel_path.trim_start_matches(|c| c == '/' || c == '\\');
+                let candidate = rel_path.trim_start_matches(['/', '\\']);
                 let joined = canonical_base.join(candidate);
                 if joined.exists() && joined.canonicalize().map(|p| p.starts_with(&canonical_base)).unwrap_or(false) {
                     candidate.to_string()
@@ -218,7 +235,7 @@ pub fn validate_path_scoped(base_path: &Path, rel_path: &str, allow_cross_worksp
                 }
             }
         } else {
-            let candidate = rel_path.trim_start_matches(|c| c == '/' || c == '\\');
+            let candidate = rel_path.trim_start_matches(['/', '\\']);
             let joined = canonical_base.join(candidate);
             if joined.starts_with(&canonical_base) {
                 candidate.to_string()

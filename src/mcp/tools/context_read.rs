@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::path::Path;
 
 use crate::mcp::state::ServerState;
-use super::helpers::validate_path;
+use super::helpers::{validate_path, validate_path_scoped};
 
 pub(crate) fn handle_read(
     arguments: &Value,
@@ -48,7 +48,7 @@ pub(crate) fn handle_read(
             );
         }
     } else {
-        match validate_path(proj_path, target_path) {
+        match validate_path_scoped(proj_path, target_path, true) {
             Ok(p) => (p, target_path.to_string()),
             Err(err_msg) => return format!("Security Error: {}", err_msg),
         }

@@ -4,7 +4,7 @@ use crate::mcp::state::ServerState;
 use super::gate_edit_batch::handle_batch_authorize;
 use super::gate_edit_single::evaluate_single_file_auth;
 pub use super::gate_exemptions::is_exempt_from_loc_limit;
-use super::helpers::{detect_project_path, resolve_architecture_pattern};
+use super::helpers::{detect_project_path_with_targets, resolve_architecture_pattern};
 
 pub(crate) fn extract_target_paths(arguments: &Value) -> Vec<String> {
     if let Some(arr) = arguments
@@ -43,13 +43,12 @@ pub(crate) fn handle_authorize_edit(
     arguments: &Value,
     state: &mut ServerState,
 ) -> String {
+    let paths = extract_target_paths(arguments);
     let proj_path_arg = arguments
         .get("project_path")
         .and_then(|p| p.as_str())
         .unwrap_or(".");
-    let proj_path = detect_project_path(proj_path_arg, state);
-
-    let paths = extract_target_paths(arguments);
+    let proj_path = detect_project_path_with_targets(proj_path_arg, &paths, state);
     let justification = arguments
         .get("justification")
         .and_then(|j| j.as_str())

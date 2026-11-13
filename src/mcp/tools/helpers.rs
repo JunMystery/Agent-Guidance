@@ -6,7 +6,8 @@ use crate::mcp::state::ServerState;
 
 #[allow(unused_imports)]
 pub use super::helpers_path::{
-    detect_parent_process_cwd, detect_project_path, is_generic_home_dir, validate_path,
+    detect_parent_process_cwd, detect_project_path, detect_project_path_with_targets,
+    is_generic_home_dir, validate_path, validate_path_scoped,
 };
 
 pub fn ensure_not_cancelled(state: &ServerState) -> Result<(), (i32, String)> {

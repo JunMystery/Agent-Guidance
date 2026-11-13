@@ -2,6 +2,70 @@ use super::*;
 use std::fs;
 
 #[test]
+fn test_detect_project_path_prefers_session_project_path() {
+    let temp_root = std::env::temp_dir().join(format!("ag_sess_pref_{}", std::process::id()));
+    let _ = fs::create_dir_all(&temp_root);
+
+    let mut state = ServerState::new();
+    state.workspace_roots = Vec::new();
+    state.project_path = Some(temp_root.to_string_lossy().to_string());
+
+    // When session project path is set and workspace_roots is empty, session project path takes precedence over CWD
+    let detected = detect_project_path(".", &state);
+    let canonical_temp = temp_root.canonicalize().unwrap_or(temp_root.clone());
+    let canonical_detected = detected.canonicalize().unwrap_or(detected);
+    assert_eq!(canonical_detected, canonical_temp);
+
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn test_detect_project_path_infers_from_absolute_target() {
+    let temp_root = std::env::temp_dir().join(format!("ag_target_infer_{}", std::process::id()));
+    let _ = fs::create_dir_all(&temp_root);
+    let target_file = temp_root.join("config.yaml");
+    fs::write(&target_file, "key: value\n").unwrap();
+
+    let state = ServerState::new();
+    let targets = vec![target_file.to_string_lossy().to_string()];
+    let detected = detect_project_path_with_targets(".", &targets, &state);
+    let canonical_temp = temp_root.canonicalize().unwrap_or(temp_root.clone());
+    let canonical_detected = detected.canonicalize().unwrap_or(detected);
+    assert_eq!(canonical_detected, canonical_temp);
+
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+#[test]
+fn test_context_read_absolute_path_in_active_session() {
+    let temp_proj = std::env::temp_dir().join(format!("ag_virdi_repro_{}", std::process::id()));
+    let _ = fs::create_dir_all(&temp_proj);
+    let config_file = temp_proj.join("config.yaml");
+    fs::write(&config_file, "port: 9871\nenv: prod\n").unwrap();
+
+    let mut state = ServerState::new();
+    state.workspace_roots = Vec::new();
+    state.project_path = Some(temp_proj.to_string_lossy().to_string());
+
+    let abs_path_str = config_file.to_string_lossy().to_string();
+    let res = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "read",
+            "relative_paths": [abs_path_str]
+        }),
+        &mut state,
+    );
+
+    assert!(res.is_ok(), "Tool call must succeed");
+    let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(!text.contains("PATH_TRAVERSAL_PROHIBITED"), "Must not trigger false security error: {}", text);
+    assert!(text.contains("port: 9871"), "Must read file content: {}", text);
+
+    let _ = fs::remove_dir_all(&temp_proj);
+}
+
+#[test]
 fn test_detect_project_path_prefers_workspace_root() {
     let temp_root = std::env::temp_dir().join(format!("ag_ws_test_{}", std::process::id()));
     let _ = fs::create_dir_all(&temp_root);

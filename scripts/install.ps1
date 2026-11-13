@@ -88,7 +88,7 @@ function Try-DownloadPrebuilt {
     try {
         $meta = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -UseBasicParsing -ErrorAction Stop
         $version = $meta.tag_name
-    } catch { $version = "v1.9.0" }
+    } catch { $version = "v1.9.1" }
 
     $tag = switch ($Prof) { { $_ -in "Client", "2" } { "client" }; { $_ -in "Server", "3" } { "server" }; default { "standalone" } }
     $candidates = @("agent-guidance-$tag-windows-x86_64.zip")

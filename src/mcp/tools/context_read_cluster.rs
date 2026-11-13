@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::path::Path;
 
 use crate::mcp::state::ServerState;
-use super::helpers::validate_path;
+use super::helpers::validate_path_scoped;
 
 pub(crate) fn handle_cluster_read(
     arguments: &Value,
@@ -31,7 +31,7 @@ pub(crate) fn handle_cluster_read(
             continue;
         }
 
-        let full_path = match validate_path(proj_path, &clean_path) {
+        let full_path = match validate_path_scoped(proj_path, &clean_path, true) {
             Ok(p) => p,
             Err(err_msg) => {
                 sections.push(format!(

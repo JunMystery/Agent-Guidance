@@ -6,7 +6,7 @@ use super::gate_approval::{
 };
 use super::gate_edit::handle_authorize_edit;
 use super::gate_stage::{handle_advance, handle_check, handle_set_stage, handle_status};
-use super::helpers::{detect_project_path, ensure_not_cancelled};
+use super::helpers::{detect_project_path_with_targets, ensure_not_cancelled};
 
 pub(crate) fn handle(
     arguments: Value,
@@ -43,7 +43,8 @@ pub(crate) fn handle(
         .get("project_path")
         .and_then(|p| p.as_str())
         .unwrap_or(".");
-    let proj_path = detect_project_path(proj_path_arg, state);
+    let target_paths = super::gate_edit::extract_target_paths(&arguments);
+    let proj_path = detect_project_path_with_targets(proj_path_arg, &target_paths, state);
 
     let resp = match action {
         "approve" | "approve_plan" => {

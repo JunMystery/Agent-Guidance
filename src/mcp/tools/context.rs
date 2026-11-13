@@ -15,7 +15,7 @@ use super::context_search::{handle_navigate, handle_search};
 use super::context_bundle::handle_subgraph_bundle;
 use super::context_enrich::{handle_enrich_graph, handle_query_semantic};
 use super::context_symbols::{handle_learn_alias, handle_references, handle_symbols};
-use super::helpers::{detect_project_path, ensure_not_cancelled};
+use super::helpers::{detect_project_path_with_targets, ensure_not_cancelled};
 
 pub(crate) fn handle(
     arguments: Value,
@@ -30,7 +30,8 @@ pub(crate) fn handle(
         .get("project_path")
         .and_then(|p| p.as_str())
         .unwrap_or(".");
-    let proj_path = detect_project_path(proj_path_arg, state);
+    let target_paths = super::gate_edit::extract_target_paths(&arguments);
+    let proj_path = detect_project_path_with_targets(proj_path_arg, &target_paths, state);
     state.update_project_path(&proj_path);
     let query = arguments
         .get("query")

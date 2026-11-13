@@ -2,6 +2,21 @@
 
 All notable changes to Agent Guidance Rust MCP Server will be documented in this file.
 
+## [1.9.1] - 2026-11-13
+
+### 🛡️ Workspace Root Resolution & Target Path Inference
+- **Session Project Priority in `detect_project_path` (`src/mcp/tools/helpers_path.rs`)**:
+  - Elevated `state.project_path` (established during `task_pipeline` or active session) to higher priority than `Process CWD` (`std::env::current_dir()`).
+  - Fixed false-positive `PATH_TRAVERSAL_PROHIBITED: Target path resolves outside workspace root.` errors when the MCP server daemon runs from a different directory than the client's active workspace.
+- **Absolute Target Path Inference (`src/mcp/tools/helpers_path.rs`, `context.rs`, `gate.rs`, `gate_edit.rs`)**:
+  - Implemented `detect_project_path_with_targets`: automatically infers and binds project root directly from absolute target file paths passed in `relative_path` or `relative_paths` (e.g. `/path/to/project/file.ext`).
+  - Prevents overwriting `state.project_path` with daemon CWD during unparameterized `project_context` calls.
+- **Safe Absolute Path Reading (`src/mcp/tools/context_read.rs`, `context_read_cluster.rs`)**:
+  - Allowed reading files via valid absolute paths without triggering workspace boundary errors, while maintaining strict path traversal (`..`) blocking.
+- **Telemetry Contamination Isolation (`src/mcp/db/mod.rs`, `src/dashboard/stats_query.rs`, `src/mcp/tools/mod.rs`)**:
+  - Isolated test records using `cfg!(test)` database redirect (`usage_test_<pid>.db`).
+  - Filtered test artifacts and skip keywords from skill analytics and dashboard telemetry with case-insensitive `NOCASE` matching.
+
 ## [1.9.0] - 2026-11-12
 
 ### ⚡ Cloud AI Agent Latency & Token Optimization
