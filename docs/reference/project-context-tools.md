@@ -74,28 +74,58 @@ Forces a full re-scan and AST re-indexing of the project code graph, spawning ba
 }
 ```
 
-### 5. `operation="read"`
-Reads a bounded file range (enforcing the hard 300 LOC cap). Outputs lines with `L{line_no}: <content>` prefixes and preserves exact indentation.
+### 5. `operation="read"` / `operation="cluster_read"` / `operation="read_and_authorize"`
+Reads bounded file ranges (enforcing the hard 300 LOC cap) with optional single-turn edit authorization. Supports aliases `operation="cluster_read"`, `operation="read_and_authorize"`, and `operation="read_auth"`. Outputs lines with `L{line_no}: <content>` prefixes and preserves exact indentation.
+
+#### Single File Read & Unified Authorization
 ```json
 {
-  "operation": "read",
+  "operation": "read_and_authorize",
   "project_path": "/path/to/project",
-  "relative_path": "src/main.rs",
-  "start_line": 1,
-  "end_line": 100,
-  "target_symbol": "main"
+  "relative_path": "src/main.rs#main",
+  "authorize": true,
+  "justification": "Refactor main entrypoint for modularity"
 }
 ```
 *Parameters*:
-- `relative_path` (required): File path relative to project root.
+- `relative_path` (required for single read): File path relative to project root. Supports inline spec syntax: `src/main.rs#run` or `src/main.rs:1-80`.
+- `authorize` (optional bool): When `true` (or when using `operation="read_and_authorize"` / `operation="read_auth"`), evaluates authorization in the same turn:
+  - In `Build` stage (plan approved): directly authorizes the file and generates a rollback snapshot (`## Direct Edit Authorization Report`).
+  - In `Plan` stage: validates modularity and queues the file into `deferred_authorized_paths` for 1-turn activation upon plan approval.
 - `start_line` (optional): 1-indexed starting line number.
 - `end_line` (optional): 1-indexed ending line number (range cannot exceed 300 LOC).
 - `target_symbol` (optional): Precise symbol name to extract via Tree-sitter.
 - `view_mode` (optional): `"full"` (default), `"skeleton"`, `"zoom"`, or `"slice"` (folds sibling function bodies if file > 300 LOC).
 
+#### Clustered Multi-File Read & Deferred Pre-Authorization
+Reads up to 10 files in a single turn under a global 1,000-line budget, returning bounded slices with zero cross-file context truncation:
+```json
+{
+  "operation": "read",
+  "project_path": "/path/to/project",
+  "relative_paths": [
+    "src/service.rs#execute",
+    "src/config.rs:1-30",
+    "src/new_handler.rs"
+  ],
+  "authorize": true
+}
+```
+*Capabilities*:
+- **Universal Target Path Specs**: Parse URI fragments (`#symbol`) and line intervals (`:start-end`) directly within path strings, eliminating separate tool calls.
+- **Pending New File Support**: Files yet to be created are safely tagged `[NEW FILE - Pending Creation]` and validated upfront against compound plural naming rules (`*services`, `*utils`, etc.), enabling compliant 300 LOC paired modular decomposition.
+- **Deferred Pre-Authorization Queue**: When called in `Plan` stage with `authorize: true`, valid files enter `deferred_authorized_paths` in `ServerState` and are automatically batch-authorized during plan approval (`workflow_gate(action="approve_plan", user_confirmed=true)`), cutting tool call overhead by 50%.
+- **Context Budget Guard**: Caps the cluster at 1,000 lines total with graceful fallback and warnings to eliminate token blowup risks.
+
 *Indentation & Formatting Integrity*:
 - Outputs lines formatted as `L{line_no}: <line>`, preserving exact leading spaces and tabs.
 - Includes automatic syntax notices on indentation-sensitive files (`.py`, `.yaml`, `.yml`, `Makefile`, `.nim`) to guarantee AI code generation correctness.
+
+*Session-Bounded AST Response Cache*:
+- Caches rendered bounded AST slices and zoom reads in `ServerState` across turns with a 30-second TTL.
+- **Dual Invalidation Check**: Validates TTL expiration ($> 30\text{s}$) alongside disk filesystem `mtime` check (`fs::metadata(path).modified()`). If the file is modified on disk by any external process or IDE editor, the cache is instantly bypassed.
+- **Event-Driven Invalidation**: Any file modification signal within the agent workflow (`state.record_modified_file()`, `state.drain_dirty_files()`) immediately evicts all cached slices for that file.
+- **Transparent Telemetry**: Cache hits are transparently annotated with `[ag: AST Response Cache Hit (freshness: Xs/30s)]` while always executing fresh edit authorizations (`helpers_auth`) and updating rollback snapshots.
 
 ### 6. `operation="symbols"` / `operation="structure"`
 Extracts top-level function, struct, enum, and class declarations from a specific file.

@@ -1,8 +1,9 @@
 use serde_json::Value;
 use std::path::Path;
 
+use crate::context::ast::{AstEngine, AstLanguage};
 use crate::mcp::state::ServerState;
-use super::helpers::validate_path_scoped;
+use super::helpers::{validate_path_scoped, TargetPathSpec};
 
 pub(crate) fn handle_cluster_read(
     arguments: &Value,
@@ -25,25 +26,36 @@ pub(crate) fn handle_cluster_read(
         .unwrap_or(false);
 
     let max_files = paths.len().min(8);
-    for (idx, rel_path) in paths.iter().take(max_files).enumerate() {
-        let clean_path = rel_path.trim().replace('\\', "/");
-        if clean_path.is_empty() {
+    for (idx, raw_spec) in paths.iter().take(max_files).enumerate() {
+        let spec = TargetPathSpec::parse(raw_spec);
+        if spec.clean_path.is_empty() {
             continue;
         }
 
-        let full_path = match validate_path_scoped(proj_path, &clean_path, true) {
+        let full_path = match validate_path_scoped(proj_path, &spec.clean_path, true) {
             Ok(p) => p,
             Err(err_msg) => {
                 sections.push(format!(
                     "### [{}/{}] File: `{}`\n\n**Security Error: PATH_TRAVERSAL_PROHIBITED**: {}",
                     idx + 1,
                     max_files,
-                    clean_path,
+                    spec.clean_path,
                     err_msg
                 ));
                 continue;
             }
         };
+
+        if !full_path.exists() {
+            valid_paths.push(spec.clean_path.clone());
+            sections.push(format!(
+                "### [{}/{}] File: `{}` [NEW FILE - Pending Creation]\n\n> [!NOTE] **New File Target**: Target file does not exist on disk yet. Path verified within workspace boundary.",
+                idx + 1,
+                max_files,
+                spec.clean_path
+            ));
+            continue;
+        }
 
         match std::fs::read_to_string(&full_path) {
             Ok(content) => {
@@ -52,69 +64,93 @@ pub(crate) fn handle_cluster_read(
 
                 let lines: Vec<&str> = content.lines().collect();
                 let total_lines = lines.len();
-                total_lines_read += total_lines;
-                valid_paths.push(clean_path.clone());
+                valid_paths.push(spec.clean_path.clone());
 
-                let is_exempt = crate::mcp::tools::gate_edit::is_exempt_from_loc_limit(&clean_path);
-                let ext = Path::new(&clean_path)
+                let is_exempt = crate::mcp::tools::gate_edit::is_exempt_from_loc_limit(&spec.clean_path);
+                let ext = Path::new(&spec.clean_path)
                     .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("");
-                let lang = match ext {
-                    "rs" => "rust",
-                    "ts" | "tsx" => "typescript",
-                    "js" | "jsx" => "javascript",
-                    "py" => "python",
-                    "json" => "json",
-                    "toml" => "toml",
-                    "md" => "markdown",
-                    _ => "",
-                };
+                let lang_str = detect_lang_tag(ext);
 
-                if total_lines > 300 && !is_exempt {
-                    let skeleton = crate::optimizer::skeleton::generate_code_skeleton(&content, &clean_path);
+                // Cluster line budget guard: if total lines read > 1000, skeletonize remaining files
+                let budget_exceeded = total_lines_read >= 1000;
+
+                // 1. Line Range Slicing
+                if let Some((start, end)) = spec.line_range {
+                    let s = start.max(1).min(total_lines);
+                    let e = end.max(s).min(total_lines);
+                    let slice = &lines[s - 1..e];
+                    total_lines_read += slice.len();
+                    let rendered = render_lines(slice, s, show_line_numbers || true);
                     sections.push(format!(
-                        "### [{}/{}] File: `{}`\n```{}\n{}\n```\n[ag: AST Structural Skeleton ({} lines) | Token Saver Mode: use target_symbol or line range for full body]\n\n---\n**ARCHITECTURE MANDATE (300 LOC Cap Exceeded)**: File `{}` has **{} total lines** (capped at 300 lines).\n**MANDATORY ACTION**: Do NOT add new logic directly into this file. Decompose into sub-modules upfront (< 150 LOC each) via paired batch authorization (`workflow_gate`).",
-                        idx + 1,
-                        max_files,
-                        clean_path,
-                        lang,
-                        skeleton,
-                        total_lines,
-                        clean_path,
-                        total_lines
+                        "### [{}/{}] File: `{}` (Lines {}-{} of {})\n\n```{}\n{}\n```",
+                        idx + 1, max_files, spec.clean_path, s, e, total_lines, lang_str, rendered
+                    ));
+                // 2. Semantic Symbol Slicing
+                } else if let Some(ref sym) = spec.target_symbol {
+                    let ast_lang = AstLanguage::from_path(&spec.clean_path);
+                    let mut sliced_lines = None;
+                    if ast_lang.is_supported() {
+                        if let Some(ast_sym) = AstEngine::find_symbol(&content, ast_lang, sym) {
+                            if ast_sym.start_line > 0 && ast_sym.end_line <= total_lines && ast_sym.end_line >= ast_sym.start_line {
+                                let s = ast_sym.start_line;
+                                let e = ast_sym.end_line;
+                                let slice = &lines[s - 1..e];
+                                total_lines_read += slice.len();
+                                let rendered = render_lines(slice, s, true);
+                                sections.push(format!(
+                                    "### [{}/{}] File: `{}` (Symbol: '{}' | Lines {}-{} of {})\n\n```{}\n{}\n```",
+                                    idx + 1, max_files, spec.clean_path, sym, s, e, total_lines, lang_str, rendered
+                                ));
+                                sliced_lines = Some(());
+                            }
+                        }
+                    }
+
+                    if sliced_lines.is_none() {
+                        if let Some(slice) = crate::optimizer::skeleton::generate_zoom_slice(&content, &spec.clean_path, sym) {
+                            total_lines_read += 40;
+                            sections.push(format!(
+                                "### [{}/{}] File: `{}` (Zoom Read: '{}' | {} folded functions)\n\n```{}\n{}\n```",
+                                idx + 1, max_files, spec.clean_path, sym, slice.folded_functions_count, lang_str, slice.sliced_content
+                            ));
+                        } else if total_lines > 300 && !is_exempt {
+                            let skeleton = crate::optimizer::skeleton::generate_code_skeleton(&content, &spec.clean_path);
+                            sections.push(format!(
+                                "### [{}/{}] File: `{}` [Symbol '{}' not found -> Fallback to AST Skeleton]\n```{}\n{}\n```",
+                                idx + 1, max_files, spec.clean_path, sym, lang_str, skeleton
+                            ));
+                        } else {
+                            total_lines_read += total_lines;
+                            let rendered = render_lines(&lines, 1, show_line_numbers);
+                            sections.push(format!(
+                                "### [{}/{}] File: `{}` (Lines 1-{} of {}) [Symbol '{}' not found]\n\n```{}\n{}\n```",
+                                idx + 1, max_files, spec.clean_path, total_lines, total_lines, sym, lang_str, rendered
+                            ));
+                        }
+                    }
+                // 3. Fallback / Large File Skeleton
+                } else if (total_lines > 300 || budget_exceeded) && !is_exempt {
+                    let skeleton = crate::optimizer::skeleton::generate_code_skeleton(&content, &spec.clean_path);
+                    let reason = if budget_exceeded { "Cluster Line Budget (1000 lines) Exceeded" } else { "300 LOC Cap Exceeded" };
+                    sections.push(format!(
+                        "### [{}/{}] File: `{}`\n```{}\n{}\n```\n[ag: AST Structural Skeleton ({} lines) | {} | use #symbol or :start-end for specific section]",
+                        idx + 1, max_files, spec.clean_path, lang_str, skeleton, total_lines, reason
                     ));
                 } else {
-                    let rendered = if show_line_numbers {
-                        lines
-                            .iter()
-                            .enumerate()
-                            .map(|(i, l)| format!("L{}: {}", i + 1, l))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    } else {
-                        lines.join("\n")
-                    };
-
+                    total_lines_read += total_lines;
+                    let rendered = render_lines(&lines, 1, show_line_numbers);
                     sections.push(format!(
                         "### [{}/{}] File: `{}` (Lines 1-{} of {})\n\n```{}\n{}\n```",
-                        idx + 1,
-                        max_files,
-                        clean_path,
-                        total_lines,
-                        total_lines,
-                        lang,
-                        rendered
+                        idx + 1, max_files, spec.clean_path, total_lines, total_lines, lang_str, rendered
                     ));
                 }
             }
             Err(e) => {
                 sections.push(format!(
                     "### [{}/{}] File: `{}`\n\nFailed to read file: {}",
-                    idx + 1,
-                    max_files,
-                    clean_path,
-                    e
+                    idx + 1, max_files, spec.clean_path, e
                 ));
             }
         }
@@ -122,22 +158,46 @@ pub(crate) fn handle_cluster_read(
 
     state.last_raw_baseline_tokens = Some(total_raw_tokens);
 
-    let gate_paths_json = serde_json::to_string(&valid_paths).unwrap_or_else(|_| "[]".to_string());
-    let tip = if !valid_paths.is_empty() {
-        format!(
-            "\n---\n> [!TIP] **One-Turn Edit Authorization**:\n> Authorize edits across this entire cluster in 1 turn before editing:\n> `workflow_gate(action=\"authorize_edit\", project_path=\"{}\", relative_paths={}, risk_level=\"LOW\", justification=\"Implement planned cluster modifications\", architecture_pattern=\"Auto\")`",
-            proj_path.display(),
-            gate_paths_json
-        )
-    } else {
-        String::new()
-    };
+    let auth_footer =
+        super::helpers_auth::evaluate_read_authorization(arguments, proj_path, &valid_paths, state);
 
     format!(
-        "# Multi-File Clustered Context ({} file(s), {} total lines)\n\n{}\n{}",
+        "# Multi-File Clustered Context ({} file(s), {} total lines read, ~{} baseline tokens)\n\n{}\n{}",
         sections.len(),
         total_lines_read,
+        total_raw_tokens,
         sections.join("\n\n"),
-        tip
+        auth_footer
     )
+}
+
+fn render_lines(lines: &[&str], line_offset: usize, show_line_numbers: bool) -> String {
+    if show_line_numbers {
+        lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| format!("L{}: {}", line_offset + i, l))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        lines.join("\n")
+    }
+}
+
+pub(crate) fn detect_lang_tag(ext: &str) -> &'static str {
+    match ext {
+        "rs" => "rust",
+        "ts" | "tsx" => "typescript",
+        "js" | "jsx" => "javascript",
+        "py" => "python",
+        "go" => "go",
+        "java" => "java",
+        "cs" => "csharp",
+        "kt" => "kotlin",
+        "json" => "json",
+        "toml" => "toml",
+        "md" => "markdown",
+        "yaml" | "yml" => "yaml",
+        _ => "",
+    }
 }

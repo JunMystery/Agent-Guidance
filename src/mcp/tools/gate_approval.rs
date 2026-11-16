@@ -62,7 +62,24 @@ pub(crate) fn handle_approve_plan(
 
     state.approve_plan();
 
-    let paths = super::gate_edit::extract_target_paths(arguments);
+    let mut paths = super::gate_edit::extract_target_paths(arguments);
+    let deferred = state.drain_deferred_authorized_paths();
+    for dp in deferred {
+        if !paths.contains(&dp) {
+            paths.push(dp);
+        }
+    }
+
+    let (auto_paths, plan_source) =
+        super::gate_plan_parser::auto_discover_plan_paths(proj_path, arguments, state);
+    let mut auto_count = 0;
+    for ap in auto_paths {
+        if !paths.contains(&ap) {
+            paths.push(ap);
+            auto_count += 1;
+        }
+    }
+
     if !paths.is_empty() {
         let allow_cross = arguments
             .get("allow_cross_workspace")
@@ -97,10 +114,24 @@ pub(crate) fn handle_approve_plan(
             state,
         );
 
+        let auto_note = if auto_count > 0 {
+            format!(
+                "\nPlan Artifact Auto-Auth: {} file(s) automatically discovered from `{}`.",
+                auto_count,
+                plan_source
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "implementation_plan.md".to_string())
+            )
+        } else {
+            String::new()
+        };
+
         return format!(
-            "# Workflow Gate: [approve_plan & pre-authorized]\n\nStatus: PASSED | Plan Approved: true | Stage: {}\nBatch Pre-Authorization: {} file(s) processed.\n\n{}",
+            "# Workflow Gate: [approve_plan & pre-authorized]\n\nStatus: PASSED | Plan Approved: true | Stage: {}\nBatch Pre-Authorization: {} file(s) processed.{}\n\n{}",
             state.workflow_stage,
             paths.len(),
+            auto_note,
             batch_report
         );
     }

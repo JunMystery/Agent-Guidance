@@ -31,6 +31,20 @@ Every coding task follows a strict 6-step execution lifecycle:
 
 Returns project file counts, detected architecture pattern (e.g. `Clean_Architecture`), dynamic split blueprint, memorized project learnings, and unlocks subsequent gated tools.
 
+### ⚡ Minor Task Fast-Path Exemption
+
+For trivial changes (typos, comments, docs, or single-file bugfixes < 20 lines), use Fast-Path:
+```json
+{
+  "task": "Fix typo in README installation commands",
+  "project_path": "/absolute/path/to/project",
+  "is_minor": true
+}
+```
+- **Direct Build Transition**: Automatically advances workflow stage to `Build` (`plan_approved = true`).
+- **Ceremonies Bypassed**: Skips skill proposal prompts (`ask_question`) and formal `implementation_plan.md` generation.
+- **Strict Boundary Guard**: Capped at max 1 code file or 3 doc files to prevent unapproved scope creep.
+
 ---
 
 ## Example 2: Project Code Context & GraphRAG (`project_context`)
@@ -78,6 +92,67 @@ Returns project file counts, detected architecture pattern (e.g. `Clean_Architec
 }
 ```
 
+### Unified Read-and-Authorize (Single File & Cluster)
+
+Read code context and simultaneously authorize file modifications in **1 turn**, avoiding a subsequent `authorize_edit` call. Supports `operation="read_and_authorize"`, `operation="read_auth"`, or `authorize: true`:
+
+```json
+{
+  "operation": "read_and_authorize",
+  "project_path": "/absolute/path/to/project",
+  "relative_path": "src/auth/token_service.rs#verify_token",
+  "justification": "Refactor token verification logic"
+}
+```
+- **Direct vs. Deferred**: In `Build` stage, grants instant edit authorization and generates pre-edit snapshots. In `Plan` stage, queues targets into `deferred_authorized_paths` for 1-turn activation upon plan approval.
+- **Pending New Files**: Non-existent files are safely declared and validated upfront for paired 300 LOC decomposition.
+
+### Clustered Read & Universal Target Path Spec
+
+Inspect multiple related files, exact AST symbols, and line slices in a single turn under a 1,000-line budget:
+
+```json
+{
+  "operation": "read",
+  "project_path": "/absolute/path/to/project",
+  "relative_paths": [
+    "src/auth/token_service.rs#verify_token",
+    "src/config/jwt.rs:1-40",
+    "src/auth/new_verifier.rs"
+  ],
+  "authorize": true
+}
+```
+
+- **Target Path Specs**: Supports URI fragment syntax (`#symbol`) and line range slicing (`:start-end`).
+- **Deferred Pre-Authorization**: When invoked during `Plan` stage with `authorize: true`, valid paths are queued in `deferred_authorized_paths` and automatically authorized upon plan approval (`workflow_gate(action="approve_plan", user_confirmed=true)`), cutting tool call overhead by 50%.
+- **New File Declarations**: Files pending creation are marked `[NEW FILE - Pending Creation]` and validated upfront against compound plural suffixes (`*services`, `*utils`, etc.) to support 300 LOC paired decomposition.
+
+### Subgraph Bundling with Direct Authorization (`subgraph_bundle`)
+
+Packs target symbol definition, 1-hop inbound callers, and 1-hop outbound callees into a single token-bounded context snippet (< 250 LOC) with one-turn edit authorization:
+
+```json
+{
+  "operation": "subgraph_bundle",
+  "project_path": "/absolute/path/to/project",
+  "target_symbol": "src/auth/token_service.rs#verify_token",
+  "loc_budget": 250,
+  "authorize": true
+}
+```
+- **Target Path Spec**: Supports `path#symbol` directly in `target_symbol` or `query`.
+- **Authorization Scope**: Authorizes target file by default; pass `authorize_all: true` to include all callers and callees.
+- **Stage Alignment**: Authorizes directly in `Build` stage; queues into `deferred_authorized_paths` in `Plan` stage.
+
+### Session-Bounded AST Response Cache (Zero-Cost Repeated Reads)
+
+To prevent redundant Tree-sitter AST parsing and filesystem stat roundtrips when reviewing code across multiple turns:
+- **30-Second TTL**: Caches rendered bounded AST slices, zoom reads, and code skeletons in memory for 30 seconds.
+- **Dual Invalidation Strategy**: Validates TTL alongside zero-cost filesystem `mtime` checks (`fs::metadata(path).modified()`). If any external process, IDE editor, or Git command modifies the file on disk, the cache is instantly bypassed.
+- **Event-Driven Eviction**: File modification signals within the agent workflow (`record_modified_file`, `drain_dirty_files`) immediately evict cached slices for affected files.
+- **Transparent Telemetry**: Cache hits are transparently annotated with `[ag: AST Response Cache Hit (freshness: Xs/30s)]` while always executing fresh edit authorizations (`helpers_auth`) and updating rollback snapshots.
+
 ### Call Graph & Blast Radius Analysis
 
 Find all functions calling `verify_token`:
@@ -122,13 +197,16 @@ Calculate blast radius and generate Mermaid DAG:
 }
 ```
 
-### Approve Plan (Requires User Consent)
+### Approve Plan (Requires User Consent & Auto-Authorizes Plan Artifact)
+
+When user approves the plan, calling `approve_plan` automatically discovers and extracts target files from `implementation_plan.md` (or custom `artifact_path`), combines them with any `relative_paths` or queued `deferred_authorized_paths`, and batch pre-authorizes them in a single turn:
 
 ```json
 {
   "action": "approve_plan",
   "project_path": "/absolute/path/to/project",
-  "user_confirmed": true
+  "user_confirmed": true,
+  "justification": "Implement approved architecture changes"
 }
 ```
 

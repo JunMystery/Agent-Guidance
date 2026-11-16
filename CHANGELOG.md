@@ -2,6 +2,79 @@
 
 All notable changes to Agent Guidance Rust MCP Server will be documented in this file.
 
+## [2.0.0] - 2026-11-15
+
+### 🚀 Clustered Read & Universal Target Path Spec (`src/mcp/tools/helpers_spec.rs`, `context_read_cluster.rs`, `context_read.rs`)
+- **Universal Target Path Specs (`TargetPathSpec`)**:
+  - Implemented URI fragment (`path#symbol`) and colon line range (`path:start-end`) syntax parsing across `relative_paths` (clustered read) and `relative_path` (single read).
+  - Native protection against Windows drive letters (`C:\...`) and strict path traversal validation via `validate_path_scoped`.
+  - Granular AST symbol lookup with Tree-sitter and safe line-range rendering with 1-based indexing.
+- **Context Budget Guard**:
+  - Enforced a hard ceiling of 1,000 lines across the entire read cluster, gracefully truncating and annotating to prevent LLM context window overflows.
+- **Pending New File Support**:
+  - Tagged files not yet created on disk as `[NEW FILE - Pending Creation]` rather than failing with I/O errors, enabling clean paired batch authorization for 300 LOC modular decomposition.
+
+### ⚡ Deferred Pre-Authorization & One-Turn Batch Approval (`src/mcp/state/`, `src/mcp/tools/gate_approval.rs`, `context_read_cluster.rs`)
+- **Deferred Pre-Authorization Queue**:
+  - When `project_context(operation="cluster_read", authorize=true)` is called in `Plan` stage before plan approval, valid target paths are enqueued in `state.deferred_authorized_paths`.
+  - Immediate upfront validation for newly declared files: blocks compound plural container names (`*services`, `*utils`, `*handlers`, etc.) before queuing.
+  - Automatically auto-purges queued paths on stage reset (`Plan`, `Context`) or circuit-breaker reset (`Ask_Revise`).
+- **One-Turn Automatic Activation**:
+  - During implementation plan approval (`workflow_gate(action="approve_plan", user_confirmed=true)`), the gate automatically drains `deferred_authorized_paths` and executes batch edit authorization in the same turn, cutting tool call roundtrips by 50%.
+
+### ⚡ Minor Task Fast-Path Exemption (`src/mcp/tools/pipeline_fast_path.rs`, `pipeline.rs`, `gate_edit.rs`)
+- **Direct Build Transition**:
+  - Automatically identifies minor tasks (typos, comments, docs, single-file bugfixes) via heuristic keyword matching and explicit `is_minor: bool` argument.
+  - Bypasses skill selection prompts (`ask_question`) and formal `implementation_plan.md` artifact generation, advancing directly to `Build` stage with `plan_approved = true`.
+- **Strict Boundary Guard**:
+  - Enforces a hard ceiling of at most 1 code file or 3 doc/config files during Fast-Path sessions.
+  - Automatically revokes Fast-Path and resets workflow stage to `Plan` if multi-file code modifications are attempted.
+- **300 LOC Upfront Decomposition**:
+  - Refactored `pipeline.rs` by extracting phase normalization and fast-path heuristics into dedicated sub-module `pipeline_fast_path.rs` (174 LOC), keeping `pipeline.rs` lean at 238 LOC.
+
+### 📦 Subgraph Bundling Upgrades (`src/mcp/tools/context_bundle.rs`, `context.rs`)
+- **Universal Target Path Spec (`path#symbol`)**:
+  - Integrated `TargetPathSpec::parse` to extract file path hint and symbol name directly from single-string query/target argument.
+- **One-Turn Edit Authorization & Deferred Pre-Auth**:
+  - Added `authorize: bool` and `authorize_all: bool` parameters to `subgraph_bundle`.
+  - Authorizes target file by default, or all inbound callers and outbound callees when `authorize_all=true`.
+  - Seamlessly enqueues paths into `deferred_authorized_paths` if called during `Plan` stage.
+
+### 🤖 Server-Side Auto-Auth from Plan Artifact (`src/mcp/tools/gate_plan_parser.rs`, `gate_approval.rs`)
+- **Multi-Tier Plan Artifact Discovery (`find_plan_artifact`)**:
+  - Automatically locates `implementation_plan.md` across multiple search tiers: custom parameter `artifact_path`, workspace root (`<workspace>/implementation_plan.md`), context directory (`.agent-context/implementation_plan.md`), and active session brain directory (`~/.gemini/antigravity/brain/<session_id>/implementation_plan.md`).
+- **Section-Aware Markdown Path Extraction (`extract_paths_from_plan_content`)**:
+  - Heuristically scans target sections (`Proposed Changes`, `Target Files`, `User Review Required`, `Architecture Design`) and extracts target source file paths from Markdown tables and list items.
+  - Strips `file://` prefixes, normalizes relative paths against `proj_path`, and validates against recognized source file extensions (`.rs`, `.js`, `.ts`, `.py`, `.json`, `.toml`, etc.).
+- **Zero-Turn Pre-Authorization & Deduplication**:
+  - When `workflow_gate(action="approve_plan")` is approved, merges explicit `relative_paths`, queued `deferred_authorized_paths`, and auto-discovered plan paths without duplicates.
+  - Passes all extracted files through `handle_batch_authorize` with full Modularity Guard enforcement (300 LOC cap and compound plural rejection).
+  - Seamlessly integrates with `deferred_authorized_paths` in `Plan` stage and direct authorization in `Build` stage.
+
+### ⚡ Unified Read-and-Authorize Primitive (`src/mcp/tools/helpers_auth.rs`, `context_read.rs`, `context_read_cluster.rs`, `context.rs`)
+- **Unified Authorization Engine (`helpers_auth::evaluate_read_authorization`)**:
+  - Created a single DRY shared module (75 LOC) unifying edit authorization pipelines for both single-file (`relative_path`) and multi-file (`relative_paths`) reads.
+  - Refactored `context_read_cluster.rs`, reducing it from 261 LOC to 203 LOC.
+- **Dedicated Operation Aliases**:
+  - Registered `operation="read_and_authorize"` and `operation="read_auth"` in `context.rs` routing directly to `handle_read`.
+  - Supports optional `authorize: bool = true` flag across all read operations.
+- **Single File Authorization & Graceful Pending Files**:
+  - Added full authorization support to single file reads in `context_read.rs`.
+  - Gracefully handles non-existent files via `# Pending New File` annotations (`// [NEW FILE - Pending Creation]`) instead of OS I/O failures.
+  - Stage-adaptive: grants direct authorization in `Build` stage with pre-edit snapshots, and enqueues into `deferred_authorized_paths` in `Plan` stage.
+
+### ⚡ Session-Bounded AST Response Cache (`src/mcp/tools/context_cache.rs`, `context_read.rs`, `src/mcp/state/types.rs`)
+- **Capacity-Bounded In-Memory AST Cache (`AstResponseCache`)**:
+  - Implemented session-level response cache (default capacity: 100 entries) for bounded file slices, skeletons, and AST semantic zoom reads.
+  - Compound cache key (`AstCacheKey`): normalizes relative path, target symbol, view mode, start/end line offsets, and line numbers.
+- **Dual Invalidation Strategy (TTL + Filesystem `mtime`)**:
+  - Enforces a 30-second TTL combined with zero-cost filesystem `mtime` check (`fs::metadata(path).modified()`).
+  - Guarantees immediate cache miss if a file is modified externally by the developer, IDE, or external tool.
+- **Event-Driven Workflow Invalidation**:
+  - Hooked directly into `ServerState::record_modified_file` and `ServerState::drain_dirty_files` to instantly purge cached entries upon agent file edits or batch authorizations.
+- **Separation of Content Caching & Fresh Authorization**:
+  - Preserves 100% security and governance: cached AST bodies are returned alongside transparent freshness telemetry (`[ag: AST Response Cache Hit (freshness: Xs/30s)]`) while always executing fresh edit authorizations (`helpers_auth`) and updating rollback snapshots.
+
 ## [1.9.1] - 2026-11-13
 
 ### 🛡️ Workspace Root Resolution & Target Path Inference

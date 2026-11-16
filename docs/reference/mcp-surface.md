@@ -19,6 +19,7 @@ task_pipeline(
     task: str,                         # required — description of work
     project_path: str,                 # required — absolute path of active working repository
     phase: str,                        # required — active development phase: "plan" | "build" | "implement" | "test" | "debug" | "review" | "refactor"
+    is_minor: bool = False,            # optional — Minor Task Fast-Path Exemption (typos, comments, docs, single-file patches)
 ) -> str
 ```
 
@@ -29,6 +30,9 @@ task_pipeline(
 - `Architecture Guidance` & `Core Phase Rules` — targeted execution mandates for active phase.
 - `Priority Gate: PASSED` — confirms unlock for subsequent MCP tool calls.
 - `-> NEXT STEP` — clear directive guiding next tool execution.
+
+**⚡ Minor Task Fast-Path Exemption:**
+If `is_minor: true` (or if the task description matches minor task heuristics such as typos, comments, docs, readme, or small single-file patches), `task_pipeline` automatically bypasses skill proposal modals (`ask_question`) and formal `implementation_plan.md` artifact generation. It auto-advances the workflow stage directly to `Build` (`plan_approved = true`, `is_fast_path = true`), allowing immediate inspection and editing. Enforces a Strict Boundary Guard of at most 1 code file or 3 doc/config files.
 
 **Auto-Plan-Approval Feature:**
 If the `task` parameter text contains user approval keywords (e.g. `proceed`, `approved`, `lgtm`, `tiến hành`, `đồng ý`, or IDE artifact approval strings like `the user has approved this document`), `task_pipeline` automatically sets `plan_approved = true`, `edit_authorized = true`, and transitions active stage directly to `Build`.
@@ -125,6 +129,8 @@ project_context(
     project_path: str,                 # required — absolute path of active repository workspace
     query: str | None = None,          # search query / natural language / symbol name
     relative_path: str | None = None,  # relative file path for read, symbols, structure, learn_alias
+    relative_paths: list[str] | None = None, # multiple file specs for clustered read ('path#symbol', 'path:10-50')
+    authorize: bool = False,           # one-turn edit authorization (instant in Build, deferred in Plan)
     target_symbol: str | None = None,  # precise function/struct/class symbol to extract
     loc_budget: int = 250,             # LOC budget for subgraph_bundle (default: 250, clamped: 50..=500)
     max_depth: int = 3,                # max directory depth for tree operation (default: 3, max: 5)
@@ -147,9 +153,9 @@ project_context(
 | Operation | Required Args | Description |
 |---|---|---|
 | `search` | `query` | 6-Phase Instant Cascade (<100ms): Alias Cache (<1ms) → Symbol FTS5 (<5ms) → Content FTS5 (<5ms) → Symbol Vectors (<50ms) → RAG Content Vectors (<100ms) → Linked Sibling Projects. Blends multi-result hits across cascade, bypasses alias cache short-circuiting on code syntax queries, and restricts auto-learning to natural multi-word phrases. |
-| `subgraph_bundle` | `target_symbol` (or `query` / `symbol`) | Single-turn multi-file context pack: Target symbol definition + 1-hop caller snippets + 1-hop callee snippets under token budget (default 250 LOC, clamped 50..=500). Single-pass 300-char line truncation and path normalization across OSes. (Alias: `context_bundle`). |
+| `subgraph_bundle` | `target_symbol` (or `query` / `symbol`) | Single-turn multi-file context pack: Target symbol definition + 1-hop caller snippets + 1-hop callee snippets under token budget (default 250 LOC, clamped 50..=500). Supports URI spec syntax (`path#symbol`), direct/deferred edit authorization (`authorize=True`), and full dependency authorization (`authorize_all=True`). (Alias: `context_bundle`). |
 | `tree` | -- | Repository directory tree scan. Accepts `max_depth` (default: 3, range: 1..=5). |
-| `read` | `relative_path` | Bounded file read with 300 LOC cap. Auto-skeletonizes files > 300 LOC unless line slice or `target_symbol` specified. Supports `start_line`/`end_line` slicing, `view_mode="zoom"` or `"slice"` (folds sibling function bodies). |
+| `read` | `relative_path` \| `relative_paths` | Bounded file read with 300 LOC cap. In single-file or multi-file cluster mode, supports universal Target Path Specs (`path#symbol`, `path:start-end`), pending new file declarations (`[NEW FILE - Pending Creation]`), direct/deferred edit authorization (`authorize=True`), and Session-Bounded AST Response Caching (30s TTL + disk `mtime` invalidation). Supports dedicated aliases `cluster_read`, `read_cluster`, `read_and_authorize`, and `read_auth`. |
 | `symbols` | `relative_path` | Extract functions, structs, enums, classes, and traits across 6+ languages (Alias: `structure`). |
 | `references` | `query` | Instant symbol usage lookup across codebase (<5ms SQLite FTS5 index). |
 | `callers` | `query` | Graph query traversing AST call edges to identify all functions/modules that call target symbol (Alias: `incoming_calls`). |
@@ -169,7 +175,7 @@ project_context(
 **Examples:**
 ```python
 project_context(operation="tree", project_path="E:/Github/MyApp", max_depth=3)
-project_context(operation="subgraph_bundle", project_path="E:/Github/MyApp", target_symbol="handle_request", loc_budget=250)
+project_context(operation="subgraph_bundle", project_path="E:/Github/MyApp", target_symbol="src/service.rs#handle_request", loc_budget=250, authorize=True)
 project_context(operation="search", project_path="E:/Github/MyApp", query="handle_api_stats")
 project_context(operation="callers", project_path="E:/Github/MyApp", query="scan_project")
 project_context(operation="callees", project_path="E:/Github/MyApp", query="handle_request")
@@ -177,6 +183,7 @@ project_context(operation="blast_radius", project_path="E:/Github/MyApp", query=
 project_context(operation="read", project_path="E:/Github/MyApp", relative_path="src/main.rs", start_line=1, end_line=120)
 project_context(operation="read", project_path="E:/Github/MyApp", relative_path="src/router.rs", target_symbol="handle_request")
 project_context(operation="read", project_path="E:/Github/MyApp", relative_path="src/router.rs", view_mode="zoom", target_symbol="dispatch")
+project_context(operation="read", project_path="E:/Github/MyApp", relative_paths=["src/model.rs#User", "src/auth.rs:1-50", "src/new_service.rs"], authorize=True)
 project_context(operation="graph_rag", project_path="E:/Github/MyApp", query="authentication lifecycle", mode="drift")
 ```
 
@@ -191,6 +198,8 @@ workflow_gate(
     action: str,                       # required — check|status|set_stage|set_architecture|authorize_edit|advance|rollback|approve_plan|pass_verification
     project_path: str | None = None,   # working repository path
     relative_path: str | None = None,  # specific file to authorize edit on (required for authorize_edit)
+    relative_paths: list[str] | None = None, # batch files to pre-authorize during approve_plan or authorize_edit
+    artifact_path: str | None = None,  # optional custom path to implementation_plan.md for Server-Side Auto-Auth
     target_stage: str | None = None,   # target stage for set_stage / advance: Context|Plan|Ask_Revise|Build|Test_Recheck|Fix|Proposal|Review
     risk_level: str = "LOW",           # LOW | MEDIUM | HIGH (for authorize_edit / advance)
     justification: str | None = None,  # reason & test mitigation (mandatory for files with >8 dependents or refactoring >=300 LOC files)
@@ -210,7 +219,7 @@ workflow_gate(
 | `set_architecture` | Detect, lock, and persist architectural pattern in `.agent-context/architecture.json`. |
 | `authorize_edit` | Authorize editing a specific file. Verifies < 300 LOC cap, enforces modularity rules on new files, triggers zero-turn transition (Plan → Build if plan approved), creates pre-edit rollback snapshot, and unlocks file write permission. |
 | `advance` | Composite check, approval, and stage transition in a single call. Validates post-edit 300 LOC cap on all modified files before allowing advance to `Proposal`/`Review`. (Alias: `advance_stage`). |
-| `approve_plan` | Record explicit plan approval (requires `user_confirmed=True` or approval keyword) and reset permissions. (Alias: `approve`). |
+| `approve_plan` | Record explicit plan approval (requires `user_confirmed=True` or approval keyword) and transition to `Build`. Supports **Server-Side Auto-Auth**: automatically extracts target files from `implementation_plan.md` (or custom `artifact_path`), combines them with `relative_paths` and queued `deferred_authorized_paths`, and batch pre-authorizes them in 1 turn under Modularity Guard & 300 LOC rules. (Alias: `approve`). |
 | `pass_verification` | Record empirical test verification pass and reset fix attempt counter. |
 | `rollback` | Restore pre-edit file snapshot from `.agent-context/snapshots/{session_id}/`. |
 

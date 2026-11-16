@@ -9,6 +9,7 @@ pub use super::helpers_path::{
     detect_parent_process_cwd, detect_project_path, detect_project_path_with_targets,
     is_generic_home_dir, validate_path, validate_path_scoped,
 };
+pub use super::helpers_spec::TargetPathSpec;
 
 pub fn ensure_not_cancelled(state: &ServerState) -> Result<(), (i32, String)> {
     if state.is_cancelled() {

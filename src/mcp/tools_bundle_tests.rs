@@ -4,6 +4,7 @@ use serde_json::json;
 
 use crate::context::db::CodeGraphDb;
 use crate::context::graph_rag::build_subgraph_bundle;
+use crate::mcp::state::ServerState;
 use crate::mcp::tools::context_bundle::handle_subgraph_bundle;
 
 static BUNDLE_TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -61,7 +62,8 @@ fn test_subgraph_bundle_target_not_found() {
     let res = build_subgraph_bundle(&guard.dir, "non_existent_symbol", None, 250).unwrap();
     assert!(res.is_none());
 
-    let mcp_res = handle_subgraph_bundle(&json!({}), &guard.dir, "non_existent_symbol");
+    let mut state = ServerState::new();
+    let mcp_res = handle_subgraph_bundle(&json!({}), &guard.dir, "non_existent_symbol", &mut state);
     assert!(mcp_res.contains("No symbol named `non_existent_symbol` found"));
 }
 
@@ -87,7 +89,8 @@ fn test_subgraph_bundle_full_flow() {
     assert_eq!(bundle.total_callees_count, 1);
     assert!(bundle.total_loc <= 250);
 
-    let mcp_res = handle_subgraph_bundle(&json!({"loc_budget": 200}), &guard.dir, "process_data");
+    let mut state = ServerState::new();
+    let mcp_res = handle_subgraph_bundle(&json!({"loc_budget": 200}), &guard.dir, "process_data", &mut state);
     assert!(mcp_res.contains("Multi-File Subgraph Bundle: `process_data`"));
     assert!(mcp_res.contains("Target Implementation"));
     assert!(mcp_res.contains("Immediate Callers"));
@@ -208,7 +211,8 @@ fn test_omitted_line_format_no_line_number() {
 #[test]
 fn test_context_bundle_symbol_alias_argument() {
     let (guard, _db) = create_mock_project();
-    let res = handle_subgraph_bundle(&json!({"symbol": "process_data"}), &guard.dir, "process_data");
+    let mut state = ServerState::new();
+    let res = handle_subgraph_bundle(&json!({"symbol": "process_data"}), &guard.dir, "process_data", &mut state);
     assert!(res.contains("Multi-File Subgraph Bundle: `process_data`"));
 }
 
@@ -240,7 +244,8 @@ fn test_leading_slash_and_empty_target_guard() {
     assert!(empty_res.is_none());
 
     // String loc_budget coercion
-    let res = handle_subgraph_bundle(&json!({"loc_budget": "120"}), &guard.dir, "process_data");
+    let mut state = ServerState::new();
+    let res = handle_subgraph_bundle(&json!({"loc_budget": "120"}), &guard.dir, "process_data", &mut state);
     assert!(res.contains("Packed LOC"));
 }
 

@@ -89,6 +89,35 @@ pub(crate) fn handle_authorize_edit(
         let _ = state.set_stage("Build");
     }
 
+    // Fast-Path Strict Boundary Guard: Limit to max 1 code file or 3 doc/config files
+    if state.is_fast_path {
+        for p in &paths {
+            state.record_fast_path_file(p);
+        }
+        let mut code_count = 0;
+        let mut doc_count = 0;
+        for f in &state.fast_path_files {
+            if is_exempt_from_loc_limit(f) {
+                doc_count += 1;
+            } else {
+                code_count += 1;
+            }
+        }
+        if code_count > 1 || doc_count > 3 {
+            state.clear_fast_path();
+            state.workflow_stage = "Plan".to_string();
+            state.plan_approved = false;
+            state.edit_authorized = false;
+            return format!(
+                "# Edit Approval Gate: BLOCKED (FAST_PATH_BOUNDARY_EXCEEDED)\n\n\
+                - Status: BLOCKED\n\
+                - Reason: Fast-Path Exemption is strictly limited to at most 1 code file or 3 doc/config files (attempted {} code file(s), {} doc file(s)).\n\n\
+                **Action Required**: Fast-Path has been revoked and workflow reset to `Plan`. You must formulate a complete `implementation_plan.md` (`RequestFeedback: true`) and obtain explicit user approval before proceeding with multi-file modifications.",
+                code_count, doc_count
+            );
+        }
+    }
+
     if !matches!(
         arch_pattern.as_str(),
         "Clean_Architecture"

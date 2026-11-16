@@ -9,7 +9,8 @@ use super::types::SESSION_STALE_TIMEOUT_SECS;
 impl ServerState {
     pub fn priority_gate_path() -> std::path::PathBuf {
         if cfg!(test) {
-            std::env::temp_dir().join(format!("gate_passed_test_{}", std::process::id()))
+            let tid = format!("{:?}", std::thread::current().id()).replace(['(', ')'], "");
+            std::env::temp_dir().join(format!("gate_passed_test_{}_{}", std::process::id(), tid))
         } else {
             dirs::home_dir()
                 .map(|h| h.join(".agent-guidance").join(".gate_passed"))
@@ -144,6 +145,8 @@ impl ServerState {
         if normalized == "Plan" || normalized == "Context" {
             self.plan_approved = false;
             self.edit_authorized = false;
+            self.clear_deferred_authorized_paths();
+            self.clear_fast_path();
             // Note: active_architecture_pattern is preserved across stages for session consistency
         }
 
@@ -156,6 +159,8 @@ impl ServerState {
             if self.fix_attempts > 3 {
                 self.workflow_stage = "Ask_Revise".to_string();
                 self.plan_approved = false;
+                self.clear_deferred_authorized_paths();
+                self.clear_fast_path();
                 self.fix_attempts = 0;
                 return Err("WORKFLOW_STAGE_BLOCKED: Circuit breaker triggered after 3 consecutive failed fix attempts. Workflow stage automatically reset to 'Ask_Revise' with plan_approved=false. Please request user guidance.".to_string());
             }

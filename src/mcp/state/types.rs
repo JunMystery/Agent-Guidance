@@ -1,10 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::fs;
-use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{path::Path, sync::Arc, sync::atomic::{AtomicBool, Ordering}, time::{SystemTime, UNIX_EPOCH}};
 use tracing::info;
 
 pub const SESSION_STALE_TIMEOUT_SECS: u64 = 300;
@@ -63,10 +59,18 @@ pub struct ServerState {
     pub modified_files: Vec<String>,
     #[serde(default)]
     pub dirty_files: Vec<String>,
+    #[serde(default)]
+    pub deferred_authorized_paths: Vec<String>,
+    #[serde(default)]
+    pub is_fast_path: bool,
+    #[serde(default)]
+    pub fast_path_files: Vec<String>,
     #[serde(skip, default)]
     pub pending_skill_proposals: Vec<(String, String, f32)>,
     #[serde(skip, default)]
     pub cancellation: Option<Arc<AtomicBool>>,
+    #[serde(skip, default)]
+    pub ast_cache: crate::mcp::tools::context_cache::AstResponseCache,
 }
 
 fn default_workflow_stage() -> String {
@@ -110,8 +114,12 @@ impl Default for ServerState {
             active_architecture_pattern: None,
             modified_files: Vec::new(),
             dirty_files: Vec::new(),
+            deferred_authorized_paths: Vec::new(),
+            is_fast_path: false,
+            fast_path_files: Vec::new(),
             pending_skill_proposals: Vec::new(),
             cancellation: None,
+            ast_cache: crate::mcp::tools::context_cache::AstResponseCache::default(),
         }
     }
 }
@@ -187,48 +195,31 @@ impl ServerState {
         }
     }
 
-    pub fn global_project_path_file() -> std::path::PathBuf {
-        if cfg!(test) {
-            std::env::temp_dir().join(format!("last_project_path_test_{}", std::process::id()))
-        } else {
-            dirs::home_dir()
-                .map(|h| h.join(".agent-guidance").join("last_project_path"))
-                .unwrap_or_else(|| std::path::PathBuf::from(".last_project_path"))
-        }
-    }
-
-    pub fn read_global_project_path() -> Option<String> {
-        let path = Self::global_project_path_file();
-        if path.exists() {
-            if let Ok(content) = fs::read_to_string(&path) {
-                let trimmed = content.trim();
-                if !trimmed.is_empty() && Path::new(trimmed).is_dir() {
-                    return Some(trimmed.to_string());
-                }
+    pub fn queue_deferred_authorization(&mut self, paths: &[String]) {
+        for p in paths {
+            if !self.deferred_authorized_paths.contains(p) {
+                self.deferred_authorized_paths.push(p.clone());
             }
         }
-        None
     }
 
-    pub fn update_project_path(&mut self, path: &Path) {
-        let path_str = path.to_string_lossy().to_string();
-        if path_str.is_empty() || path_str == "." {
-            return;
-        }
-        if self.project_path.as_deref() == Some(path_str.as_str()) {
-            return;
-        }
-        if !self.workspace_roots.is_empty() && !self.is_path_inside_workspace(path) {
-            return;
-        }
-        self.project_path = Some(path_str.clone());
+    pub fn drain_deferred_authorized_paths(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.deferred_authorized_paths)
+    }
 
-        // Write to global persistent memory for cross-session AI agent inheritance
-        let global_file = Self::global_project_path_file();
-        if let Some(parent) = global_file.parent() {
-            let _ = fs::create_dir_all(parent);
+    pub fn clear_deferred_authorized_paths(&mut self) {
+        self.deferred_authorized_paths.clear();
+    }
+
+    pub fn record_fast_path_file(&mut self, file: &str) {
+        if !self.fast_path_files.iter().any(|f| f == file) {
+            self.fast_path_files.push(file.to_string());
         }
-        let _ = fs::write(global_file, &path_str);
+    }
+
+    pub fn clear_fast_path(&mut self) {
+        self.is_fast_path = false;
+        self.fast_path_files.clear();
     }
 
     /// Records a relative file path modified during this active session.
@@ -238,6 +229,7 @@ impl ServerState {
             .trim_start_matches(|c| c == '/' || c == '\\')
             .replace('\\', "/");
         if !clean.is_empty() {
+            self.ast_cache.invalidate_file(&clean);
             if !self.modified_files.contains(&clean) {
                 self.modified_files.push(clean.clone());
             }
@@ -264,7 +256,11 @@ impl ServerState {
 
     /// Drains all dirty files queued for write-through invalidation.
     pub fn drain_dirty_files(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.dirty_files)
+        let dirty = std::mem::take(&mut self.dirty_files);
+        for f in &dirty {
+            self.ast_cache.invalidate_file(f);
+        }
+        dirty
     }
     pub fn record_call(&mut self, orig_tokens: u64, opt_tokens: u64) {
         self.tool_calls += 1;

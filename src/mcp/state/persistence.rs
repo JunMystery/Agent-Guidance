@@ -155,4 +155,47 @@ impl ServerState {
         let content = fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
         serde_json::from_str::<Self>(&content).map_err(|e| format!("Corrupted session file '{}': {}", target_id, e))
     }
+
+    pub fn global_project_path_file() -> std::path::PathBuf {
+        if cfg!(test) {
+            std::env::temp_dir().join(format!("last_project_path_test_{}", std::process::id()))
+        } else {
+            dirs::home_dir()
+                .map(|h| h.join(".agent-guidance").join("last_project_path"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".last_project_path"))
+        }
+    }
+
+    pub fn read_global_project_path() -> Option<String> {
+        let path = Self::global_project_path_file();
+        if path.exists() {
+            if let Ok(content) = fs::read_to_string(&path) {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() && Path::new(trimmed).is_dir() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    pub fn update_project_path(&mut self, path: &Path) {
+        let path_str = path.to_string_lossy().to_string();
+        if path_str.is_empty() || path_str == "." {
+            return;
+        }
+        if self.project_path.as_deref() == Some(path_str.as_str()) {
+            return;
+        }
+        if !self.workspace_roots.is_empty() && !self.is_path_inside_workspace(path) {
+            return;
+        }
+        self.project_path = Some(path_str.clone());
+
+        let global_file = Self::global_project_path_file();
+        if let Some(parent) = global_file.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(global_file, &path_str);
+    }
 }

@@ -64,6 +64,7 @@ cargo build --release
 | **Codebase Onboarding** | AI reads files sequentially, taking dozens of turns to guess relationships and dependencies. | **10-Second Hierarchical GraphRAG**: Instant macro community outline (Level 0/1/2) and 1-hop caller/callee bundling under 250 LOC. |
 | **Test & Fix Cycles** | Enters infinite repair loops, repeatedly making blind edits that break adjacent modules. | **Fix Circuit Breaker**: Trips automatically after 3 consecutive failed attempts, rolling back snapshots and requesting human intervention. |
 | **Deployment Topology** | Heavy local Python/ML dependencies consume 1GB+ RAM, slowing down developer laptops. | **Dual-Role Topology**: Lightweight Client runs in **~15MB RAM**, delegating heavy neural vector workloads to a dedicated Remote ML Worker. |
+| **MCP Tool Turn Overhead** | Agent consumes 10–15 sequential tool turns reading files and requesting edit permissions one-by-one. | **v2.0.0 Reduction Engine (60–80% Turn Savings)**: Clustered reads (`relative_paths`), Server-Side Auto-Auth from plan artifacts, unified read-and-authorize (`authorize=true`), and Session-Bounded AST Response Caching (30s TTL). |
 
 ---
 

@@ -2,18 +2,30 @@ use serde_json::Value;
 use std::path::Path;
 
 use crate::context::graph_rag::build_subgraph_bundle;
+use crate::mcp::state::ServerState;
+use super::helpers_spec::TargetPathSpec;
 
 pub(crate) fn handle_subgraph_bundle(
     arguments: &Value,
     proj_path: &Path,
     target: &str,
+    state: &mut ServerState,
 ) -> String {
-    let clean_target = target.trim();
+    let spec = TargetPathSpec::parse(target);
+    let (clean_target, rel_path_hint) = if let Some(ref sym) = spec.target_symbol {
+        let path_hint = if !spec.clean_path.is_empty() {
+            Some(spec.clean_path.as_str())
+        } else {
+            arguments.get("relative_path").and_then(|r| r.as_str())
+        };
+        (sym.as_str(), path_hint)
+    } else {
+        (spec.clean_path.as_str(), arguments.get("relative_path").and_then(|r| r.as_str()))
+    };
+
     if clean_target.is_empty() {
         return "Error: target_symbol or query parameter is required for subgraph_bundle operation. Example: project_context(operation=\"subgraph_bundle\", target_symbol=\"my_function\")".to_string();
     }
-
-    let rel_path = arguments.get("relative_path").and_then(|r| r.as_str());
 
     let budget = arguments
         .get("loc_budget")
@@ -21,7 +33,7 @@ pub(crate) fn handle_subgraph_bundle(
         .map(|v| v as usize)
         .unwrap_or(250);
 
-    let bundle = match build_subgraph_bundle(proj_path, clean_target, rel_path, budget) {
+    let bundle = match build_subgraph_bundle(proj_path, clean_target, rel_path_hint, budget) {
         Ok(Some(b)) => b,
         Ok(None) => {
             return format!(
@@ -123,5 +135,69 @@ pub(crate) fn handle_subgraph_bundle(
         }
     }
 
-    out.join("\n")
+    let should_authorize = arguments
+        .get("authorize")
+        .or_else(|| arguments.get("pre_authorize"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let authorize_all = arguments
+        .get("authorize_all")
+        .or_else(|| arguments.get("all"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let auth_footer = if should_authorize {
+        let mut valid_paths = Vec::new();
+        let target_file = clean_target_file.clone();
+        if !target_file.is_empty() {
+            valid_paths.push(target_file);
+        }
+        if authorize_all {
+            for c in &bundle.callers {
+                let clean_c = c.file_path.replace('\\', "/");
+                if !clean_c.is_empty() && !valid_paths.contains(&clean_c) {
+                    valid_paths.push(clean_c);
+                }
+            }
+            for c in &bundle.callees {
+                let clean_c = c.file_path.replace('\\', "/");
+                if !clean_c.is_empty() && !valid_paths.contains(&clean_c) {
+                    valid_paths.push(clean_c);
+                }
+            }
+        }
+
+        if !valid_paths.is_empty() {
+            if state.plan_approved && state.workflow_stage == "Plan" {
+                let _ = state.set_stage("Build");
+            }
+            if state.workflow_stage == "Build" && state.plan_approved {
+                let justification = arguments
+                    .get("justification")
+                    .and_then(|j| j.as_str())
+                    .unwrap_or("Pre-authorized via subgraph_bundle");
+                let raw_arch = arguments
+                    .get("architecture_pattern")
+                    .and_then(|a| a.as_str())
+                    .unwrap_or("Auto");
+                let arch_pattern = super::helpers::resolve_architecture_pattern(raw_arch, proj_path, state);
+                let auth_report = super::gate_edit_batch::handle_batch_authorize(
+                    proj_path, &valid_paths, justification, &arch_pattern, state
+                );
+                format!("\n---\n## Direct Edit Authorization Report\n\n{}", auth_report)
+            } else {
+                state.queue_deferred_authorization(&valid_paths);
+                format!(
+                    "\n---\n> [!NOTE] **Deferred Pre-Authorization Queued**:\n> {} file(s) queued for automatic authorization upon plan approval.\n> Active Stage: '{}' | Plan Approved: {}.\n> Call `workflow_gate(action=\"approve_plan\", user_confirmed=true)` once plan is confirmed to activate authorization in 1 turn.",
+                    valid_paths.len(), state.workflow_stage, state.plan_approved
+                )
+            }
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    format!("{}{}", out.join("\n"), auth_footer)
 }

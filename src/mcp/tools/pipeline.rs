@@ -3,83 +3,8 @@ use serde_json::Value;
 use crate::context::cache::project_snapshot;
 use crate::mcp::state::ServerState;
 use super::{detect_project_architecture, detect_project_path, ensure_indexed, ensure_not_cancelled};
-
-pub fn infer_or_normalize_phase(raw_phase: Option<&str>, task: &str) -> String {
-    let raw = raw_phase.unwrap_or("").trim().to_lowercase();
-    match raw.as_str() {
-        "build" | "implement" | "code" | "create" => return "build".to_string(),
-        "test" | "verify" | "test_recheck" | "testing" => return "test".to_string(),
-        "debug" | "fix" | "bugfix" | "patch" => return "fix".to_string(),
-        "review" | "audit" | "proposal" => return "review".to_string(),
-        "refactor" | "decompose" => return "refactor".to_string(),
-        _ => {}
-    }
-
-    let task_lower = task.trim().to_lowercase();
-    if task_lower.contains("plan")
-        || task_lower.contains("kế hoạch")
-        || task_lower.contains("design")
-        || task_lower.contains("thiết kế")
-        || task_lower.contains("architecture")
-        || task_lower.contains("kiến trúc")
-    {
-        return "plan".to_string();
-    }
-
-    if task_lower.contains("fix")
-        || task_lower.contains("bug")
-        || task_lower.contains("crash")
-        || task_lower.contains("sửa lỗi")
-        || task_lower.contains("khắc phục")
-        || task_lower.contains("vấn đề")
-        || task_lower.contains("error")
-        || task_lower.contains("issue")
-    {
-        return "fix".to_string();
-    }
-
-    if task_lower.contains("test")
-        || task_lower.contains("kiểm thử")
-        || task_lower.contains("verify")
-        || task_lower.contains("assert")
-        || task_lower.contains("kiem thu")
-    {
-        return "test".to_string();
-    }
-
-    if task_lower.contains("review")
-        || task_lower.contains("audit")
-        || task_lower.contains("đánh giá")
-        || task_lower.contains("soát code")
-        || task_lower.contains("soát lỗi")
-    {
-        return "review".to_string();
-    }
-
-    if task_lower.contains("refactor")
-        || task_lower.contains("tách file")
-        || task_lower.contains("decompose")
-        || task_lower.contains("clean up")
-        || task_lower.contains("tối ưu")
-        || task_lower.contains("tái cấu trúc")
-    {
-        return "refactor".to_string();
-    }
-
-    if task_lower.contains("build")
-        || task_lower.contains("implement")
-        || task_lower.contains("triển khai")
-        || task_lower.contains("phát triển")
-    {
-        return "build".to_string();
-    }
-
-    if !raw.is_empty() {
-        raw
-    } else {
-        "plan".to_string()
-    }
-}
+pub use super::pipeline_fast_path::infer_or_normalize_phase;
+use super::pipeline_fast_path::{build_fast_path_response, is_minor_task};
 
 pub(crate) fn handle(
     arguments: Value,
@@ -101,6 +26,24 @@ pub(crate) fn handle(
         .unwrap_or(".");
     let proj_path = detect_project_path(proj_path_arg, state);
     state.update_project_path(&proj_path);
+
+    // Fast-Path Exemption for Minor Tasks (typos, comments, docs, single-file patches)
+    if is_minor_task(task, &arguments) {
+        state.priority_gate_pass();
+        state.workflow_stage = "Build".to_string();
+        state.plan_approved = true;
+        state.edit_authorized = true;
+        state.is_fast_path = true;
+        state.fast_path_files.clear();
+        state.user_intent_summary = Some(task.to_string());
+        state.active_task = Some(task.to_string());
+        state.active_phase = Some("build".to_string());
+        state.push_recent_task(task);
+        let _ = state.save_to_dir(&proj_path);
+        let fast_resp = build_fast_path_response(task, &proj_path);
+        return Ok(fast_resp);
+    }
+
     let raw_phase = arguments
         .get("phase")
         .and_then(|p| p.as_str());

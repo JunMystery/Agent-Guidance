@@ -15,7 +15,7 @@ pub(crate) fn handle_read(
         return super::context_read_cluster::handle_cluster_read(arguments, proj_path, &paths, state);
     }
 
-    let target_path = if !rel_path.is_empty() {
+    let raw_target = if !rel_path.is_empty() {
         rel_path
     } else if let Some(first) = paths.first() {
         first.as_str()
@@ -23,16 +23,28 @@ pub(crate) fn handle_read(
         return "Error: relative_path or relative_paths is required for read operation. Example: project_context(operation=\"read\", project_path=\"...\", relative_paths=[\"src/a.rs\", \"src/b.rs\"])".to_string();
     };
 
-    let target_symbol = arguments.get("target_symbol").and_then(|s| s.as_str());
+    let spec = super::helpers::TargetPathSpec::parse(raw_target);
+    let target_path = &spec.clean_path;
+
+    let target_symbol = arguments
+        .get("target_symbol")
+        .and_then(|s| s.as_str())
+        .or(spec.target_symbol.as_deref());
     let view_mode = arguments.get("view_mode").and_then(|v| v.as_str()).unwrap_or("auto");
     let start_line_arg = arguments
         .get("start_line")
         .and_then(|v| v.as_u64())
-        .map(|v| v as usize);
+        .map(|v| v as usize)
+        .or_else(|| spec.line_range.map(|r| r.0));
     let end_line_arg = arguments
         .get("end_line")
         .and_then(|v| v.as_u64())
-        .map(|v| v as usize);
+        .map(|v| v as usize)
+        .or_else(|| spec.line_range.map(|r| r.1));
+    let show_line_numbers = arguments
+        .get("line_numbers")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let (full_path, resolved_subpath) = if target_path.starts_with("linked:") {
         let linked = crate::context::multi_project::discover_linked_projects(proj_path);
@@ -54,6 +66,44 @@ pub(crate) fn handle_read(
         }
     };
 
+    let eval_auth = |st: &mut ServerState| {
+        super::helpers_auth::evaluate_read_authorization(
+            arguments,
+            proj_path,
+            std::slice::from_ref(&resolved_subpath),
+            st,
+        )
+    };
+
+    if !full_path.exists() {
+        let ext = Path::new(&resolved_subpath)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let lang_tag = super::context_read_cluster::detect_lang_tag(ext);
+        let auth_footer = eval_auth(state);
+        return format!(
+            "# Pending New File: {}\n\n```{}\n// [NEW FILE - Pending Creation]\n```\n> [!NOTE] This file does not exist yet on disk and will be created during edits.{}",
+            resolved_subpath, lang_tag, auth_footer
+        );
+    }
+
+    let cache_key = super::context_cache::AstCacheKey {
+        path: resolved_subpath.clone(),
+        target_symbol: target_symbol.map(|s| s.to_string()),
+        view_mode: view_mode.to_string(),
+        start_line: start_line_arg,
+        end_line: end_line_arg,
+        show_line_numbers,
+    };
+
+    if let Some((cached_body, age_secs, baseline_tokens)) = state.ast_cache.get(&cache_key, &full_path) {
+        state.last_raw_baseline_tokens = Some(baseline_tokens);
+        let hit_notice = format!("\n[ag: AST Response Cache Hit (freshness: {}s/30s)]", age_secs);
+        let auth_footer = eval_auth(state);
+        return format!("{}{}{}", cached_body, hit_notice, auth_footer);
+    }
+
     match std::fs::read_to_string(&full_path) {
         Ok(content) => {
             let full_file_tokens = crate::optimizer::compressor::estimate_tokens(&content, false) as u64;
@@ -66,11 +116,13 @@ pub(crate) fn handle_read(
             let has_range = start_line_arg.is_some() || end_line_arg.is_some();
             if (view_mode == "skeleton" || (total_lines > 300 && target_symbol.is_none() && !has_range && view_mode != "full")) && !is_exempt {
                 let skeleton = crate::optimizer::skeleton::generate_code_skeleton(&content, &resolved_subpath);
-                return format!(
+                let body = format!(
                     "```\n{}\n```\n[ag: AST Structural Skeleton ({} lines) | Token Saver Mode: use target_symbol or line range for full body]",
                     skeleton,
                     total_lines
                 );
+                state.ast_cache.insert(cache_key, body.clone(), &full_path, full_file_tokens);
+                return format!("{}{}", body, eval_auth(state));
             }
 
             // 2. AST Semantic Context Slicing (Zoom Read)
@@ -78,13 +130,15 @@ pub(crate) fn handle_read(
                 view_mode == "zoom" || view_mode == "slice"
             }) {
                 if let Some(slice) = crate::optimizer::skeleton::generate_zoom_slice(&content, &resolved_subpath, symbol) {
-                    return format!(
+                    let body = format!(
                         "```\n{}\n```\n[ag: Zoom Read (focus: {}) | {} folded functions, ~{}% token reduction]",
                         slice.sliced_content,
                         symbol,
                         slice.folded_functions_count,
                         slice.savings_percent
                     );
+                    state.ast_cache.insert(cache_key, body.clone(), &full_path, full_file_tokens);
+                    return format!("{}{}", body, eval_auth(state));
                 }
             }
 
@@ -169,11 +223,6 @@ pub(crate) fn handle_read(
             let count = display_lines.len();
             let was_capped = !has_range && total_lines > 300;
 
-            let show_line_numbers = arguments
-                .get("line_numbers")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-
             let bounded = if show_line_numbers {
                 display_lines
                     .into_iter()
@@ -218,7 +267,7 @@ pub(crate) fn handle_read(
                 ""
             };
 
-            if let Some(symbol) = target_symbol {
+            let main_body = if let Some(symbol) = target_symbol {
                 format!(
                     "# Target Symbol Extracted: '{}' from {} (Lines {}-{} of {})\n\n{}{}{}",
                     symbol, target_path, slice_start, slice_end, total_lines, indent_note, bounded, loc_warning
@@ -228,7 +277,10 @@ pub(crate) fn handle_read(
                     "# Bounded File Content: {} (Lines {}-{} of {})\n\n{}{}{}",
                     target_path, slice_start, slice_end, total_lines, indent_note, bounded, loc_warning
                 )
-            }
+            };
+            state.ast_cache.insert(cache_key, main_body.clone(), &full_path, full_file_tokens);
+            let auth_footer = eval_auth(state);
+            format!("{}{}", main_body, auth_footer)
         }
         Err(e) => format!("Failed to read file '{}': {}", target_path, e),
     }

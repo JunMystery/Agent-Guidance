@@ -1,0 +1,193 @@
+use serde_json::json;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::mcp::state::ServerState;
+use crate::mcp::tools::gate_approval::handle_approve_plan;
+use crate::mcp::tools::gate_plan_parser::{extract_paths_from_plan_content, find_plan_artifact};
+
+static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+fn create_temp_dir() -> PathBuf {
+    let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("ag_plan_auth_test_{}_{}", std::process::id(), id));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn test_extract_paths_from_markdown_table_and_list() {
+    let temp = create_temp_dir();
+    let proj_path = &temp;
+
+    let markdown = format!(
+        r#"
+# Implementation Plan
+
+## 1. User Review Required / Architecture Design
+Some overview text here with false alarms like `cargo test` and `v2.0.0`.
+
+## 2. Proposed Changes
+### Core Engine
+| File Path | Status | Notes |
+|---|---|---|
+| `src/domain/model.rs` | PASSED | New domain model |
+| `src/entrypoint/handler.rs` | PASSED | Dispatcher |
+
+### Documentation
+- [mcp-surface.md](file://{}/docs/reference/mcp-surface.md): Update documentation
+- `docs/usage.md`: Add examples
+- Ignore `implementation_plan.md` and `https://github.com/org/repo/file.rs`
+"#,
+        proj_path.display()
+    );
+
+    let paths = extract_paths_from_plan_content(&markdown, proj_path);
+    assert_eq!(
+        paths,
+        vec![
+            "src/domain/model.rs".to_string(),
+            "src/entrypoint/handler.rs".to_string(),
+            "docs/reference/mcp-surface.md".to_string(),
+            "docs/usage.md".to_string(),
+        ]
+    );
+    let _ = fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_plan_artifact_discovery_multitier() {
+    let temp = create_temp_dir();
+    let proj = &temp;
+
+    // 1. Initially none found
+    assert!(find_plan_artifact(proj, None, None).is_none());
+
+    // 2. Custom path takes top priority
+    let custom_file = proj.join("custom_plan.md");
+    fs::write(&custom_file, "# Custom").unwrap();
+    let found = find_plan_artifact(proj, Some("custom_plan.md"), None);
+    assert_eq!(found, Some(custom_file));
+
+    // 3. Fallback to workspace implementation_plan.md
+    let ws_plan = proj.join("implementation_plan.md");
+    fs::write(&ws_plan, "# Workspace Plan").unwrap();
+    let found_ws = find_plan_artifact(proj, None, None);
+    assert_eq!(found_ws, Some(ws_plan));
+
+    // 4. Fallback to .agent-context
+    let ctx_dir = proj.join(".agent-context");
+    fs::create_dir_all(&ctx_dir).unwrap();
+    let ctx_plan = ctx_dir.join("implementation_plan.md");
+    fs::write(&ctx_plan, "# Context Plan").unwrap();
+    fs::remove_file(proj.join("implementation_plan.md")).unwrap();
+    let found_ctx = find_plan_artifact(proj, None, None);
+    assert_eq!(found_ctx, Some(ctx_plan));
+
+    // 5. Fallback to brain dir when workspace has no plans
+    fs::remove_file(ctx_dir.join("implementation_plan.md")).unwrap();
+    let brain_dir = temp.join("mock_brain");
+    let session_dir = brain_dir.join("sess_xyz");
+    fs::create_dir_all(&session_dir).unwrap();
+    let brain_plan = session_dir.join("implementation_plan.md");
+    fs::write(&brain_plan, "# Brain Plan").unwrap();
+    unsafe {
+        std::env::set_var("AGY_BRAIN_DIR", &brain_dir);
+    }
+    let found_brain = find_plan_artifact(proj, None, Some("sess_xyz"));
+    assert_eq!(found_brain, Some(brain_plan));
+    unsafe {
+        std::env::remove_var("AGY_BRAIN_DIR");
+    }
+
+    let _ = fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_approve_plan_auto_auth_end_to_end() {
+    let temp = create_temp_dir();
+    let proj = &temp;
+
+    let plan_content = r#"
+# Plan
+## Proposed Changes
+| File Path | Description |
+|---|---|
+| `src/domain/user.rs` | Domain entity |
+| `src/adapter/repo.rs` | Repository implementation |
+"#;
+    fs::write(proj.join("implementation_plan.md"), plan_content).unwrap();
+
+    let mut state = ServerState::new();
+    let args = json!({
+        "justification": "Implement domain and repository"
+    });
+
+    let res = handle_approve_plan(&args, &mut state, true, None, proj);
+    assert!(res.contains("PASSED"));
+    assert!(res.contains("Plan Approved: true"));
+    assert!(res.contains("Plan Artifact Auto-Auth: 2 file(s) automatically discovered"));
+    assert!(res.contains("src/domain/user.rs"));
+    assert!(res.contains("src/adapter/repo.rs"));
+    assert!(state.edit_authorized);
+    assert_eq!(state.workflow_stage, "Build");
+
+    let _ = fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_approve_plan_auto_auth_deduplication() {
+    let temp = create_temp_dir();
+    let proj = &temp;
+
+    let plan_content = r#"
+## Proposed Changes
+- `src/main.rs`: Entrypoint
+- `src/domain/user.rs`: Model
+"#;
+    fs::write(proj.join("implementation_plan.md"), plan_content).unwrap();
+
+    let mut state = ServerState::new();
+    state.queue_deferred_authorization(&["src/lib.rs".to_string()]);
+
+    let args = json!({
+        "relative_paths": ["src/main.rs"],
+        "justification": "Multi-tier deduplication test"
+    });
+
+    let res = handle_approve_plan(&args, &mut state, true, None, proj);
+    assert!(res.contains("Batch Pre-Authorization: 3 file(s) processed"));
+    assert!(res.contains("Plan Artifact Auto-Auth: 1 file(s) automatically discovered"));
+    assert!(res.contains("src/main.rs"));
+    assert!(res.contains("src/lib.rs"));
+    assert!(res.contains("src/domain/user.rs"));
+
+    let _ = fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_approve_plan_auto_auth_modularity_guard() {
+    let temp = create_temp_dir();
+    let proj = &temp;
+
+    let plan_content = r#"
+## Proposed Changes
+| File | Action |
+|---|---|
+| `src/shared_services.rs` | Compound plural anti-pattern |
+"#;
+    fs::write(proj.join("implementation_plan.md"), plan_content).unwrap();
+
+    let mut state = ServerState::new();
+    let args = json!({
+        "justification": "Test compound plural guard"
+    });
+
+    let res = handle_approve_plan(&args, &mut state, true, None, proj);
+    assert!(res.contains("BLOCKED") || res.contains("COMPOUND_FILE_NAME"));
+    assert!(res.contains("shared_services.rs"));
+
+    let _ = fs::remove_dir_all(&temp);
+}

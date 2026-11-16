@@ -88,7 +88,9 @@ pub(crate) fn handle(
                 file_list.join("\n")
             )
         }
-        "read" | "cluster_read" | "read_cluster" => handle_read(&arguments, &proj_path, rel_path, state),
+        "read" | "cluster_read" | "read_cluster" | "read_and_authorize" | "read_auth" => {
+            handle_read(&arguments, &proj_path, rel_path, state)
+        }
         "search" => handle_search(query, &proj_path, intent, state),
         "navigate" => handle_navigate(&arguments, query, &proj_path, state),
         "learn_alias" => handle_learn_alias(&arguments, &proj_path, rel_path),
@@ -139,7 +141,7 @@ pub(crate) fn handle(
                 .and_then(|t| t.as_str())
                 .or_else(|| if !query.is_empty() { Some(query) } else { None })
                 .unwrap_or("");
-            handle_subgraph_bundle(&arguments, &proj_path, target)
+            handle_subgraph_bundle(&arguments, &proj_path, target, state)
         }
         "data_flow" | "dataflow" | "taint" | "flow" => {
             handle_data_flow(&proj_path, query)

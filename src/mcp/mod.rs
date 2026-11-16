@@ -23,3 +23,15 @@ mod tests_gui_approval;
 mod tools_bundle_tests;
 #[cfg(test)]
 mod tools_path_tests;
+#[cfg(test)]
+mod tools_cluster_tests;
+#[cfg(test)]
+mod tools_fast_path_tests;
+#[cfg(test)]
+mod tools_bundle_upgrade_tests;
+#[cfg(test)]
+mod tools_plan_auth_tests;
+#[cfg(test)]
+mod tools_read_auth_tests;
+#[cfg(test)]
+mod tools_cache_tests;
