@@ -1,22 +1,7 @@
 use std::path::{Path, PathBuf};
 use crate::mcp::state::ServerState;
 
-pub fn is_generic_home_dir(p: &Path) -> bool {
-    if p.parent().is_none() || p == Path::new("/") || p == Path::new("") || p.components().count() <= 1 {
-        return true;
-    }
-    let p_lossy = p.to_string_lossy();
-    if p_lossy.len() <= 3 && p_lossy.contains(':') {
-        return true;
-    }
-    let clean_p = p_lossy.trim_end_matches(['/', '\\']);
-    let check_match = |var_val: Option<String>| {
-        var_val.map(|v| clean_p.eq_ignore_ascii_case(v.trim_end_matches(['/', '\\']))).unwrap_or(false)
-    };
-    check_match(dirs::home_dir().map(|h| h.to_string_lossy().to_string()))
-        || check_match(std::env::var("HOME").ok())
-        || check_match(std::env::var("USERPROFILE").ok())
-}
+pub use crate::dashboard::projects_container::{is_generic_container_dir, is_generic_home_dir};
 
 fn is_ide_install_dir(p: &Path) -> bool {
     let s = p.to_string_lossy().to_lowercase();
@@ -26,22 +11,32 @@ fn is_ide_install_dir(p: &Path) -> bool {
         || s.contains("/usr/bin")
 }
 
+fn resolve_safe_root(p: &Path) -> PathBuf {
+    let resolved = crate::dashboard::projects_path::find_project_root(p);
+    if resolved != p && !resolved.join(".git").exists() {
+        return p.to_path_buf();
+    }
+    if is_generic_container_dir(&resolved) {
+        return p.to_path_buf();
+    }
+    resolved
+}
+
 pub fn detect_parent_process_cwd() -> Option<PathBuf> {
     use sysinfo::{Pid, System};
     let mut sys = System::new_all();
     sys.refresh_all();
 
     let my_pid = Pid::from_u32(std::process::id());
-    if let Some(proc_) = sys.process(my_pid) {
-        if let Some(parent_pid) = proc_.parent() {
-            if let Some(parent_proc) = sys.process(parent_pid) {
-                if let Some(cwd) = parent_proc.cwd() {
-                    if cwd.is_dir() && !is_ide_install_dir(cwd) && !is_generic_home_dir(cwd) {
-                        return Some(cwd.to_path_buf());
-                    }
-                }
-            }
-        }
+    if let Some(proc_) = sys.process(my_pid)
+        && let Some(parent_pid) = proc_.parent()
+        && let Some(parent_proc) = sys.process(parent_pid)
+        && let Some(cwd) = parent_proc.cwd()
+        && cwd.is_dir()
+        && !is_ide_install_dir(cwd)
+        && !is_generic_container_dir(cwd)
+    {
+        return Some(cwd.to_path_buf());
     }
     None
 }
@@ -67,8 +62,8 @@ pub fn detect_project_path_with_targets(
         } else {
             PathBuf::from(trimmed)
         };
-        if !is_generic_home_dir(&p) {
-            return crate::dashboard::projects_path::find_project_root(&p);
+        if !is_generic_container_dir(&p) {
+            return resolve_safe_root(&p);
         }
     }
 
@@ -81,14 +76,13 @@ pub fn detect_project_path_with_targets(
             } else {
                 p_target.parent().unwrap_or(p_target)
             };
-            if !is_generic_home_dir(start_dir) {
-                let inferred = crate::dashboard::projects_path::find_project_root(start_dir);
-                if !is_generic_home_dir(&inferred) {
-                    if state.workspace_roots.is_empty()
-                        || state.workspace_roots.iter().any(|r| inferred.starts_with(r))
-                    {
-                        return inferred;
-                    }
+            if !is_generic_container_dir(start_dir) {
+                let inferred = resolve_safe_root(start_dir);
+                if !is_generic_container_dir(&inferred)
+                    && (state.workspace_roots.is_empty()
+                        || state.workspace_roots.iter().any(|r| inferred.starts_with(r)))
+                {
+                    return inferred;
                 }
             }
         }
@@ -97,40 +91,40 @@ pub fn detect_project_path_with_targets(
     // 3. Strict Session Workspace Root: Bound directly by IDE initialize handshake
     if let Some(first_root) = state.workspace_roots.first() {
         let p = PathBuf::from(first_root);
-        if !is_generic_home_dir(&p) {
-            return crate::dashboard::projects_path::find_project_root(&p);
+        if !is_generic_container_dir(&p) {
+            return resolve_safe_root(&p);
         }
     }
 
     // 4. Explicit session project path previously established in this session (e.g. task_pipeline)
     if let Some(ref sp) = state.project_path {
         let p = PathBuf::from(sp);
-        if !is_generic_home_dir(&p) {
-            return crate::dashboard::projects_path::find_project_root(&p);
+        if !is_generic_container_dir(&p) {
+            return resolve_safe_root(&p);
         }
     }
 
     // 5. Process CWD (fallback only if no session project path set)
-    if let Ok(cwd) = std::env::current_dir() {
-        if !is_generic_home_dir(&cwd) {
-            return crate::dashboard::projects_path::find_project_root(&cwd);
-        }
+    if let Ok(cwd) = std::env::current_dir()
+        && !is_generic_container_dir(&cwd)
+    {
+        return resolve_safe_root(&cwd);
     }
 
     // 6. Parent process CWD
-    if let Some(parent_cwd) = detect_parent_process_cwd() {
-        if !is_generic_home_dir(&parent_cwd) {
-            return crate::dashboard::projects_path::find_project_root(&parent_cwd);
-        }
+    if let Some(parent_cwd) = detect_parent_process_cwd()
+        && !is_generic_container_dir(&parent_cwd)
+    {
+        return resolve_safe_root(&parent_cwd);
     }
 
     // 7. Global persistent fallback ONLY if running headless CLI without IDE workspace
-    if state.workspace_roots.is_empty() {
-        if let Some(gp) = ServerState::read_global_project_path() {
-            let p = PathBuf::from(&gp);
-            if !is_generic_home_dir(&p) {
-                return crate::dashboard::projects_path::find_project_root(&p);
-            }
+    if state.workspace_roots.is_empty()
+        && let Some(gp) = ServerState::read_global_project_path()
+    {
+        let p = PathBuf::from(&gp);
+        if !is_generic_container_dir(&p) {
+            return resolve_safe_root(&p);
         }
     }
 
@@ -249,7 +243,7 @@ pub fn validate_path_scoped(base_path: &Path, rel_path: &str, allow_cross_worksp
 
     let clean_rel = stripped
         .trim()
-        .trim_start_matches(|c| c == '/' || c == '\\')
+        .trim_start_matches(['/', '\\'])
         .replace('\\', "/");
 
     if clean_rel.is_empty() {

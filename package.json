@@ -1,6 +1,6 @@
 {
   "name": "agent-guidance",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Cross-platform launcher for Agent Guidance Rust MCP Server & GraphRAG Intelligence Engine",
   "main": "packaging/npm/bin/agent-guidance.js",
   "bin": {

@@ -2,6 +2,22 @@
 
 All notable changes to Agent Guidance Rust MCP Server will be documented in this file.
 
+## [2.0.1] - 2026-11-17
+
+### 🛡️ Generic Repository Container Boundary Enforcement (`src/dashboard/projects_container.rs`, `projects_path.rs`, `src/mcp/tools/helpers_path.rs`)
+- **Generic Container Directory Recognition (`is_generic_container_dir`)**:
+  - Implemented modular classification in `src/dashboard/projects_container.rs` (103 LOC) to detect common repository parent directories (`git`, `github`, `gitlab`, `projects`, `workspace`, `workspaces`, `repos`, `repositories`, `code`, `dev`, `development`).
+  - Added heuristic multi-git detection: any directory without a `.git` root that contains $\ge 2$ subdirectories with `.git` is automatically classified as a repository container.
+  - Enhanced `is_generic_home_dir` to recognize user profile/home directories across Unix and Windows environments (`/home/*`, `/Users/*`, `C:\Users\*`).
+- **Strict Boundary Termination in `find_project_root`**:
+  - Priority 1 (`.agent-context`) and Priority 2 (manifests/`.git`) search loops terminate immediately upon hitting a generic container directory or filesystem root.
+  - Prohibits ascending outside the enclosing repository or adopting a parent container's misplaced `.agent-context`.
+  - Fixes cross-repository context leakage where inspecting an uninitialized directory inside `~/Git` (e.g. `virdi-gateway`) caused the agent to crawl all sibling repositories (3,700+ files).
+- **Session Path Detection Guard**:
+  - Updated all 7 detection priorities in `helpers_path.rs` to route through `resolve_safe_root`, preserving explicitly passed empty directories and preventing redirects to container parents.
+- **Regression Test Suite**:
+  - Added `src/mcp/tools_path_boundary_tests.rs` (85 LOC) covering container naming detection, multi-repo heuristics, upward boundary termination, explicit path preservation, and valid submodule git resolution.
+
 ## [2.0.0] - 2026-11-15
 
 ### 🚀 Clustered Read & Universal Target Path Spec (`src/mcp/tools/helpers_spec.rs`, `context_read_cluster.rs`, `context_read.rs`)

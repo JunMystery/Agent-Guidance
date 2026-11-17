@@ -15,6 +15,7 @@ pub(crate) mod graph_function_query;
 pub(crate) mod graph_query;
 pub mod logs_api;
 pub mod projects;
+pub(crate) mod projects_container;
 pub(crate) mod projects_path;
 pub(crate) mod projects_prune;
 pub(crate) mod project_delete;

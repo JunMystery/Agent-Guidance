@@ -71,13 +71,13 @@ pub fn find_project_root(path: &Path) -> PathBuf {
     let mut best_agent_root: Option<PathBuf> = None;
     let mut check_agent = curr.clone();
     for _ in 0..15 {
-        if is_filesystem_root(&check_agent) {
+        if is_filesystem_root(&check_agent) || super::projects_container::is_generic_container_dir(&check_agent) {
             break;
         }
-        if let Some(ref h) = home {
-            if &check_agent == h {
-                break;
-            }
+        if let Some(ref h) = home
+            && &check_agent == h
+        {
+            break;
         }
         if is_inside_temp && check_agent == temp {
             break;
@@ -101,13 +101,13 @@ pub fn find_project_root(path: &Path) -> PathBuf {
     let mut best_manifest_root: Option<PathBuf> = None;
     let mut check_manifest = curr.clone();
     for _ in 0..15 {
-        if is_filesystem_root(&check_manifest) {
+        if is_filesystem_root(&check_manifest) || super::projects_container::is_generic_container_dir(&check_manifest) {
             break;
         }
-        if let Some(ref h) = home {
-            if &check_manifest == h {
-                break;
-            }
+        if let Some(ref h) = home
+            && &check_manifest == h
+        {
+            break;
         }
         if is_inside_temp && check_manifest == temp {
             break;
@@ -148,11 +148,11 @@ pub fn normalize_project_path(raw: &str) -> String {
         while s.len() > 3 && s.ends_with('\\') {
             s.pop();
         }
-        if let Some(first) = s.chars().next() {
-            if first.is_ascii_lowercase() {
-                let upper = first.to_ascii_uppercase().to_string();
-                s.replace_range(..1, &upper);
-            }
+        if let Some(first) = s.chars().next()
+            && first.is_ascii_lowercase()
+        {
+            let upper = first.to_ascii_uppercase().to_string();
+            s.replace_range(..1, &upper);
         }
         return s;
     }
