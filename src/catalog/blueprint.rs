@@ -47,7 +47,7 @@ pub fn generate_dynamic_blueprint(proj_path: &Path, task: &str, arch_pattern: &s
                         let full = proj_path.join(&file_path);
                         if let Ok(content) = std::fs::read_to_string(&full) {
                             let loc = content.lines().count();
-                            if loc >= 200 && !large_files.iter().any(|(p, _, _)| p == &file_path) {
+                            if loc > 300 && !large_files.iter().any(|(p, _, _)| p == &file_path) {
                                 large_files.push((file_path, sym_name, loc));
                             }
                         }
@@ -60,133 +60,125 @@ pub fn generate_dynamic_blueprint(proj_path: &Path, task: &str, arch_pattern: &s
     let mut blueprint = String::new();
 
     if !large_files.is_empty() {
-        blueprint.push_str("### Monolithic File Split Alerts (LOC >= 200):\n");
+        blueprint.push_str("### Cohesion Review Candidates (Soft Limit > 300 LOC):\n");
         for (file, sym, loc) in &large_files {
             blueprint.push_str(&format!(
-                "- `{}` ({} LOC — near/over limit) containing `{}`\n",
+                "- `{}` ({} LOC) containing `{}` — check whether it mixes unrelated domains; keep intact if cohesive, or extract long/complex functions (> 60 LOC).\n",
                 file, loc, sym
             ));
-            blueprint.push_str(&format!(
-                "  - **Decomposition Plan**: Extract handler/service logic into dedicated sub-module files (< 150 LOC each) before adding new code.\n"
-            ));
         }
-        blueprint.push_str("\n");
+        blueprint.push('\n');
     }
 
     blueprint.push_str(&format!("### Upfront Modular Blueprint for [{}]:\n", arch_pattern));
     match arch_pattern {
         "Clean_Architecture" => {
-            blueprint.push_str("- `domain/`: Pure data models and trait definitions (< 150 LOC)\n");
-            blueprint.push_str("- `usecase/` or `service/`: Business application logic and workflow engines (< 200 LOC)\n");
-            blueprint.push_str("- `infrastructure/` or `repository/`: Database, storage, and driver adapters (< 200 LOC)\n");
-            blueprint.push_str("- `entrypoint/` or `handler/`: Thin dispatch controllers & REST routers (< 100 LOC)\n");
-            blueprint.push_str("- Frontend `views/`: Thin presentation coordinator (< 120 LOC)\n");
-            blueprint.push_str("- Frontend `components/`: Focused sub-components, modals, & tables (< 120 LOC each)\n");
+            blueprint.push_str("- `domain/`: Pure data models and trait definitions grouped by domain\n");
+            blueprint.push_str("- `usecase/` or `service/`: Focused business use cases with small functions (15-40 LOC)\n");
+            blueprint.push_str("- `infrastructure/` or `repository/`: Storage and driver adapters\n");
+            blueprint.push_str("- `entrypoint/` or `handler/`: Thin dispatch controllers & REST routers\n");
+            blueprint.push_str("- Frontend `views/` & `components/`: Feature-colocated presentation and reusable UI parts\n");
         }
         "Layered_Architecture" => {
-            blueprint.push_str("- `controllers/` or `handler/`: Input parsing, parameter validation, and routing (< 100 LOC)\n");
-            blueprint.push_str("- `services/`: Core business workflows and orchestration (< 200 LOC)\n");
-            blueprint.push_str("- `models/` or `domain/`: Data structures, schemas, and queries (< 150 LOC)\n");
-            blueprint.push_str("- `repository/`: Data access layer and database queries (< 200 LOC)\n");
-            blueprint.push_str("- Frontend `views/`: Layout and route coordinators (< 120 LOC)\n");
-            blueprint.push_str("- Frontend `components/`: Reusable widgets, forms, dialogs (< 120 LOC each)\n");
-        }
-        "CLI_Pipeline" => {
-            blueprint.push_str("- `main.rs`: Argument parsing & sub-command dispatcher (< 80 LOC)\n");
-            blueprint.push_str("- `commands/`: Dedicated handler per sub-command (< 150 LOC each)\n");
-            blueprint.push_str("- `core/`: Pure business engine and processing pipelines (< 200 LOC)\n");
+            blueprint.push_str("- `controllers/` or `handler/`: Input validation and routing\n");
+            blueprint.push_str("- `services/`: Domain workflows with shallow, cohesive functions\n");
+            blueprint.push_str("- `models/` or `domain/`: Data structures, schemas, and queries\n");
+            blueprint.push_str("- `repository/`: Data access layer and database queries\n");
+            blueprint.push_str("- Frontend `views/` & `components/`: Route coordinators and focused widgets\n");
         }
         "Package_By_Feature" => {
-            blueprint.push_str("- `<feature>/handlers.*`: Request handling and flow control (< 120 LOC)\n");
-            blueprint.push_str("- `<feature>/service.*`: Feature business logic (< 180 LOC)\n");
-            blueprint.push_str("- `<feature>/types.*`: Feature-scoped models and errors (< 100 LOC)\n");
-            blueprint.push_str("- `<feature>/components/*`: Feature-scoped UI components (< 120 LOC each)\n");
+            blueprint.push_str("- `<feature>/handlers.*`: Request handling and flow control colocated with the feature\n");
+            blueprint.push_str("- `<feature>/service.*`: Feature business logic\n");
+            blueprint.push_str("- `<feature>/types.*`: Feature-scoped models and errors\n");
+            blueprint.push_str("- `<feature>/components/*`: Feature-scoped UI components\n");
+        }
+        "CLI_Pipeline" => {
+            blueprint.push_str("- `main.rs`: Argument parsing & sub-command dispatcher\n");
+            blueprint.push_str("- `commands/`: Dedicated handler per sub-command\n");
+            blueprint.push_str("- `core/`: Domain engine and processing pipelines\n");
         }
         "Flat_Library" => {
-            blueprint.push_str("- `lib.rs`: Public API facade and re-exports (< 100 LOC)\n");
-            blueprint.push_str("- `internal/`: Focused single-responsibility sub-modules (< 200 LOC each)\n");
+            blueprint.push_str("- `lib.rs`: Public API facade and re-exports\n");
+            blueprint.push_str("- `internal/`: Domain-grouped single-responsibility sub-modules\n");
         }
         _ => {
-            blueprint.push_str("- Entry Dispatcher: Thin main coordinator (< 100 LOC)\n");
-            blueprint.push_str("- Feature Modules: Cohesive sub-modules (< 200 LOC each)\n");
-            blueprint.push_str("- UI Components: Dedicated sub-components for dialogs/tables (< 120 LOC each)\n");
+            blueprint.push_str("- Entry Dispatcher: Thin coordinator\n");
+            blueprint.push_str("- Feature Modules: Domain-colocated modules serving a single use case\n");
+            blueprint.push_str("- UI Components: Focused feature sub-components\n");
         }
     }
-    blueprint.push_str("\n**Hard Constraint**: Every new or modified file MUST remain < 300 LOC. Decompose complex views or services into sub-components/sub-modules from line 1.\n");
+    blueprint.push_str("\n**Quality & Cohesion Guidelines**: Treat 300 LOC as a soft review threshold (keep cohesive files intact), prioritize small functions (15-40 LOC, warn > 60 LOC, cyclomatic <= 10, cognitive <= 15, nesting <= 4), group related files by domain/feature, and verify with static linters.\n");
 
     blueprint
 }
 
-/// Formats a strict architectural decomposition mandate when a file exceeds 300 LOC.
-/// Provides precise sub-module location and structure guidance based on the active architecture pattern.
+/// Formats a soft modularity & domain cohesion advisory when reviewing a file > 300 LOC.
+#[cfg(test)]
 pub fn format_decomposition_guidance(rel_path: &str, loc: usize, arch_pattern: &str) -> String {
     let mut guidance = format!(
-        "# Edit Approval Gate: BLOCKED (300_LOC_CAP_EXCEEDED)\n\n\
+        "# Soft Modularity & Domain Cohesion Advisory\n\n\
         - Target File: `{}`\n\
-        - Current Length: **{} lines** (hard limit: 300 lines)\n\
+        - Current Length: **{} lines** (soft limit: 300 lines)\n\
         - Architecture Pattern: **{}**\n\n\
-        **Error: 300_LOC_LIMIT_EXCEEDED**: Adding new logic directly into a file that has reached or exceeded 300 LOC is strictly forbidden to prevent monolithic degradation.\n\n\
-        ### Mandatory Architectural Decomposition Guide for [{}]\n",
-        rel_path, loc, arch_pattern, arch_pattern
+        **Review Question**: *Is `{}` handling unrelated responsibilities, or does it contain overly long/complex functions (> 60 LOC, nesting > 4)?* If it is cohesive within one domain/use case and composed of small focused functions, keeping it intact is reasonable.\n\n\
+        ### Domain Grouping Guide for [{}] (if splitting is warranted)\n",
+        rel_path, loc, arch_pattern, rel_path, arch_pattern
     );
 
     match arch_pattern {
         "Clean_Architecture" => {
             guidance.push_str(
-                "- Extract data models & interfaces into `domain/` (< 150 LOC)\n\
-                - Extract specific business logic into single-responsibility use cases in `usecase/` (< 200 LOC each)\n\
-                - Extract external I/O & database calls into `infrastructure/` (< 200 LOC)\n\
-                - Keep the entry file as a thin dispatcher coordinator (< 80 LOC)\n"
+                "- Colocate domain models & interfaces in `domain/`\n\
+                - Place specific business use cases in `usecase/` with small functions (15-40 LOC)\n\
+                - Keep external I/O & database adapters in `infrastructure/`\n\
+                - Keep entry handlers thin and focused on dispatch\n"
             );
         }
         "Layered_Architecture" => {
             guidance.push_str(
-                "- Extract routing and request/input handling into `controllers/` (< 100 LOC)\n\
-                - Extract domain workflow orchestration into focused `services/` (< 200 LOC each)\n\
-                - Extract schemas, queries, and data mapping into `models/` (< 150 LOC)\n"
+                "- Keep routing and request parsing in `controllers/`\n\
+                - Keep cohesive domain workflows in `services/`\n\
+                - Keep schemas and data mapping in `models/`\n"
             );
         }
         "Package_By_Feature" => {
             guidance.push_str(
-                "- Split the feature into cohesive components:\n\
-                - `<feature>/handlers.*`: Flow control & entry points (< 120 LOC)\n\
-                - `<feature>/service.*`: Core business computations (< 180 LOC)\n\
-                - `<feature>/types.*`: Domain entities & error types (< 100 LOC)\n"
+                "- Group feature files together to localize edits:\n\
+                - `<feature>/handlers.*`: Flow control & entry points\n\
+                - `<feature>/service.*`: Core feature computations\n\
+                - `<feature>/types.*`: Feature entities & error types\n"
             );
         }
         "CLI_Pipeline" => {
             guidance.push_str(
-                "- Keep `main.*` strictly as an argument parser and command dispatcher (< 80 LOC)\n\
-                - Extract each sub-command implementation into `commands/<command_name>.*` (< 150 LOC each)\n\
-                - Extract reusable engine pipelines into `core/` (< 200 LOC)\n"
+                "- Keep `main.*` focused on CLI parsing and dispatch\n\
+                - Group sub-command handlers under `commands/<command_name>.*`\n\
+                - Keep reusable pipelines in `core/`\n"
             );
         }
         "Orchestrator" => {
             guidance.push_str(
-                "- Keep the orchestrator file as a high-level state machine coordinator (< 100 LOC)\n\
-                - Extract pipeline stages or workers into dedicated sub-modules in `steps/` or `workers/` (< 150 LOC each)\n\
-                - Extract pipeline state models and configs into `types.*` (< 80 LOC)\n"
+                "- Keep the orchestrator focused on high-level stage transitions\n\
+                - Group pipeline stages into `steps/` or `workers/` by domain\n\
+                - Keep pipeline state models in `types.*`\n"
             );
         }
         "Flat_Library" => {
             guidance.push_str(
-                "- Keep `lib.*` strictly as a public API facade & re-exporter (< 100 LOC)\n\
-                - Extract internal logic into single-responsibility modules under `internal/` (< 200 LOC each)\n"
+                "- Keep `lib.*` as a clean public API facade\n\
+                - Group internal modules under `internal/` by domain responsibility\n"
             );
         }
         _ => {
             guidance.push_str(
-                "- Decompose logic into cohesive sub-modules (< 180 LOC each)\n\
-                - Keep the primary file as a thin dispatcher (< 80 LOC)\n"
+                "- Extract long/complex functions (> 60 LOC) into focused helpers\n\
+                - Group cohesive files by domain/feature to avoid cross-module side effects\n"
             );
         }
     }
 
     guidance.push_str(
-        "\n**Action Required**:\n\
-        1. Authorize edits via BATCH `workflow_gate(action=\"authorize_edit\", relative_paths=[\"<target_file>\", \"<new_submodule_file>\"], justification=\"Refactor/Decompose: [explanation]\")`.\n\
-        2. Create the new sub-module file(s) (< 150 LOC each) aligned with the structure above.\n\
-        3. Decompose the existing file by delegating to the new sub-modules, stripping it down to a thin coordinator (< 100 LOC).\n"
+        "\n**Optional Refactoring**: Only split if the file mixes unrelated domains or has complex functions; otherwise keep cohesive domain logic together.\n"
     );
 
     guidance

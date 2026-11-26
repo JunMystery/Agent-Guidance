@@ -106,3 +106,49 @@ fn test_context_read_python_indent_preservation_and_tag() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_context_read_blocks_external_absolute_path_and_preserves_html_comments() {
+    let base = std::env::temp_dir().join(format!("read_sec_test_{}", std::process::id()));
+    let repo = base.join("repo");
+    let external = base.join("external");
+    let _ = std::fs::create_dir_all(&repo);
+    let _ = std::fs::create_dir_all(&external);
+
+    let html_file = repo.join("index.html");
+    std::fs::write(&html_file, "<div><!-- keep me --></div>\n").unwrap();
+    let secret_file = external.join("secret.txt");
+    std::fs::write(&secret_file, "TOP_SECRET").unwrap();
+
+    let mut state = ServerState::new();
+    state.workspace_roots = vec![repo.to_string_lossy().to_string()];
+
+    let ext_res = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "read",
+            "project_path": repo.to_str().unwrap(),
+            "relative_path": secret_file.to_str().unwrap()
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let ext_text = ext_res["content"][0]["text"].as_str().unwrap();
+    assert!(ext_text.contains("Security Error"));
+    assert!(!ext_text.contains("TOP_SECRET"));
+
+    let html_res = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "read",
+            "project_path": repo.to_str().unwrap(),
+            "relative_path": "index.html"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let html_text = html_res["content"][0]["text"].as_str().unwrap();
+    assert!(html_text.contains("<!-- keep me -->"));
+
+    let _ = std::fs::remove_dir_all(&base);
+}

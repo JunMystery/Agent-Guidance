@@ -46,6 +46,11 @@ pub(crate) fn handle_read(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    let allow_cross = arguments
+        .get("allow_cross_workspace")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     let (full_path, resolved_subpath) = if target_path.starts_with("linked:") {
         let linked = crate::context::multi_project::discover_linked_projects(proj_path);
         if let Some((proj, subpath)) = crate::context::multi_project::resolve_cross_project_path(target_path, &linked) {
@@ -60,7 +65,7 @@ pub(crate) fn handle_read(
             );
         }
     } else {
-        match validate_path_scoped(proj_path, target_path, true) {
+        match validate_path_scoped(proj_path, target_path, allow_cross) {
             Ok(p) => (p, target_path.to_string()),
             Err(err_msg) => return format!("Security Error: {}", err_msg),
         }
@@ -247,7 +252,7 @@ pub(crate) fn handle_read(
 
             let loc_warning = if was_capped && target_symbol.is_none() && !is_exempt {
                 format!(
-                    "\n\n---\n**ARCHITECTURE MANDATE (300 LOC Cap Exceeded)**: File `{}` has **{} total lines** (capped at 300 lines).\n**MANDATORY ACTION**: Do NOT add new logic directly into this file. Decompose into sub-modules upfront (split entry dispatchers from sub-module handlers).",
+                    "\n\n---\n**Code Quality Note (Soft Limit > 300 LOC)**: File `{}` has **{} total lines** (read capped at 300 lines for token budget). If editing, check whether it mixes unrelated domains or contains long/complex functions (> 60 LOC); keep intact if cohesive.",
                     target_path, total_lines
                 )
             } else {

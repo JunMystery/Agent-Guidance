@@ -127,3 +127,14 @@
         }
         assert!(is_warmup_complete(), "Warmup must be complete");
     }
+
+    #[test]
+    fn test_load_precomputed_cache_rejects_missing_skills_instead_of_zero_vectors() {
+        let missing = vec![crate::catalog::store::SkillItem {
+            name: "__nonexistent_skill_for_zero_vector_test__".to_string(),
+            relative_path: "__nonexistent_skill_for_zero_vector_test__/SKILL.md".to_string(),
+            source: crate::catalog::store::SkillSource::Embedded,
+            content: "# Nonexistent".to_string(),
+        }];
+        assert!(precomputed::load_precomputed_cache(&missing).is_none());
+    }

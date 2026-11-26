@@ -12,7 +12,7 @@ Every coding task follows a strict 6-step execution lifecycle:
 
 1. **Initialize Context & Discover Skills**: Call `task_pipeline(task="...", project_path="...", phase="plan")` to initialize project boundaries, detect architecture, auto-bundle domain skill proposals, and unlock the priority gate.
 2. **Inject Skills (Optional)**: Confirm proposed skills via `ask_question` and load on-demand guides with `select_skills(skills=[...], user_confirmed=true)`.
-3. **Inspect Code Graph**: Search and read symbols using token-bounded operations via `project_context(operation="search"|"read"|"symbols"|"callers"|"blast_radius", ...)` (< 300 LOC cap).
+3. **Inspect Code Graph**: Search and read symbols using token-bounded operations via `project_context(operation="search"|"read"|"symbols"|"callers"|"blast_radius", ...)` (300-line token read cap).
 4. **Plan & Get User Approval**: Create/update `implementation_plan.md` and obtain explicit user consensus.
 5. **Authorize Edit**: Before creating or modifying any file, call `workflow_gate(action="authorize_edit", project_path="...", relative_path="...", risk_level="LOW", justification="...")`.
 6. **Empirical Verification**: Run tests and register proof via `guidance(operation="verify", verification_command="...", expected_output_keyword="...")`.
@@ -69,7 +69,7 @@ For trivial changes (typos, comments, docs, or single-file bugfixes < 20 lines),
 }
 ```
 
-### Token-Bounded File Read (< 300 LOC)
+### Token-Bounded File Read (300-Line Read Cap)
 
 ```json
 {
@@ -105,7 +105,7 @@ Read code context and simultaneously authorize file modifications in **1 turn**,
 }
 ```
 - **Direct vs. Deferred**: In `Build` stage, grants instant edit authorization and generates pre-edit snapshots. In `Plan` stage, queues targets into `deferred_authorized_paths` for 1-turn activation upon plan approval.
-- **Pending New Files**: Non-existent files are safely declared and validated upfront for paired 300 LOC decomposition.
+- **Pending New Files**: Non-existent files are safely declared and checked for soft domain cohesion advisories (`DOMAIN_COHESION_ADVISORY`) before creation.
 
 ### Clustered Read & Universal Target Path Spec
 
@@ -126,7 +126,7 @@ Inspect multiple related files, exact AST symbols, and line slices in a single t
 
 - **Target Path Specs**: Supports URI fragment syntax (`#symbol`) and line range slicing (`:start-end`).
 - **Deferred Pre-Authorization**: When invoked during `Plan` stage with `authorize: true`, valid paths are queued in `deferred_authorized_paths` and automatically authorized upon plan approval (`workflow_gate(action="approve_plan", user_confirmed=true)`), cutting tool call overhead by 50%.
-- **New File Declarations**: Files pending creation are marked `[NEW FILE - Pending Creation]` and validated upfront against compound plural suffixes (`*services`, `*utils`, etc.) to support 300 LOC paired decomposition.
+- **New File Declarations**: Files pending creation are marked `[NEW FILE - Pending Creation]` and checked against plural container suffixes (`*services`, `*utils`, etc.) for non-blocking `DOMAIN_COHESION_ADVISORY` hints.
 
 ### Subgraph Bundling with Direct Authorization (`subgraph_bundle`)
 
@@ -210,9 +210,9 @@ When user approves the plan, calling `approve_plan` automatically discovers and 
 }
 ```
 
-### Authorize File Edit (Single File & Paired Batch Decomposition)
+### Authorize File Edit (Single File & Batch Authorization)
 
-Single-file authorization is blocked for non-exempt files $\ge 300$ LOC; pass `relative_paths` alongside a new sub-module (< 150 LOC) with refactoring justification:
+Authorize single files or batch related domain files together; when a file exceeds the 300 LOC soft limit or has high function complexity, AST quality and domain cohesion advisories are surfaced non-blockingly:
 
 ```json
 {
@@ -290,7 +290,7 @@ Outputs a structured provenance report:
 
 ## Token Guidance & Best Practices
 
-- **Enforce 300 LOC Cap**: All non-exempt source files must remain strictly under 300 LOC (aim for < 150 LOC per sub-module). Modifying $\ge 300$ LOC files requires paired batch authorization with new sub-module creation; docs, data, and configs are exempt.
+- **300 LOC Soft Limit & Function Complexity**: Treat 300 LOC as a soft cohesion warning rather than a hard blocker. Keep functions focused (15-40 LOC, warn > 60 LOC, cyclomatic <= 10, cognitive <= 15, nesting <= 4), organize by domain/feature, and run language static linters (`cargo clippy`, `eslint`, `ruff`, `golangci-lint`); tests, docs, data, configs, assets, and `.mdc` files are exempt.
 - **Rule Precedence Hierarchy**: User's main rules (`AGENTS.md`, `RULES.md`, system prompt) always take precedence over injected MCP tool micro-rules.
 - **Targeted Reads**: Prefer `target_symbol` or `start_line`/`end_line` ranges over whole-file dumps.
 - **Tree Scans**: Use `max_depth=3` (default) for balanced project overview.

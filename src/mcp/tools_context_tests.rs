@@ -21,9 +21,9 @@ fn test_project_context_read_300_loc_warning() {
     );
     assert!(res.is_ok());
     let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
-    assert!(text.contains("ARCHITECTURE MANDATE (300 LOC Cap Exceeded)"));
+    assert!(text.contains("Code Quality Note (Soft Limit > 300 LOC)"));
     assert!(text.contains("350 total lines"));
-    assert!(text.contains("Decompose into sub-modules upfront"));
+    assert!(!text.contains("ARCHITECTURE MANDATE"));
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

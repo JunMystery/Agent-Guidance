@@ -81,3 +81,108 @@
             }
         }
     }
+
+    #[test]
+    fn test_is_read_only_request_protects_stateful_ops() {
+        assert!(!is_read_only_request("initialize", &None));
+        assert!(!is_read_only_request(
+            "tools/call",
+            &Some(json!({ "name": "session_continuity", "arguments": { "operation": "load" } }))
+        ));
+        assert!(!is_read_only_request(
+            "tools/call",
+            &Some(json!({ "name": "project_context", "arguments": { "operation": "read", "authorize": true } }))
+        ));
+        assert!(!is_read_only_request(
+            "tools/call",
+            &Some(json!({ "name": "project_context", "arguments": { "operation": "read_and_authorize" } }))
+        ));
+        assert!(!is_read_only_request(
+            "tools/call",
+            &Some(json!({ "name": "project_context", "arguments": { "operation": "read", "conversation_id": "conv-2" } }))
+        ));
+        assert!(is_read_only_request(
+            "tools/call",
+            &Some(json!({ "name": "project_context", "arguments": { "operation": "read" } }))
+        ));
+        assert!(is_read_only_request(
+            "tools/call",
+            &Some(json!({ "name": "session_continuity", "arguments": { "operation": "list" } }))
+        ));
+    }
+
+    #[test]
+    fn test_tools_call_resets_state_on_conversation_switch() {
+        let mut state = ServerState::new();
+        state.priority_gate_pass();
+        state.session_id = "conv-1".to_string();
+        state.workflow_stage = "Build".to_string();
+        state.plan_approved = true;
+        state.edit_authorized = true;
+        state.record_modified_file("src/old_repo.rs");
+        state.push_recent_task("Old task");
+
+        let res = handle_request(
+            "tools/call",
+            Some(json!({
+                "name": "workflow_gate",
+                "arguments": { "action": "status", "conversation_id": "conv-2" }
+            })),
+            &mut state,
+        );
+        assert!(res.is_ok());
+        assert_eq!(state.session_id, "conv-2");
+        assert_eq!(state.workflow_stage, "Context");
+        assert!(!state.plan_approved);
+        assert!(!state.edit_authorized);
+        assert!(state.modified_files.is_empty());
+        assert!(state.recent_tasks.is_empty());
+    }
+
+    #[test]
+    fn test_tools_call_rejects_path_traversal_session_id_and_pre_authorize_readonly() {
+        let mut state = ServerState::new();
+        let err = handle_request(
+            "tools/call",
+            Some(json!({
+                "name": "workflow_gate",
+                "arguments": { "action": "status", "conversation_id": "../../outside" }
+            })),
+            &mut state,
+        )
+        .unwrap_err();
+        assert_eq!(err.0, -32602);
+        assert!(err.1.contains("Invalid session_id"));
+
+        assert!(!is_read_only_request(
+            "tools/call",
+            &Some(json!({ "name": "project_context", "arguments": { "operation": "subgraph_bundle", "pre_authorize": true } }))
+        ));
+        assert!(!is_read_only_request(
+            "tools/call",
+            &Some(json!({ "name": "project_context", "arguments": { "operation": "architecture" } }))
+        ));
+    }
+
+    #[test]
+    fn test_pass3_router_and_gate_hardening() {
+        let mut state = ServerState::new();
+        state.priority_gate_pass();
+        state.pending_skill_proposals = vec![("agent-guidance".to_string(), "skills/agent-guidance/SKILL.md".to_string(), 1.0)];
+        let err = state.can_call_tool("workflow_gate", &json!({"action": "set_stage", "target_stage": "Build", "user_confirmed": true})).unwrap_err();
+        assert!(err.contains("SKILL_PROPOSAL_PENDING"));
+
+        state.pending_skill_proposals.clear();
+        state.workflow_stage = "Build".to_string();
+        state.plan_approved = true;
+        state.edit_authorized = false;
+        let res = resources::handle_read(Some(json!({"uri": "agent-guidance://system/edit-allowed"})), &state).unwrap();
+        let body: serde_json::Value = serde_json::from_str(res["contents"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["edit_allowed"], json!(false));
+
+        let decoded = crate::mcp::state::uri::parse_file_uri("file:///d%3A/My%20Repo");
+        assert!(decoded.contains("My Repo"));
+
+        let get_res = handle_tool_call("guidance", json!({"operation": "get", "topic": "Cargo.toml", "project_path": "."}), &mut state).unwrap();
+        assert!(get_res["content"][0]["text"].as_str().unwrap().contains("Skill asset not found"));
+    }

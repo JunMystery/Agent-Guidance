@@ -42,8 +42,8 @@ Then use the other tools as needed:
 |---|---|---|
 | `select_skills(skills=[...])` | Inject selected skills into conversation context | `skills` |
 | `guidance(operation="search", query=...)` | Find relevant skills, blueprints, and standards | `operation`, `query` |
-| `project_context(operation="read", ...)` | Read exact symbols and inspect code graphs (< 300 LOC) | `operation`, `project_path`, `relative_path` |
-| `workflow_gate(action="authorize_edit", ...)` | Authorize individual file edits under < 300 LOC cap | `action`, `project_path`, `relative_path` |
+| `project_context(operation="read", ...)` | Read exact symbols and inspect code graphs (300-line token read cap) | `operation`, `project_path`, `relative_path` |
+| `workflow_gate(action="authorize_edit", ...)` | Authorize file edits with AST complexity & domain cohesion advisories | `action`, `project_path`, `relative_path` |
 | `workflow_gate(action="set_stage", ...)` | Transition workflow stages (`Context → Plan → Build...`) | `action`, `target_stage` |
 | `session_continuity(operation="save", ...)` | Save session memory across restarts | `operation`, `project_path` |
 
@@ -56,7 +56,7 @@ Then use the other tools as needed:
 The server enforces a 7-stage lifecycle: `Context → Plan → Ask_Revise → Build → Test_Recheck → Fix → Proposal / Review`. Use `workflow_gate` to manage transitions. Edits are only allowed in `Build` stage with `plan_approved=true`, authorized per-file via `workflow_gate(action="authorize_edit")`.
 
 ### Token Optimization & Context Shield
-Every MCP response is filtered through a language-aware compressor that strips redundant comments, collapses whitespace, and enforces hard 300 LOC token budgets — shielding your prompt context from token bloat.
+Every MCP response is filtered through a language-aware compressor that strips redundant comments, collapses whitespace, and caps reads at 300 lines per request to protect token budgets — shielding your prompt context from token bloat.
 
 ### Skill Catalog
 279 embedded skills (440 vector passages) covering backend, frontend, testing, security, DevOps, data, research, and 12+ language ecosystems. Loaded via `select_skills` or `guidance(operation="get", identifier="<name>")` — no context wasted on unused skills.

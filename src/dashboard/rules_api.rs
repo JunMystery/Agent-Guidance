@@ -56,11 +56,14 @@ pub fn handle_api_tool_rules(mut request: Request) {
                     .get(tool)
                     .cloned()
                     .unwrap_or_else(|| ToolRuleItem::new(true, ""));
-                let global_item = global_cfg.tool_rules.get_rule(tool).cloned();
+                let global_item = global_cfg
+                    .tool_rules
+                    .get_rule(tool)
+                    .map(|i| ToolRulesConfig::upgrade_legacy_rule(tool, i));
                 let project_item = project_rules
                     .as_ref()
                     .and_then(|pr| pr.get_rule(tool))
-                    .cloned();
+                    .map(|i| ToolRulesConfig::upgrade_legacy_rule(tool, i));
 
                 let (effective_item, scope, is_overridden) = if let Some(p_item) = project_item.clone() {
                     (p_item, "project", true)

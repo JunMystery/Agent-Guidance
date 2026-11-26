@@ -1,6 +1,6 @@
 use serde_json::json;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::mcp::state::ServerState;
@@ -186,8 +186,28 @@ fn test_approve_plan_auto_auth_modularity_guard() {
     });
 
     let res = handle_approve_plan(&args, &mut state, true, None, proj);
-    assert!(res.contains("BLOCKED") || res.contains("COMPOUND_FILE_NAME"));
+    assert!(res.contains("PASSED"));
+    assert!(res.contains("DOMAIN_COHESION_ADVISORY"));
     assert!(res.contains("shared_services.rs"));
 
+    let _ = fs::remove_dir_all(&temp);
+}
+
+#[test]
+fn test_extract_paths_strips_windows_file_uri_and_line_anchors() {
+    let temp = create_temp_dir();
+    let markdown = r#"
+## Proposed Changes
+- [main.rs](file:///d:/Git/Agent-Guidance/src/main.rs#L10-L25)
+- `src/mcp/tools/gate.rs?foo=bar#L5`
+"#;
+    let paths = extract_paths_from_plan_content(markdown, Path::new("d:/Git/Agent-Guidance"));
+    assert_eq!(
+        paths,
+        vec![
+            "src/main.rs".to_string(),
+            "src/mcp/tools/gate.rs".to_string(),
+        ]
+    );
     let _ = fs::remove_dir_all(&temp);
 }

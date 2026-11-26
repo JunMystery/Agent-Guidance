@@ -60,6 +60,25 @@ For an original case study, see [the GitLab Duo prompt injection research](https
 - Unicode smuggling with invisible characters
 - KaTeX/LaTeX rendering for invisible text: `$\color{white}{\text{malicious prompt}}$`
 
+### Multilingual and Cross-Script Attacks
+
+**Attack Pattern:** Delivering an attack in a language, script, or mix of languages where the application's safety controls may be weaker than they are in English.
+
+- Translating an English attack into a low-resource language
+- Mixing languages within one prompt (code-switching)
+- Writing a language in Latin letters instead of its native script, such as Arabic transliteration and Arabizi (Arabic chat spelling)
+
+Studies of deployed models report that these inputs can elicit unsafe output:
+
+- Unsafe inputs [translated into low-resource languages bypassed GPT-4's safeguards far more often than the English originals](https://arxiv.org/html/2310.02446v1), and the authors warn that focusing on English-centric benchmarks "may give a false sense of security".
+- [Unsafe content became more likely as the availability of a language decreased](https://arxiv.org/abs/2310.06474), in tests on ChatGPT and GPT-4.
+- [Code-switching queries elicited undesirable behaviors from LLMs](https://aclanthology.org/2025.acl-long.657/).
+- [Arabic transliteration and chatspeak produced unsafe content from GPT-4 and Claude 3 Sonnet](https://aclanthology.org/2024.emnlp-main.1034/), while standardized Arabic prompts were insufficient to provoke unsafe content.
+
+These studies tested open and proprietary LLMs themselves, not the input filters or guardrails that an application adds around them. Treat them as a reason to test your own filters, guardrails, and system prompts in every supported language, not as evidence that those controls fail.
+
+Language-independent controls hold regardless of the language of the injected text: enforce [tool permissions and parameter validation](#agent-specific-defenses) and apply [least privilege](#least-privilege). Pattern lists and normalization do not translate text, so a list written in one language may miss the same phrase in another (see [Input Validation and Sanitization](#input-validation-and-sanitization)). If you use a guardrail model, check its documentation for the languages it supports, and do not assume it protects equally in others.
+
 ### Typoglycemia-Based Attacks
 
 **Attack Pattern:** Exploiting LLMs' ability to read scrambled words where first and last letters remain correct, bypassing keyword-based filters.
@@ -254,6 +273,16 @@ For systems processing external content:
 - Filter suspicious markup in web content and documents
 - Validate encoding and decode suspicious content for inspection
 
+### Hidden Text in Documents
+
+Ingestion pipelines usually pass the model a document's extracted text and discard how it renders, so text a reader cannot see still reaches the model. Check untrusted documents before the model reads them:
+
+- Render each page and flag extracted text that does not appear on it. [PhantomLint](https://arxiv.org/abs/2508.17884) pairs phrase matching with an optical character recognition (OCR) check of the rendered region.
+- Check all hidden text, not only text that reads like an instruction. In 196,682 resumes from one hiring platform, more than 90% of hidden prompts contained no explicit instruction ([Zhang et al., USENIX Security 2026](https://arxiv.org/abs/2605.28999)).
+- Common techniques are text colored like its background, or tiny, covered, off-page, clipped or transparent; invisible PDF content; malicious fonts; CSS-hidden HTML ([PhantomLint, Section 2.2](https://arxiv.org/abs/2508.17884)); and Office text, sheets, rows and columns marked hidden ([ECMA-376 Part 1](https://ecma-international.org/publications-and-standards/standards/ecma-376/)).
+- Measure false positives on documents from your own domain. OCR errors and fine print both cause them ([PhantomLint, Section 5.2](https://arxiv.org/abs/2508.17884)).
+- If the check flags hidden text or cannot read the whole document, send it to human review or give the model only text visible on the rendered pages, marked incomplete.
+
 ### Agent-Specific Defenses
 
 For LLM agents with tool access:
@@ -333,6 +362,8 @@ Use the examples below as a **smoke test, not a security benchmark**. These 16 h
 
 Before testing, define each case's intended security violation or legitimate task, required context, and observable outcome. Use dummy data and sandboxed tool substitutes. For indirect injection, place the input in the external content channel being evaluated; submitting it as a user message tests a different boundary.
 
+These examples are in English. Repeat the test in every language and script your application accepts, including code-switched and transliterated text (see [Multilingual and Cross-Script Attacks](#multilingual-and-cross-script-attacks)), and include benign requests in each language so that the false-positive rate is measured per language.
+
 ```python
 # Illustrative inputs; define the objective and test context for each case.
 test_attacks = [
@@ -407,6 +438,7 @@ For benign controls, record structured policy decisions (allow, block, or human 
 - [ ] Use structured prompt formats separating instructions from data
 - [ ] Apply principle of least privilege
 - [ ] Implement encoding detection and validation
+- [ ] Check untrusted documents for hidden text by comparing rendered pages with extracted text
 - [ ] Understand limitations of current defenses against persistent attacks
 
 **Deployment Phase:**
@@ -432,3 +464,6 @@ For benign controls, record structured policy decisions (allow, block, or human 
 - [StruQ: Defending Against Prompt Injection with Structured Queries](https://arxiv.org/abs/2402.06363)
 - [Defeating Prompt Injections by Design](https://arxiv.org/pdf/2503.18813)
 - [NIST AI 100-2 E2025: Adversarial Machine Learning](https://csrc.nist.gov/pubs/ai/100/2/e2025/final)
+- [PhantomLint: Principled Detection of Hidden LLM Prompts in Structured Documents](https://arxiv.org/abs/2508.17884)
+- [Measuring Real-World Prompt Injection Attacks in LLM-based Resume Screening](https://arxiv.org/abs/2605.28999)
+- [Invisible Text Injection and Peer Review by AI Models (JAMA Network Open)](https://doi.org/10.1001/jamanetworkopen.2025.52099)

@@ -15,6 +15,7 @@ pub(crate) fn handle_get(
 ) -> Result<String, (i32, String)> {
     let id = arguments
         .get("identifier")
+        .or_else(|| arguments.get("topic"))
         .and_then(|i| i.as_str())
         .unwrap_or("");
     let proj_path_arg = arguments
@@ -22,9 +23,6 @@ pub(crate) fn handle_get(
         .and_then(|p| p.as_str())
         .unwrap_or(".");
     let proj_path = detect_project_path(proj_path_arg, state);
-    if !id.is_empty() {
-        crate::mcp::db::log_skill_load(id);
-    }
 
     let task_context = arguments
         .get("task")
@@ -47,19 +45,34 @@ pub(crate) fn handle_get(
         let clean_id = crate::mcp::tools::skills::clean_skill_identifier(id);
         if let Ok(slice) = client.slice_skill(&clean_id, task_context) {
             if !slice.content.is_empty() {
+                if !id.is_empty() {
+                    crate::mcp::db::log_skill_load(id);
+                }
                 return Ok(format_skill(&slice.content));
             }
         }
     }
 
     if let Some(content) = get_embedded_skill(id) {
+        if !id.is_empty() {
+            crate::mcp::db::log_skill_load(id);
+        }
         Ok(format_skill(&content))
     } else if let Ok(full_path) = validate_path(&proj_path, id) {
-        if let Ok(content) = std::fs::read_to_string(&full_path) {
-            Ok(format_skill(&content))
-        } else {
-            Ok(format!("Skill asset not found: {}", id))
+        let is_md = full_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| matches!(e.to_ascii_lowercase().as_str(), "md" | "markdown" | "mdc"))
+            .unwrap_or(false);
+        if is_md {
+            if let Ok(content) = std::fs::read_to_string(&full_path) {
+                if !id.is_empty() {
+                    crate::mcp::db::log_skill_load(id);
+                }
+                return Ok(format_skill(&content));
+            }
         }
+        Ok(format!("Skill asset not found: {}", id))
     } else {
         Ok(format!("Skill asset not found: {}", id))
     }
@@ -72,6 +85,7 @@ pub(crate) fn handle_docs(
 ) -> Result<String, (i32, String)> {
     let id = arguments
         .get("identifier")
+        .or_else(|| arguments.get("topic"))
         .and_then(|i| i.as_str())
         .unwrap_or("general");
 
@@ -155,6 +169,7 @@ pub(crate) fn handle_docs(
 pub(crate) fn handle_workflow(arguments: &Value) -> Result<String, (i32, String)> {
     let stage = arguments
         .get("identifier")
+        .or_else(|| arguments.get("topic"))
         .and_then(|i| i.as_str())
         .unwrap_or("plan")
         .to_lowercase();

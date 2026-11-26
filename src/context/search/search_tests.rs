@@ -41,6 +41,11 @@ fn test_path_role_tagging() {
     assert!(is_utility_path("src/utils/helpers.rs"));
     assert!(is_utility_path("src/common/format.rs"));
     assert!(is_utility_path("src/mcp/helpers.rs"));
+
+    assert!(is_guidance_path("skills/godot-nodes-scenes/scripts/check_godot_project.py"));
+    assert!(is_guidance_path("docs/guide.ts"));
+    assert!(is_test_path("tests/e2e_test.rs"));
+    assert!(is_test_path("test/unit.py"));
 }
 
 #[test]

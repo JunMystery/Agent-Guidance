@@ -84,47 +84,51 @@ pub fn classify_intent(query: &str) -> SearchIntent {
 }
 
 pub fn is_guidance_path(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    lower.ends_with(".md")
-        || lower.ends_with(".markdown")
-        || lower.contains("/docs/")
-        || lower.contains("\\docs\\")
-        || lower.contains("/skills/")
-        || lower.contains("\\skills\\")
-        || lower.contains(".agents")
+    let lower = path.replace('\\', "/").to_lowercase();
+    let trimmed = lower.trim_start_matches("./");
+    trimmed.ends_with(".md")
+        || trimmed.ends_with(".markdown")
+        || trimmed.starts_with("docs/")
+        || trimmed.contains("/docs/")
+        || trimmed.starts_with("skills/")
+        || trimmed.contains("/skills/")
+        || trimmed.starts_with(".agents/")
+        || trimmed.contains("/.agents/")
 }
 
 pub fn is_test_path(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    lower.contains("/tests/")
-        || lower.contains("\\tests\\")
-        || lower.contains("/test/")
-        || lower.contains("\\test\\")
-        || lower.contains("/fixtures/")
-        || lower.contains("\\fixtures\\")
-        || lower.contains("/mocks/")
-        || lower.contains("\\mocks\\")
-        || lower.ends_with("_test.rs")
-        || lower.ends_with("_tests.rs")
-        || lower.ends_with(".test.ts")
-        || lower.ends_with(".spec.ts")
-        || lower.ends_with("_test.go")
-        || lower.starts_with("test_")
+    let lower = path.replace('\\', "/").to_lowercase();
+    let trimmed = lower.trim_start_matches("./");
+    trimmed.starts_with("tests/")
+        || trimmed.contains("/tests/")
+        || trimmed.starts_with("test/")
+        || trimmed.contains("/test/")
+        || trimmed.starts_with("fixtures/")
+        || trimmed.contains("/fixtures/")
+        || trimmed.starts_with("mocks/")
+        || trimmed.contains("/mocks/")
+        || trimmed.ends_with("_test.rs")
+        || trimmed.ends_with("_tests.rs")
+        || trimmed.ends_with(".test.ts")
+        || trimmed.ends_with(".spec.ts")
+        || trimmed.ends_with("_test.go")
+        || trimmed.starts_with("test_")
 }
 
 pub fn is_utility_path(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    lower.contains("/utils/")
-        || lower.contains("\\utils\\")
-        || lower.contains("/util/")
-        || lower.contains("\\util\\")
-        || lower.contains("/helpers/")
-        || lower.contains("\\helpers\\")
-        || lower.contains("/common/")
-        || lower.contains("\\common\\")
-        || lower.ends_with("helpers.rs")
-        || lower.ends_with("helper.rs")
-        || lower.ends_with("utils.rs")
-        || lower.ends_with("util.rs")
-        || lower.ends_with("common.rs")
+    let lower = path.replace('\\', "/").to_lowercase();
+    let trimmed = lower.trim_start_matches("./");
+    trimmed.starts_with("utils/")
+        || trimmed.contains("/utils/")
+        || trimmed.starts_with("util/")
+        || trimmed.contains("/util/")
+        || trimmed.starts_with("helpers/")
+        || trimmed.contains("/helpers/")
+        || trimmed.starts_with("common/")
+        || trimmed.contains("/common/")
+        || trimmed.ends_with("helpers.rs")
+        || trimmed.ends_with("helper.rs")
+        || trimmed.ends_with("utils.rs")
+        || trimmed.ends_with("util.rs")
+        || trimmed.ends_with("common.rs")
 }

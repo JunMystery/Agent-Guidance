@@ -37,13 +37,13 @@ pub(crate) fn handle_architecture(proj_path: &Path, state: &mut ServerState) -> 
             if !cycles.is_empty() {
                 healing_report.push_str(&format!("\n\n### ⚠️ Architecture Healing Sentinel: {} Circular Dependencies Detected\n", cycles.len()));
                 for (i, c) in cycles.iter().take(5).enumerate() {
-                    healing_report.push_str(&format!("{}. {}\n", i + 1, c.join(" ➔ ")));
+                    healing_report.push_str(&format!("{}. {}\n", i + 1, c.join(" -> ")));
                 }
             }
         }
         if let Ok(orphans) = crate::context::healing::detect_orphan_symbols(&db.conn, 10) {
             if !orphans.is_empty() {
-                healing_report.push_str(&format!("\n\n### 🧹 Architecture Healing Sentinel: Candidate Orphan Symbols\n"));
+                healing_report.push_str(&format!("\n\n### Architecture Healing Sentinel: Candidate Orphan Symbols\n"));
                 for o in orphans.iter().take(5) {
                     healing_report.push_str(&format!("- `{}` in `{}:L{}` ({})\n", o.name, o.file_path, o.line, o.kind));
                 }

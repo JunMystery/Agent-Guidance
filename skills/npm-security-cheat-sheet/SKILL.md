@@ -45,6 +45,7 @@ Apply these npm security best practices to minimize the malicious module attack 
 - Before upgrading, make sure to review changelog and release notes for the upgraded version.
 - When installing packages make sure to add the `--ignore-scripts` suffix to disable the execution of any scripts by third-party packages.
 - Consider adding `ignore-scripts=true` to your `.npmrc` project file, or to your global npm configuration.
+- In an npm workspaces monorepo, put this setting in the `.npmrc` at the repository root. npm [does not read](https://github.com/npm/cli/issues/4605) a `.npmrc` inside a workspace folder. A root `npm install` ignores that file without a warning. Commands run from inside the workspace only log `ignoring workspace config at <path>/.npmrc` ([source](https://github.com/npm/cli/blob/9741b645b011ae83c9dda66c9b0d5fe0dce9c766/workspaces/config/lib/index.js#L839)).
 
 ### Using an allowlist for lifecycle scripts
 
@@ -61,6 +62,16 @@ Here's how the allowlist would look like in the `package.json` file on a project
   }
 }
 ```
+
+### Inspecting a project you did not write
+
+A fake job interview can hand a candidate a whole project and ask them to install it. The [FBI](https://www.ic3.gov/PSA/2024/PSA240903) lists a "pre-employment test" that runs unknown Node.js packages or GitHub repositories as a warning sign, and [Unit 42](https://unit42.paloaltonetworks.com/two-campaigns-by-north-korea-bad-actors-target-job-hunters/) describes interviewers asking victims to install an npm package hosted on GitHub that carries malware. Here the risky code is in the project itself, not in a dependency you chose. Before the first install:
+
+- Run it in a disposable VM, ideally a remote one rather than on your own machine or LAN, that has no credentials, SSH keys or wallets, and with no network access, or only restricted and logged access, where you can. The FBI [advises](https://www.ic3.gov/PSA/2024/PSA240903) insisting on a VM when a test requires running code. The VM is the real control: the steps below only reduce what runs inside it.
+- Open the folder in [VS Code Restricted Mode](https://code.visualstudio.com/docs/editing/workspaces/workspace-trust), which blocks tasks until you trust the folder.
+- Check the project's [`.npmrc`](https://docs.npmjs.com/cli/v11/configuring-npm/npmrc) for `registry` lines, and in Yarn projects the [`.yarnrc.yml`](https://yarnpkg.com/configuration/yarnrc#npmRegistryServer) `npmRegistryServer` setting. These change where packages are fetched from. Also check `.yarnrc.yml` for [`yarnPath`](https://yarnpkg.com/configuration/yarnrc#yarnPath): Yarn runs that file instead of itself for any command in the project, so read it before you run `yarn` at all.
+- Check dependencies for [git URLs, tarball URLs and `file:` paths](https://docs.npmjs.com/cli/v11/configuring-npm/package-json), and in Yarn projects [`link:` paths](https://yarnpkg.com/protocol/link), which come from outside the registry. This only catches the visible cases: a typosquatted package name (see [section 10](#10-understanding-typosquatting-and-slopsquatting-attacks)) or a tampered lockfile is much harder to spot by hand.
+- Install with `npm install --ignore-scripts`, so the `preinstall`, `install`, `postinstall` and `prepare` scripts that a plain `npm install` [runs](https://docs.npmjs.com/cli/v11/using-npm/scripts) do not execute on the first install. This only postpones them: [`npm run`, `npm start` and `npm test`](https://docs.npmjs.com/cli/v11/using-npm/config#ignore-scripts) still run their scripts, and the app itself can be malicious. Yarn's [`enableScripts`](https://yarnpkg.com/configuration/yarnrc#enableScripts) setting does not cover this case: it skips scripts from third-party packages but still runs the project's own.
 
 ## 4) Assess npm project health
 

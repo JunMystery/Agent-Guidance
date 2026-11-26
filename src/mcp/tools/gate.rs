@@ -3,6 +3,7 @@ use serde_json::Value;
 use crate::mcp::state::ServerState;
 use super::gate_approval::{
     handle_approve_plan, handle_pass_verification, handle_rollback, handle_set_architecture,
+    validate_approval_not_question_response,
 };
 use super::gate_edit::handle_authorize_edit;
 use super::gate_stage::{handle_advance, handle_check, handle_set_stage, handle_status};
@@ -29,14 +30,19 @@ pub(crate) fn handle(
         .unwrap_or(false);
     let user_msg = arguments.get("user_message").and_then(|u| u.as_str());
 
-    let is_approve_action = action == "approve" || action == "approve_plan";
-    if user_confirmed && !is_approve_action {
-        state.approve_plan();
-    }
-    if let Some(msg) = user_msg {
-        if !is_approve_action {
-            state.process_user_message(msg);
+    let can_accept_inline_approval = matches!(action, "set_stage" | "advance" | "advance_stage");
+    let mut inline_approved = false;
+    if can_accept_inline_approval && (user_confirmed || user_msg.is_some()) {
+        let justification = arguments
+            .get("justification")
+            .and_then(|j| j.as_str())
+            .unwrap_or("");
+        if let Some(blocked) = validate_approval_not_question_response(user_msg, justification) {
+            state.plan_approved = false;
+            return Ok(blocked);
         }
+        let msg_approves = user_msg.map(ServerState::is_approval_message).unwrap_or(false);
+        inline_approved = user_confirmed || msg_approves;
     }
 
     let proj_path_arg = arguments
@@ -50,11 +56,11 @@ pub(crate) fn handle(
         "approve" | "approve_plan" => {
             handle_approve_plan(&arguments, state, user_confirmed, user_msg, &proj_path)
         }
-        "pass_verification" => handle_pass_verification(state, &proj_path),
-        "set_stage" => handle_set_stage(state, stage_target, &proj_path),
+        "pass_verification" => handle_pass_verification(&arguments, state, &proj_path),
+        "set_stage" => handle_set_stage(state, stage_target, inline_approved, &proj_path),
         "status" => handle_status(state),
         "set_architecture" => handle_set_architecture(&arguments, state, &proj_path),
-        "advance" | "advance_stage" => handle_advance(&arguments, state, &proj_path),
+        "advance" | "advance_stage" => handle_advance(&arguments, state, inline_approved, &proj_path),
         "authorize_edit" => handle_authorize_edit(&arguments, state),
         "invalidate" | "sync_file" => {
             let rel_path = arguments

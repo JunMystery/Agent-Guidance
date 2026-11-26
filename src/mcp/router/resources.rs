@@ -44,11 +44,14 @@ pub(crate) fn handle_read(params: Option<Value>, state: &ServerState) -> Result<
             match uri {
                 "agent-guidance://system/edit-allowed"
                 | "agent-guidance-mcp://system/edit-allowed" => {
-                    let edit_allowed = state.workflow_stage == "Build" && state.plan_approved;
+                    let edit_allowed = state.workflow_stage == "Build"
+                        && state.plan_approved
+                        && state.edit_authorized;
                     let payload = json!({
                         "edit_allowed": edit_allowed,
                         "stage": state.workflow_stage,
                         "plan_approved": state.plan_approved,
+                        "edit_authorized": state.edit_authorized,
                         "fix_attempts": state.fix_attempts
                     });
 

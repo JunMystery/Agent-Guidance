@@ -106,3 +106,26 @@ fn test_context_cluster_read_large_file_skeleton() {
 
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
+
+#[test]
+fn test_context_cluster_read_empty_file_line_range_does_not_panic() {
+    let tmp_dir = std::env::temp_dir().join(format!("cluster_empty_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    std::fs::write(tmp_dir.join("empty.rs"), "").unwrap();
+
+    let mut state = ServerState::new();
+    let res = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "read",
+            "project_path": tmp_dir.to_str().unwrap(),
+            "relative_paths": ["empty.rs:1-10"]
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let text = res["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Empty file, 0 lines"));
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}

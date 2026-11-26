@@ -1,14 +1,14 @@
 use std::path::Path;
 
-/// Validates that a new file declaration adheres to single responsibility and upfront modularity,
-/// preventing compound/monolithic files before creation regardless of language or framework.
-pub(crate) fn validate_new_file_modularity(rel_path: &str, justification: &str) -> Result<(), String> {
+/// Checks whether a new file name or justification suggests cross-domain bundling,
+/// returning a soft domain/feature cohesion advisory instead of a hard block.
+pub(crate) fn validate_new_file_modularity(rel_path: &str, justification: &str) -> Option<String> {
     let file_path = Path::new(rel_path);
     let file_name = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let file_stem = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
     let clean_stem = file_stem.replace('-', "_");
 
-    // 1. Language-agnostic plural compound container suffixes (40 patterns)
+    // 1. Language-agnostic plural container suffixes (e.g. *utils, *helpers, *services)
     let compound_suffixes = [
         "modals", "dialogs", "drawers", "forms", "tables", "cards", "panels", "widgets",
         "components", "views", "screens", "pages",
@@ -21,24 +21,16 @@ pub(crate) fn validate_new_file_modularity(rel_path: &str, justification: &str) 
 
     for suffix in compound_suffixes {
         if clean_stem == suffix || clean_stem.ends_with(&format!("_{}", suffix)) || clean_stem.ends_with(suffix) {
-            // Exceptions: single-word specific concepts like 'form' or 'view' (singular) are permitted
-            // but compound plurals (e.g. 'inventory_modals', 'UserServices', 'order_handlers') are blocked
             if clean_stem.len() > suffix.len() + 1 {
-                return Err(format!(
-                    "# Edit Approval Gate: BLOCKED (COMPOUND_FILE_NAME_PROHIBITED)\n\n\
-                    - Target File: `{}` [NEW FILE]\n\n\
-                    **Error: COMPOUND_FILE_NAME_PROHIBITED**: New file name '{}' is a compound plural container (matches '*{}'). Monolithic container files are strictly forbidden because they bundle multiple components/services and cause 300 LOC limit violations.\n\n\
-                    **Action Required**: Authorize and create discrete single-responsibility files (< 150 LOC each), for example:\n\
-                    - `CreateItemModal.tsx` and `AdjustStockModal.tsx` instead of `InventoryModals.tsx`\n\
-                    - `user_service.rs` and `order_service.rs` instead of `services.rs`\n\
-                    - `login_handler.go` and `register_handler.go` instead of `auth_handlers.go`",
+                return Some(format!(
+                    "**DOMAIN_COHESION_ADVISORY**: New file `{}` (`{}`) uses container suffix `*{}`. Verify it serves ONE cohesive domain/use case (e.g., `orders/` or `auth/`) rather than bundling unrelated utilities across modules.",
                     rel_path, file_name, suffix
                 ));
             }
         }
     }
 
-    // 2. Universal multi-component justification detection
+    // 2. Multi-component justification check
     let j_lower = justification.to_lowercase();
     let has_conjunction = j_lower.contains(" and ") || j_lower.contains(" & ") || j_lower.contains(" cùng ") || j_lower.contains(" và ") || j_lower.contains(",");
     let has_action = j_lower.contains("create") || j_lower.contains("add") || j_lower.contains("implement") || j_lower.contains("build") || j_lower.contains("introduce");
@@ -55,20 +47,14 @@ pub(crate) fn validate_new_file_modularity(rel_path: &str, justification: &str) 
         }).count();
 
         if entity_count >= 2 {
-            return Err(format!(
-                "# Edit Approval Gate: BLOCKED (MULTI_COMPONENT_NEW_FILE_PROHIBITED)\n\n\
-                - Target File: `{}` [NEW FILE]\n\
-                - Justification: {}\n\n\
-                **Error: MULTI_COMPONENT_NEW_FILE_PROHIBITED**: Your authorization justification declares {} distinct components/services in a single new file. Packing multiple components into one file violates Single Responsibility and breaches the 300 LOC hard cap.\n\n\
-                **Action Required**: Authorize and create EACH component in its own dedicated file (< 150 LOC each):\n\
-                - Call `workflow_gate(action=\"authorize_edit\", relative_path=\"<path>/ComponentA\", ...)`\n\
-                - Call `workflow_gate(action=\"authorize_edit\", relative_path=\"<path>/ComponentB\", ...)`",
-                rel_path, justification, entity_count
+            return Some(format!(
+                "**DOMAIN_COHESION_ADVISORY**: Justification for `{}` lists {} distinct components. Ensure they belong to the same feature/domain and keep each function small (15-40 LOC).",
+                rel_path, entity_count
             ));
         }
     }
 
-    Ok(())
+    None
 }
 
 #[cfg(test)]
@@ -76,40 +62,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_blocks_plural_compound_names_across_languages() {
-        // TypeScript / React
-        assert!(validate_new_file_modularity("src/components/InventoryModals.tsx", "Modals").is_err());
-        assert!(validate_new_file_modularity("src/views/DashboardWidgets.vue", "Widgets").is_err());
-        
-        // Go
-        assert!(validate_new_file_modularity("internal/services/order_services.go", "Order services").is_err());
-        assert!(validate_new_file_modularity("internal/handlers/auth_handlers.go", "Auth handlers").is_err());
-
-        // Rust
-        assert!(validate_new_file_modularity("src/controllers/user_controllers.rs", "User controllers").is_err());
-        assert!(validate_new_file_modularity("src/utils/general_helpers.rs", "Helpers").is_err());
-
-        // Python
-        assert!(validate_new_file_modularity("app/api/item_endpoints.py", "Endpoints").is_err());
-        assert!(validate_new_file_modularity("app/core/user_validators.py", "Validators").is_err());
-        assert!(validate_new_file_modularity("app/common/data_types.py", "Types").is_err());
+    fn test_advises_on_plural_compound_names_across_languages() {
+        assert!(validate_new_file_modularity("src/components/InventoryModals.tsx", "Modals").unwrap().contains("DOMAIN_COHESION_ADVISORY"));
+        assert!(validate_new_file_modularity("src/views/DashboardWidgets.vue", "Widgets").is_some());
+        assert!(validate_new_file_modularity("internal/services/order_services.go", "Order services").is_some());
+        assert!(validate_new_file_modularity("internal/handlers/auth_handlers.go", "Auth handlers").is_some());
+        assert!(validate_new_file_modularity("src/controllers/user_controllers.rs", "User controllers").is_some());
+        assert!(validate_new_file_modularity("src/utils/general_helpers.rs", "Helpers").is_some());
+        assert!(validate_new_file_modularity("app/api/item_endpoints.py", "Endpoints").is_some());
+        assert!(validate_new_file_modularity("app/core/user_validators.py", "Validators").is_some());
+        assert!(validate_new_file_modularity("app/common/data_types.py", "Types").is_some());
     }
 
     #[test]
     fn test_allows_single_responsibility_names() {
-        assert!(validate_new_file_modularity("src/components/CreateItemModal.tsx", "Create item modal").is_ok());
-        assert!(validate_new_file_modularity("internal/service/order_service.go", "Order service").is_ok());
-        assert!(validate_new_file_modularity("src/mcp/tools/gate_edit.rs", "Edit gate handler").is_ok());
-        assert!(validate_new_file_modularity("app/api/item_router.py", "Item router").is_ok());
+        assert!(validate_new_file_modularity("src/components/CreateItemModal.tsx", "Create item modal").is_none());
+        assert!(validate_new_file_modularity("internal/service/order_service.go", "Order service").is_none());
+        assert!(validate_new_file_modularity("src/mcp/tools/gate_edit.rs", "Edit gate handler").is_none());
+        assert!(validate_new_file_modularity("app/api/item_router.py", "Item router").is_none());
     }
 
     #[test]
-    fn test_blocks_multi_component_justifications() {
+    fn test_advises_on_multi_component_justifications() {
         let res = validate_new_file_modularity(
             "src/components/InventoryDialog.tsx",
             "Add CreateItemModal and AdjustStockModal for inventory",
         );
-        assert!(res.is_err());
-        assert!(res.unwrap_err().contains("MULTI_COMPONENT_NEW_FILE_PROHIBITED"));
+        assert!(res.is_some());
+        assert!(res.unwrap().contains("DOMAIN_COHESION_ADVISORY"));
     }
 }

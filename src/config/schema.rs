@@ -193,7 +193,7 @@ impl ToolRulesConfig {
             "task_pipeline".to_string(),
             ToolRuleItem::new(
                 true,
-                "CALL FIRST before coding. Reset phase state, detect architecture, and verify modularity blueprint (<300 LOC cap across all phases).",
+                "CALL FIRST before coding. Reset phase state, detect architecture, group by domain/feature, and treat 300 LOC as a soft cohesion limit (prioritize functions <= 60 LOC, cyclomatic <= 10, cognitive <= 15, nesting <= 4).",
             ),
         );
         m.insert(
@@ -207,21 +207,21 @@ impl ToolRulesConfig {
             "guidance".to_string(),
             ToolRuleItem::new(
                 true,
-                "Lookup architecture standards, official docs, and run empirical verification commands before claiming success.",
+                "Lookup architecture standards, official docs, isolate tests from live/prod data, and run empirical verification + static linters (clippy/eslint/ruff/golangci-lint) before claiming success.",
             ),
         );
         m.insert(
             "project_context".to_string(),
             ToolRuleItem::new(
                 true,
-                "Read bounded code (max 300 LOC). Files >= 300 LOC are monolithic: decompose into sub-modules (< 150 LOC) rather than adding code.",
+                "Read bounded code (max 300 lines/read for token budget). Files > 300 LOC trigger a soft cohesion check; prioritize splitting long/complex functions and grouping by domain/feature.",
             ),
         );
         m.insert(
             "workflow_gate".to_string(),
             ToolRuleItem::new(
                 true,
-                "Always authorize file edits (prefer batch). Files >= 300 LOC require paired batch auth with new sub-module file(s) (< 150 LOC).",
+                "Batch-authorize file edits upfront. 300 LOC is a soft warning—review cohesion, function size/complexity, and domain grouping instead of splitting blindly.",
             ),
         );
         m.insert(
@@ -236,5 +236,25 @@ impl ToolRulesConfig {
 
     pub fn get_rule(&self, tool_name: &str) -> Option<&ToolRuleItem> {
         self.rules.get(tool_name)
+    }
+
+    /// Auto-upgrades unmodified legacy default rule strings saved in older configs.
+    pub fn upgrade_legacy_rule(tool_name: &str, item: &ToolRuleItem) -> ToolRuleItem {
+        let legacy: &[&str] = match tool_name {
+            "task_pipeline" => &["CALL FIRST before coding. Reset phase state, detect architecture, and verify modularity blueprint (<300 LOC cap across all phases)."],
+            "guidance" => &[
+                "Lookup architecture standards, official docs, and run empirical verification commands before claiming success.",
+                "Lookup architecture standards, official docs, and run empirical verification + static linters (clippy/eslint/ruff/golangci-lint) before claiming success.",
+            ],
+            "project_context" => &["Read bounded code (max 300 LOC). Files >= 300 LOC are monolithic: decompose into sub-modules (< 150 LOC) rather than adding code."],
+            "workflow_gate" => &["Always authorize file edits (prefer batch). Files >= 300 LOC require paired batch auth with new sub-module file(s) (< 150 LOC)."],
+            _ => &[],
+        };
+        if legacy.iter().any(|old_text| item.rule.trim() == *old_text) {
+            if let Some(new_default) = Self::default_rules().get(tool_name) {
+                return ToolRuleItem::new(item.enabled, new_default.rule.clone());
+            }
+        }
+        item.clone()
     }
 }

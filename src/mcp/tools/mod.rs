@@ -168,6 +168,19 @@ pub fn handle_tool_call(
             let opt_enabled = std::env::var("AGENT_GUIDANCE_TOKEN_OPT")
                 .map(|v| v != "0")
                 .unwrap_or(true);
+            let skip_compression = name == "project_context"
+                && matches!(
+                    op.as_deref(),
+                    Some(
+                        "read"
+                            | "cluster_read"
+                            | "read_cluster"
+                            | "read_and_authorize"
+                            | "read_auth"
+                            | "subgraph_bundle"
+                            | "bundle"
+                    )
+                );
 
             let mut orig_tokens = 0;
             let mut opt_tokens = 0;
@@ -177,7 +190,7 @@ pub fn handle_tool_call(
                     if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
                         let orig = estimate_tokens(text, false) as u64;
                         orig_tokens += orig;
-                        if opt_enabled {
+                        if opt_enabled && !skip_compression {
                             let compressed = compress_markdown(text);
                             let opt = estimate_tokens(&compressed, false) as u64;
                             opt_tokens += opt;

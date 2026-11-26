@@ -38,14 +38,14 @@ pub fn resolve_effective_rule(
         let p = Path::new(path_str);
         if let Some(cfg) = load_project_rules(p) {
             if let Some(item) = cfg.get_rule(canonical) {
-                return Some((item.clone(), RuleScope::Project));
+                return Some((ToolRulesConfig::upgrade_legacy_rule(canonical, item), RuleScope::Project));
             }
         }
     }
 
     let global_cfg = current_config();
     if let Some(item) = global_cfg.tool_rules.get_rule(canonical) {
-        return Some((item.clone(), RuleScope::Global));
+        return Some((ToolRulesConfig::upgrade_legacy_rule(canonical, item), RuleScope::Global));
     }
 
     let defaults = ToolRulesConfig::default_rules();
@@ -131,5 +131,19 @@ mod tests {
         assert!(text.contains("[Rule:task_pipeline (Default Rule)]"));
         assert!(text.contains("User RULES take precedence"));
         assert!(text.contains("Initial output."));
+    }
+
+    #[test]
+    fn test_legacy_default_rule_auto_upgrades_while_custom_preserved() {
+        let legacy = ToolRuleItem::new(
+            true,
+            "Read bounded code (max 300 LOC). Files >= 300 LOC are monolithic: decompose into sub-modules (< 150 LOC) rather than adding code.",
+        );
+        let upgraded = ToolRulesConfig::upgrade_legacy_rule("project_context", &legacy);
+        assert!(upgraded.rule.contains("soft cohesion check"));
+
+        let custom = ToolRuleItem::new(true, "My custom project rule");
+        let preserved = ToolRulesConfig::upgrade_legacy_rule("project_context", &custom);
+        assert_eq!(preserved.rule, "My custom project rule");
     }
 }

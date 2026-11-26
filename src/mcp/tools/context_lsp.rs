@@ -16,7 +16,7 @@ pub(crate) fn try_lsp_references(
     query: &str,
     rel_path: &str,
 ) -> Option<String> {
-    if rel_path.is_empty() {
+    if rel_path.is_empty() || super::helpers::validate_path(proj_path, rel_path).is_err() {
         return None;
     }
 
@@ -74,7 +74,7 @@ pub(crate) fn handle_definition(
         .unwrap_or(1);
 
     // 1. LSP Query
-    if !rel_path.is_empty() {
+    if !rel_path.is_empty() && super::helpers::validate_path(proj_path, rel_path).is_ok() {
         if let Some(target_line) = line {
             if let Some((server_name, locs)) = query_lsp_definition(proj_path, rel_path, target_line, col) {
                 if !locs.is_empty() {
@@ -138,7 +138,7 @@ pub(crate) fn handle_type_definition(
         .map(|c| c as usize)
         .unwrap_or(1);
 
-    if !rel_path.is_empty() {
+    if !rel_path.is_empty() && super::helpers::validate_path(proj_path, rel_path).is_ok() {
         if let Some(target_line) = line {
             if let Some((server_name, locs)) = query_lsp_type_definition(proj_path, rel_path, target_line, col) {
                 if !locs.is_empty() {

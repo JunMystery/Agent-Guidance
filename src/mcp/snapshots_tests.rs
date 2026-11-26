@@ -80,3 +80,20 @@ fn test_clear_all_snapshots() {
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_create_file_snapshot_rejects_external_and_traversal_paths() {
+    let base = std::env::temp_dir().join(format!("snap_sec_{}", std::process::id()));
+    let repo = base.join("repo");
+    let ext = base.join("external");
+    let _ = fs::create_dir_all(&repo);
+    let _ = fs::create_dir_all(&ext);
+    let ext_file = ext.join("secret.rs");
+    fs::write(&ext_file, "secret").unwrap();
+
+    assert!(!create_file_snapshot(&repo, ext_file.to_str().unwrap(), "sess_1").unwrap());
+    assert!(!create_file_snapshot(&repo, "../external/secret.rs", "sess_1").unwrap());
+    assert!(!get_session_snapshot_dir(&repo, "sess_1").exists());
+
+    let _ = fs::remove_dir_all(&base);
+}

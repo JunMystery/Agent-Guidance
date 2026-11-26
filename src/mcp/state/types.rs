@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{path::Path, sync::Arc, sync::atomic::{AtomicBool, Ordering}, time::{SystemTime, UNIX_EPOCH}};
+use std::{path::Path, sync::Arc, sync::atomic::{AtomicBool, AtomicU64, Ordering}, time::{SystemTime, UNIX_EPOCH}};
 use tracing::info;
 
 pub const SESSION_STALE_TIMEOUT_SECS: u64 = 300;
+static SESSION_SEQ: AtomicU64 = AtomicU64::new(1);
 
 pub use super::uri::parse_file_uri;
 
@@ -83,7 +84,8 @@ pub fn generate_session_id() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    format!("session_{}_{}", pid, ts)
+    let seq = SESSION_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("session_{}_{}_{}", pid, ts, seq)
 }
 
 impl Default for ServerState {
@@ -132,10 +134,17 @@ impl ServerState {
     pub fn with_client_name(client_name: Option<String>) -> Self {
         let mut s = Self::default();
         if let Some(ref name) = client_name {
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let seq = SESSION_SEQ.fetch_add(1, Ordering::Relaxed);
             s.session_id = format!(
-                "session_{}_{}",
+                "session_{}_{}_{}_{}",
                 std::process::id(),
-                name.to_lowercase().replace(' ', "_")
+                name.to_lowercase().replace(' ', "_"),
+                ts,
+                seq
             );
         }
         s.agent_client_name = client_name;

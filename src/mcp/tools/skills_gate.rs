@@ -83,7 +83,7 @@ pub(crate) fn check_confirmation_gate(
     proj_path: &Path,
     state: &mut ServerState,
 ) -> Option<String> {
-    if active_skills.is_empty() || is_confirmed {
+    if is_confirmed || (active_skills.is_empty() && proposals.is_empty()) {
         return None;
     }
 

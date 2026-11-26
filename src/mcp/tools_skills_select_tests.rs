@@ -119,3 +119,36 @@ fn test_select_skills_direct_fallback_when_proposals_empty() {
     assert!(fmt_text.contains("Skill Selection Confirmed"));
     assert!(fmt_text.contains("android-clean-architecture [Embedded Catalog]"));
 }
+
+#[test]
+fn test_select_skills_user_message_does_not_approve_plan_and_blocks_skip_with_proposals() {
+    let mut state = ServerState::new();
+    state.workflow_stage = "Plan".to_string();
+    state.plan_approved = false;
+    state.pending_skill_proposals = vec![(
+        "agent-guidance".to_string(),
+        "skills/agent-guidance/SKILL.md".to_string(),
+        1.1,
+    )];
+
+    // Passing empty skills without user_confirmed while proposals exist must be blocked
+    let skip_blocked = handle_tool_call(
+        "select_skills",
+        json!({ "skills": [] }),
+        &mut state,
+    )
+    .unwrap();
+    let skip_text = skip_blocked["content"][0]["text"].as_str().unwrap();
+    assert!(skip_text.contains("USER_CONFIRMATION_REQUIRED"));
+    assert!(!state.pending_skill_proposals.is_empty());
+
+    // Confirming skill via user_message must NOT auto-approve the code implementation plan
+    let ok_res = handle_tool_call(
+        "select_skills",
+        json!({ "skills": ["agent-guidance"], "user_message": "ok" }),
+        &mut state,
+    )
+    .unwrap();
+    assert!(ok_res["content"][0]["text"].as_str().unwrap().contains("Skill Selection Confirmed"));
+    assert!(!state.plan_approved);
+}

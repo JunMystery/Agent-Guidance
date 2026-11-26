@@ -4,14 +4,10 @@ description: Core system standards check and token-optimized codebase context re
 ---
 
 ## When to use me
-- Run this skill at the beginning of EVERY task, repository lookup, or codebase refactoring.
-- Run this skill to check project conventions and avoid raw file reading/search operations.
+- At the start of every task, repository lookup, or phase transition (`plan -> build -> test -> review`).
 
-## How to use me
-You must invoke the `agent-guidance-mcp` tools in this priority order:
-1. Call `task_pipeline(task="...")` at the start of any coding task to retrieve workspace context, tree, and recommendations.
-2. Call `guidance(operation="search", query="...")` before implementing coding standards.
-3. Call `project_context(operation="read", relative_paths=[...])` (or `relative_path="..."`) instead of standard file reads (capped at 300 lines). Clustered read allows inspecting multiple related files in 1 turn.
-4. Call `project_context(operation="search", query="...")` instead of standard file search.
-5. Call `workflow_gate(action="authorize_edit", relative_paths=[...])` in a single batch (or `approve_plan(user_confirmed=true, relative_paths=[...])`) before modifying files.
-6. Call `guidance(operation="verify", ...)` for empirical verification.
+## Execution Protocol (`agent-guidance` MCP)
+1. **Init & Skills**: Call `task_pipeline(task, project_path, phase="plan")` FIRST (bundles skill discovery; skip redundant `guidance(search)`). When skills are proposed, confirm via `ask_question(..., is_multi_select=true)` in user's language before `select_skills(..., user_confirmed=true)`.
+2. **Search & Bounded Read**: Use `project_context(operation="search" | "graph_rag" | "read" | "symbols")` exclusively (300-line read cap for token budget). Batch files via `relative_paths=[...]` and pass `authorize=true` when reading to edit. Never use native IDE or shell read/search tools.
+3. **Edit Gate & Code Quality**: Batch-authorize via `workflow_gate(action="authorize_edit", relative_paths=[...])` or `approve_plan(user_confirmed=true)`. Treat 300 LOC as a soft cohesion warning, not a hard limit—keep cohesive files intact, prioritize small functions (15-40 LOC; warn > 60 LOC, cyclomatic > 10, cognitive > 15, nesting > 4), and organize by domain/feature.
+4. **Verify & Test Isolation**: Reuse shared utilities (DRY); isolate tests from live user/prod data (temp dir / in-memory DB), prefer `patch.object`/DI with call assertions, guard production storage/backup writes, and verify via `guidance(operation="verify", ...)` plus static linters (`clippy`, `eslint`, `ruff`, `golangci-lint`).

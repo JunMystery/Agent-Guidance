@@ -50,7 +50,7 @@ pub(crate) fn handle_subgraph_bundle(
 
     let mut out = Vec::new();
     out.push(format!(
-        "# 📦 Multi-File Subgraph Bundle: `{}`\n- **Symbol Kind**: `{}` | **File**: `{}:L{}-L{}`\n- **Blast Radius**: **{}** (Score: {:.1}/10) | **Packed LOC**: {}/{} lines",
+        "# Multi-File Subgraph Bundle: `{}`\n- **Symbol Kind**: `{}` | **File**: `{}:L{}-L{}`\n- **Blast Radius**: **{}** (Score: {:.1}/10) | **Packed LOC**: {}/{} lines",
         bundle.target.name,
         bundle.target.kind,
         clean_target_file,
@@ -63,7 +63,7 @@ pub(crate) fn handle_subgraph_bundle(
     ));
 
     // 1. Target Implementation
-    out.push("\n## 🎯 Target Implementation".to_string());
+    out.push("\n## Target Implementation".to_string());
     if let Some(ref snip) = bundle.target_snippet {
         out.push(format!(
             "```\n// [{}:L{}-L{}]\n{}\n```",
@@ -81,9 +81,9 @@ pub(crate) fn handle_subgraph_bundle(
 
     // 2. Immediate Inbound Callers
     let callers_hdr = if bundle.total_callers_count > bundle.callers.len() {
-        format!("\n## ⬆️ Immediate Callers (Showing {} of {} total calls)", bundle.callers.len(), bundle.total_callers_count)
+        format!("\n## Immediate Callers (Showing {} of {} total calls)", bundle.callers.len(), bundle.total_callers_count)
     } else {
-        format!("\n## ⬆️ Immediate Callers (1-Hop Inbound: {})", bundle.callers.len())
+        format!("\n## Immediate Callers (1-Hop Inbound: {})", bundle.callers.len())
     };
     out.push(callers_hdr);
     if bundle.callers.is_empty() {
@@ -109,9 +109,9 @@ pub(crate) fn handle_subgraph_bundle(
 
     // 3. Immediate Outbound Dependencies
     let callees_hdr = if bundle.total_callees_count > bundle.callees.len() {
-        format!("\n## ⬇️ Immediate Dependencies (Showing {} of {} total calls)", bundle.callees.len(), bundle.total_callees_count)
+        format!("\n## Immediate Dependencies (Showing {} of {} total calls)", bundle.callees.len(), bundle.total_callees_count)
     } else {
-        format!("\n## ⬇️ Immediate Dependencies (1-Hop Outbound: {})", bundle.callees.len())
+        format!("\n## Immediate Dependencies (1-Hop Outbound: {})", bundle.callees.len())
     };
     out.push(callees_hdr);
     if bundle.callees.is_empty() {
@@ -168,30 +168,7 @@ pub(crate) fn handle_subgraph_bundle(
         }
 
         if !valid_paths.is_empty() {
-            if state.plan_approved && state.workflow_stage == "Plan" {
-                let _ = state.set_stage("Build");
-            }
-            if state.workflow_stage == "Build" && state.plan_approved {
-                let justification = arguments
-                    .get("justification")
-                    .and_then(|j| j.as_str())
-                    .unwrap_or("Pre-authorized via subgraph_bundle");
-                let raw_arch = arguments
-                    .get("architecture_pattern")
-                    .and_then(|a| a.as_str())
-                    .unwrap_or("Auto");
-                let arch_pattern = super::helpers::resolve_architecture_pattern(raw_arch, proj_path, state);
-                let auth_report = super::gate_edit_batch::handle_batch_authorize(
-                    proj_path, &valid_paths, justification, &arch_pattern, state
-                );
-                format!("\n---\n## Direct Edit Authorization Report\n\n{}", auth_report)
-            } else {
-                state.queue_deferred_authorization(&valid_paths);
-                format!(
-                    "\n---\n> [!NOTE] **Deferred Pre-Authorization Queued**:\n> {} file(s) queued for automatic authorization upon plan approval.\n> Active Stage: '{}' | Plan Approved: {}.\n> Call `workflow_gate(action=\"approve_plan\", user_confirmed=true)` once plan is confirmed to activate authorization in 1 turn.",
-                    valid_paths.len(), state.workflow_stage, state.plan_approved
-                )
-            }
+            super::helpers_auth::evaluate_read_authorization(arguments, proj_path, &valid_paths, state)
         } else {
             String::new()
         }

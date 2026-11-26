@@ -9,7 +9,7 @@ pub fn estimate_tokens(text: &str, is_code: bool) -> usize {
     ((text.len() as f64) / ratio).ceil() as usize
 }
 
-pub fn compress_markdown(content: &str) -> String {
+fn strip_markdown_noise(content: &str) -> String {
     let has_comments = content.contains("<!--");
     let has_badges = content.contains("shields.io") || content.contains("badge");
 
@@ -22,42 +22,66 @@ pub fn compress_markdown(content: &str) -> String {
         std::borrow::Cow::Borrowed(content)
     };
 
-    let stripped_badges = if has_badges {
+    if has_badges {
         let re_badges = RE_BADGES.get_or_init(|| {
             Regex::new(r"!\[.*?\]\(https://img\.shields\.io/.*?\)|!\[.*?\]\(https://badge.*?\)\s*")
                 .expect("Invalid badge regex")
         });
-        re_badges.replace_all(&stripped, "")
+        re_badges.replace_all(&stripped, "").into_owned()
     } else {
-        stripped
-    };
+        stripped.into_owned()
+    }
+}
 
-    let mut lines = Vec::new();
+fn push_compressed_markdown_chunk(chunk: &str, out: &mut Vec<String>) {
+    if chunk.is_empty() {
+        return;
+    }
+    let cleaned = strip_markdown_noise(chunk);
     let mut blank_count = 0;
-    let mut in_code_block = false;
-    for line in stripped_badges.lines() {
+    for line in cleaned.lines() {
         let trimmed = line.trim_end();
-        if trimmed.starts_with("```") {
-            in_code_block = !in_code_block;
-            blank_count = 0;
-            lines.push(trimmed);
-            continue;
-        }
-        if in_code_block {
-            lines.push(line);
-            continue;
-        }
         if trimmed.is_empty() {
             blank_count += 1;
             if blank_count <= 1 {
-                lines.push("");
+                out.push(String::new());
             }
         } else {
             blank_count = 0;
-            lines.push(trimmed);
+            out.push(trimmed.to_string());
         }
     }
-    lines.join("\n")
+}
+
+pub fn compress_markdown(content: &str) -> String {
+    let mut out = Vec::new();
+    let mut md_buf = String::new();
+    let mut in_code_block = false;
+
+    for line in content.lines() {
+        if line.trim_end().starts_with("```") {
+            if !in_code_block {
+                push_compressed_markdown_chunk(&md_buf, &mut out);
+                md_buf.clear();
+                in_code_block = true;
+                out.push(line.trim_end().to_string());
+            } else {
+                in_code_block = false;
+                out.push(line.trim_end().to_string());
+            }
+            continue;
+        }
+        if in_code_block {
+            out.push(line.to_string());
+        } else {
+            md_buf.push_str(line);
+            md_buf.push('\n');
+        }
+    }
+    if !in_code_block && !md_buf.is_empty() {
+        push_compressed_markdown_chunk(&md_buf, &mut out);
+    }
+    out.join("\n")
 }
 
 #[cfg(test)]
@@ -87,5 +111,14 @@ mod tests {
         let compressed = compress_markdown(md);
         assert!(compressed.contains("fn foo() {\n\n\n    let x = 1;\n}"));
         assert!(!compressed.contains("\n\n\nTrailing"));
+    }
+
+    #[test]
+    fn test_compress_markdown_preserves_html_comments_in_code_blocks() {
+        let md = "# Doc\n\n<!-- outer comment -->\n\n```html\n<div><!-- keep me --></div>\n![b](https://img.shields.io/badge/a-b)\n```\n";
+        let compressed = compress_markdown(md);
+        assert!(!compressed.contains("outer comment"));
+        assert!(compressed.contains("<div><!-- keep me --></div>"));
+        assert!(compressed.contains("https://img.shields.io/badge/a-b"));
     }
 }

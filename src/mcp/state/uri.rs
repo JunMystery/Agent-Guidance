@@ -1,6 +1,9 @@
 /// Parse cross-platform file:// URIs safely into native OS path strings.
 pub fn parse_file_uri(uri: &str) -> String {
-    let mut decoded = uri.replace("%20", " ");
+    let mut decoded = uri
+        .replace("%20", " ")
+        .replace("%3A", ":")
+        .replace("%3a", ":");
     if decoded.starts_with("file://") {
         decoded = decoded.trim_start_matches("file://").to_string();
     }

@@ -175,16 +175,31 @@ where
                 let _permit = permit;
                 let started = Instant::now();
                 let result = if is_read {
-                    let mut state_clone = {
-                        let state_guard = request_state
+                    let mut live_dirty_clone = None;
+                    let clone_opt = {
+                        let mut state_guard = request_state
                             .lock()
                             .map_err(|_| (-32000, "Server state lock poisoned".to_string()))?;
-                        state_guard.clone()
+                        if !state_guard.dirty_files.is_empty() {
+                            // Keep dirty_files flush on live state so subsequent reads don't re-drain clones.
+                            state_guard.set_cancellation(worker_cancellation.clone());
+                            let res = handle_request(&request_method, request_params.clone(), &mut *state_guard);
+                            state_guard.clear_cancellation();
+                            live_dirty_clone = Some(res);
+                            None
+                        } else {
+                            Some(state_guard.clone())
+                        }
                     };
-                    state_clone.set_cancellation(worker_cancellation);
-                    let res = handle_request(&request_method, request_params, &mut state_clone);
-                    state_clone.clear_cancellation();
-                    res
+                    if let Some(res) = live_dirty_clone {
+                        res
+                    } else {
+                        let mut state_clone = clone_opt.unwrap();
+                        state_clone.set_cancellation(worker_cancellation);
+                        let res = handle_request(&request_method, request_params, &mut state_clone);
+                        state_clone.clear_cancellation();
+                        res
+                    }
                 } else {
                     let mut state_guard = request_state
                         .lock()

@@ -75,7 +75,7 @@ Forces a full re-scan and AST re-indexing of the project code graph, spawning ba
 ```
 
 ### 5. `operation="read"` / `operation="cluster_read"` / `operation="read_and_authorize"`
-Reads bounded file ranges (enforcing the hard 300 LOC cap) with optional single-turn edit authorization. Supports aliases `operation="cluster_read"`, `operation="read_and_authorize"`, and `operation="read_auth"`. Outputs lines with `L{line_no}: <content>` prefixes and preserves exact indentation.
+Reads bounded file ranges (300-line token read budget) with optional single-turn edit authorization. Supports aliases `operation="cluster_read"`, `operation="read_and_authorize"`, and `operation="read_auth"`. Outputs lines with `L{line_no}: <content>` prefixes and preserves exact indentation.
 
 #### Single File Read & Unified Authorization
 ```json
@@ -113,7 +113,7 @@ Reads up to 10 files in a single turn under a global 1,000-line budget, returnin
 ```
 *Capabilities*:
 - **Universal Target Path Specs**: Parse URI fragments (`#symbol`) and line intervals (`:start-end`) directly within path strings, eliminating separate tool calls.
-- **Pending New File Support**: Files yet to be created are safely tagged `[NEW FILE - Pending Creation]` and validated upfront against compound plural naming rules (`*services`, `*utils`, etc.), enabling compliant 300 LOC paired modular decomposition.
+- **Pending New File Support**: Files yet to be created are safely tagged `[NEW FILE - Pending Creation]` and checked for soft domain cohesion advisories (`DOMAIN_COHESION_ADVISORY`) before creation.
 - **Deferred Pre-Authorization Queue**: When called in `Plan` stage with `authorize: true`, valid files enter `deferred_authorized_paths` in `ServerState` and are automatically batch-authorized during plan approval (`workflow_gate(action="approve_plan", user_confirmed=true)`), cutting tool call overhead by 50%.
 - **Context Budget Guard**: Caps the cluster at 1,000 lines total with graceful fallback and warnings to eliminate token blowup risks.
 

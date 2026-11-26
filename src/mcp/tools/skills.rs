@@ -44,11 +44,7 @@ pub(crate) fn handle(
     let user_confirmed = parse_bool(arguments.get("user_confirmed").or_else(|| arguments.get("confirmed")));
     let autonomous = parse_bool(arguments.get("autonomous"));
     let user_msg = arguments.get("user_message").and_then(|u| u.as_str());
-    let user_msg_approved = if let Some(msg) = user_msg {
-        state.process_user_message(msg)
-    } else {
-        false
-    };
+    let user_msg_approved = user_msg.map(ServerState::is_approval_message).unwrap_or(false);
     let is_confirmed = user_confirmed || autonomous || user_msg_approved;
 
     let proposals = std::mem::take(&mut state.pending_skill_proposals);

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release Tag to build (e.g. v1.8.17)'
+        description: 'Release Tag to build (e.g. v2.0.2)'
         required: false
         type: string
 
@@ -57,6 +57,16 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Check precomputed skill manifest sync
+        shell: bash
+        run: |
+          manifest_count=$(grep -o '"count":[[:space:]]*[0-9]*' src/ml/precomputed_manifest.json | head -n1 | grep -o '[0-9]*' || echo "0")
+          skill_count=$(find skills -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+          echo "Manifest skill count: ${manifest_count}, Workspace skills/: ${skill_count}"
+          if [ "${manifest_count}" != "${skill_count}" ]; then
+            echo "::warning::Precomputed skill vectors (${manifest_count}) differ from skills/ directory count (${skill_count}). Run --reindex-skills before tagging for optimal startup embedding coverage."
+          fi
 
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}

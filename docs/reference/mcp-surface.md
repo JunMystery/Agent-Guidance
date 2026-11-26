@@ -12,7 +12,7 @@ All code inspection, modification, and execution tools require `task_pipeline` t
 
 ### 1. `task_pipeline` -- Call First (Unlocks Priority Gate)
 
-One-stop context preparation, Turn 1 skill discovery, and priority gate unlocker. Initializes workspace boundaries, detects project architectural patterns, auto-bundles skill search proposals (`phase="plan"`), synthesizes dynamic split blueprints (< 300 LOC mandate), and injects memorized project learnings in a single token-bounded response (eliminating a separate `guidance(operation="search")` roundtrip).
+One-stop context preparation, Turn 1 skill discovery, and priority gate unlocker. Initializes workspace boundaries, detects project architectural patterns, auto-bundles skill search proposals (`phase="plan"`), synthesizes domain/feature blueprints (300 LOC soft cohesion limit & AST complexity targets), and injects memorized project learnings in a single token-bounded response (eliminating a separate `guidance(operation="search")` roundtrip).
 
 ```python
 task_pipeline(
@@ -26,7 +26,7 @@ task_pipeline(
 **Returns formatted markdown containing:**
 - `Task`, `Active Phase`, and `Project` summary (with total indexed file count).
 - `💡 Project Memorized Learnings` — semantically relevant past session learnings from `.agent-context/learnings.md`.
-- `📐 Dynamic Split Blueprint` — upfront modularity blueprint tailored to detected architecture (Clean Architecture, Layered Architecture, Package by Feature, CLI Pipeline, Flat Library, Orchestrator) and alerts for monolithic files ($\ge 200$ LOC).
+- `Dynamic Split Blueprint` — upfront domain/feature blueprint tailored to detected architecture (Clean Architecture, Layered Architecture, Package by Feature, CLI Pipeline, Flat Library, Orchestrator) and review candidates (`> 300 LOC`).
 - `Architecture Guidance` & `Core Phase Rules` — targeted execution mandates for active phase.
 - `Priority Gate: PASSED` — confirms unlock for subsequent MCP tool calls.
 - `-> NEXT STEP` — clear directive guiding next tool execution.
@@ -35,7 +35,7 @@ task_pipeline(
 If `is_minor: true` (or if the task description matches minor task heuristics such as typos, comments, docs, readme, or small single-file patches), `task_pipeline` automatically bypasses skill proposal modals (`ask_question`) and formal `implementation_plan.md` artifact generation. It auto-advances the workflow stage directly to `Build` (`plan_approved = true`, `is_fast_path = true`), allowing immediate inspection and editing. Enforces a Strict Boundary Guard of at most 1 code file or 3 doc/config files.
 
 **Auto-Plan-Approval Feature:**
-If the `task` parameter text contains user approval keywords (e.g. `proceed`, `approved`, `lgtm`, `tiến hành`, `đồng ý`, or IDE artifact approval strings like `the user has approved this document`), `task_pipeline` automatically sets `plan_approved = true`, `edit_authorized = true`, and transitions active stage directly to `Build`.
+When a prior `Plan` turn is active (or an explicit IDE artifact approval message such as `the user has approved this document` is passed) and `task` matches short approval phrases, `task_pipeline` sets `plan_approved = true` (without granting blanket `edit_authorized`) and transitions the active stage directly to `Build`.
 
 **Example:**
 ```python
@@ -81,13 +81,14 @@ select_skills(
 
 ### 3. `guidance` -- Standards & Skill Catalog
 
-Standards catalog, 2-stage vector search, 279 embedded skills (440 vector passages), pre-code architecture blueprints, and empirical verification contracts. Supports 9 operations.
+Standards catalog, 2-stage vector search, 604 embedded skills, pre-code architecture blueprints, and empirical verification contracts. Supports 9 operations.
 
 ```python
 guidance(
     operation: str,                    # required — search|get|list|precode|verify|workflow|ui_ux|docs|reindex_skills
     query: str | None = None,          # search query / keyword for search, docs, ui_ux, precode
-    identifier: str | None = None,     # skill name/path for get / docs, or workflow stage for workflow
+    identifier: str | None = None,     # skill name/path for get / docs, or workflow stage for workflow (alias: topic)
+    topic: str | None = None,          # alias for identifier on get / docs / workflow
     project_path: str | None = None,   # absolute path of active repository workspace
     verification_command: str | None = None,    # required for verify: shell test command (e.g. 'cargo test')
     expected_output_keyword: str | None = None, # required for verify: expected success keyword (e.g. 'ok')
@@ -99,11 +100,11 @@ guidance(
 | Operation | Required Args | Description |
 |---|---|---|
 | `search` | `query` | 2-stage Candle BERT vector search + Cross-Encoder re-ranking across skills catalog. Fast shallow language profile matching (< 2ms). |
-| `get` | `identifier` | Retrieve compressed body of an embedded skill or local workspace skill. |
+| `get` | `identifier` \| `topic` | Retrieve compressed body of an embedded skill or local workspace markdown skill (`.md`/`.markdown`/`.mdc`). |
 | `list` | -- | List all registered skills in embedded catalog and workspace (`.agents/skills`). |
 | `docs` | `query` \| `identifier` | Search technical documentation cheat-sheets with token-bounded markdown slicing (< 400 tokens). |
 | `workflow` | `identifier` (stage) | Load stage workflow guide (`plan`, `context`, `build`, `test`, `review`). |
-| `precode` | `query` | Structured pre-code checklist (Upfront Architecture & 300 LOC Cap, Language Rules, Symbol Grounding, Error Boundaries). |
+| `precode` | `query` | Structured pre-code checklist (Domain Cohesion, 300 LOC Soft Limit, AST Complexity Targets & Static Linter Hints, Language Rules, Symbol Grounding, Error Boundaries). |
 | `verify` | `verification_command`, `expected_output_keyword` | Register empirical verification contract to satisfy anti-hallucination mandate. |
 | `ui_ux` | `query` | Retrieve UI/UX guidelines and modern design standards. |
 | `reindex_skills` | -- | Force refresh semantic vector index for skills and clear passage caches. (Alias: `reindex`). |
@@ -121,7 +122,7 @@ guidance(operation="verify", verification_command="cargo test --bin agent-guidan
 
 ### 4. `project_context` -- Code Graph, AST & Semantic Search Engine
 
-Read, search, navigate code graphs, and explore project files with built-in token budgets (300 LOC hard cap), AST analysis, and persistent SQLite storage.
+Read, search, navigate code graphs, and explore project files with built-in token budgets (300-line token read budget), AST analysis, and persistent SQLite storage.
 
 ```python
 project_context(
@@ -144,7 +145,8 @@ project_context(
     resolved_symbol: str | None = None,# symbol name for learn_alias
     resolved_line: int | None = None,  # line number for learn_alias
     edges: list[dict] | None = None,   # semantic edges for enrich_graph: [{source, target, relation, description, confidence}]
-    summaries: list[dict] | None = None# domain summaries for enrich_graph: [{module_path, title, summary, tags}]
+    summaries: list[dict] | None = None,# domain summaries for enrich_graph: [{module_path, title, summary, tags}]
+    allow_cross_workspace: bool = False,# explicitly permit reading/authorizing files outside active workspace root
 ) -> str
 ```
 
@@ -155,7 +157,7 @@ project_context(
 | `search` | `query` | 6-Phase Instant Cascade (<100ms): Alias Cache (<1ms) → Symbol FTS5 (<5ms) → Content FTS5 (<5ms) → Symbol Vectors (<50ms) → RAG Content Vectors (<100ms) → Linked Sibling Projects. Blends multi-result hits across cascade, bypasses alias cache short-circuiting on code syntax queries, and restricts auto-learning to natural multi-word phrases. |
 | `subgraph_bundle` | `target_symbol` (or `query` / `symbol`) | Single-turn multi-file context pack: Target symbol definition + 1-hop caller snippets + 1-hop callee snippets under token budget (default 250 LOC, clamped 50..=500). Supports URI spec syntax (`path#symbol`), direct/deferred edit authorization (`authorize=True`), and full dependency authorization (`authorize_all=True`). (Alias: `context_bundle`). |
 | `tree` | -- | Repository directory tree scan. Accepts `max_depth` (default: 3, range: 1..=5). |
-| `read` | `relative_path` \| `relative_paths` | Bounded file read with 300 LOC cap. In single-file or multi-file cluster mode, supports universal Target Path Specs (`path#symbol`, `path:start-end`), pending new file declarations (`[NEW FILE - Pending Creation]`), direct/deferred edit authorization (`authorize=True`), and Session-Bounded AST Response Caching (30s TTL + disk `mtime` invalidation). Supports dedicated aliases `cluster_read`, `read_cluster`, `read_and_authorize`, and `read_auth`. |
+| `read` | `relative_path` \| `relative_paths` | Bounded file read enforcing a 300-line token read budget (distinct from the file-size soft limit), bypassing markdown compression to preserve source formatting, and blocking external absolute paths by default (`allow_cross_workspace=False`). In single-file or multi-file cluster mode, supports universal Target Path Specs (`path#symbol`, `path:start-end`), pending new file declarations (`[NEW FILE - Pending Creation]`), direct/deferred edit authorization (`authorize=True`), and Session-Bounded AST Response Caching (30s TTL + disk `mtime` invalidation). Supports dedicated aliases `cluster_read`, `read_cluster`, `read_and_authorize`, and `read_auth`. |
 | `symbols` | `relative_path` | Extract functions, structs, enums, classes, and traits across 6+ languages (Alias: `structure`). |
 | `references` | `query` | Instant symbol usage lookup across codebase (<5ms SQLite FTS5 index). |
 | `callers` | `query` | Graph query traversing AST call edges to identify all functions/modules that call target symbol (Alias: `incoming_calls`). |
@@ -191,7 +193,7 @@ project_context(operation="graph_rag", project_path="E:/Github/MyApp", query="au
 
 ### 5. `workflow_gate` -- Governance & Stage State Machine
 
-Manage active workflow stages, authorize individual file edits (< 300 LOC hard cap & modularity rules), approve implementation plans, record test verifications, or restore rollback snapshots.
+Manage active workflow stages, authorize file edits (AST complexity & 300 LOC soft cohesion advisories, domain cohesion checks), approve implementation plans, record test verifications, or restore rollback snapshots.
 
 ```python
 workflow_gate(
@@ -202,10 +204,12 @@ workflow_gate(
     artifact_path: str | None = None,  # optional custom path to implementation_plan.md for Server-Side Auto-Auth
     target_stage: str | None = None,   # target stage for set_stage / advance: Context|Plan|Ask_Revise|Build|Test_Recheck|Fix|Proposal|Review
     risk_level: str = "LOW",           # LOW | MEDIUM | HIGH (for authorize_edit / advance)
-    justification: str | None = None,  # reason & test mitigation (mandatory for files with >8 dependents or refactoring >=300 LOC files)
+    justification: str | None = None,  # reason & test mitigation (mandatory for files with >8 dependents)
     architecture_pattern: str = "Auto",# Auto | Clean_Architecture | Layered_Architecture | Package_By_Feature | Orchestrator | CLI_Pipeline | Flat_Library
     user_confirmed: bool = False,      # user confirmation flag (required for approve_plan)
     user_message: str | None = None,   # evaluate message for approval keywords
+    allow_cross_workspace: bool = False, # explicitly permit editing outside primary workspace root
+    verification_output: str | None = None, # command output matched against expected_output_keyword in pass_verification
 ) -> str
 ```
 
@@ -217,19 +221,19 @@ workflow_gate(
 | `status` | Display full workflow state: active stage, plan approval flag, fix attempt count, edit authorization status. |
 | `set_stage` | Manually transition workflow stage (`Context`, `Plan`, `Ask_Revise`, `Build`, `Test_Recheck`, `Fix`, `Proposal`, `Review`). |
 | `set_architecture` | Detect, lock, and persist architectural pattern in `.agent-context/architecture.json`. |
-| `authorize_edit` | Authorize editing a specific file. Verifies < 300 LOC cap, enforces modularity rules on new files, triggers zero-turn transition (Plan → Build if plan approved), creates pre-edit rollback snapshot, and unlocks file write permission. |
-| `advance` | Composite check, approval, and stage transition in a single call. Validates post-edit 300 LOC cap on all modified files before allowing advance to `Proposal`/`Review`. (Alias: `advance_stage`). |
-| `approve_plan` | Record explicit plan approval (requires `user_confirmed=True` or approval keyword) and transition to `Build`. Supports **Server-Side Auto-Auth**: automatically extracts target files from `implementation_plan.md` (or custom `artifact_path`), combines them with `relative_paths` and queued `deferred_authorized_paths`, and batch pre-authorizes them in 1 turn under Modularity Guard & 300 LOC rules. (Alias: `approve`). |
-| `pass_verification` | Record empirical test verification pass and reset fix attempt counter. |
-| `rollback` | Restore pre-edit file snapshot from `.agent-context/snapshots/{session_id}/`. |
+| `authorize_edit` | Authorize editing a file. Attaches non-blocking AST quality advisories (`SOFT_FILE_LOC_LIMIT = 300`, `MAX_FUNCTION_LOC = 60`, `MAX_CYCLOMATIC = 10`, `MAX_COGNITIVE = 15`, `MAX_NESTING_DEPTH = 4`), `DOMAIN_COHESION_ADVISORY`, and cross-directory co-change hints, triggers zero-turn transition (`Plan -> Build` if approved), creates rollback snapshot, and unlocks write permission. |
+| `advance` | Composite check, approval, and stage transition in a single call. Emits non-blocking post-edit quality and AST complexity advisories with static linter hints when advancing to `Proposal`/`Review`. (Alias: `advance_stage`). |
+| `approve_plan` | Record explicit plan approval (requires `user_confirmed=True` or approval keyword), clear Fast-Path flags, and transition to `Build`. Supports **Server-Side Auto-Auth**: automatically extracts target files from `implementation_plan.md` (or custom `artifact_path`), combines them with `relative_paths` and queued `deferred_authorized_paths`, and batch pre-authorizes them in 1 turn with soft domain cohesion and AST quality advisories. (Alias: `approve`). |
+| `pass_verification` | Validate `verification_output` against registered `expected_output_keyword` (when set), record empirical verification pass, and reset fix attempt counter. |
+| `rollback` | Restore pre-edit file snapshot from `.agent-context/snapshots/{session_id}/` and reset `verification_passed` and `modified_files`. |
 
 #### Stage Lifecycle
 $$\text{Context} \longrightarrow \text{Plan} \longrightarrow \text{Ask\_Revise} \longrightarrow \text{Build} \longrightarrow \text{Test\_Recheck} \longrightarrow \text{Fix} \longrightarrow \text{Proposal / Review}$$
 
 * **Build Gate**: Transitioning to `Build` or editing files requires `plan_approved = true`.
 * **Fix Circuit Breaker**: Exceeding 3 consecutive fix attempts trips the circuit breaker, resetting stage to `Ask_Revise`, resetting `plan_approved = false`, and requiring user intervention.
-* **Modularity Gate (New Files)**: Rejects 40 compound plural container suffixes (`*modals`, `*services`, `*handlers`, `*views`, `*helpers`, etc.) with `COMPOUND_FILE_NAME_PROHIBITED` and multi-component descriptions with `MULTI_COMPONENT_NEW_FILE_PROHIBITED`.
-* **300 LOC Modular Decomposition & Paired Batch Mandate**: Single-file edit authorization on non-exempt files with $\ge 300$ LOC is strictly blocked. Modifying monolithic files requires paired batch authorization (`relative_paths=[target, new_submodule]`) alongside at least one new sub-module file (< 150 LOC) and refactoring keywords (`refactor`, `decompose`, `extract`, `split`, `tách file`). Docs, data, and configs (`.md`, `.toml`, `.env.*`, `.conf`, `.sum`, `Makefile`, `Dockerfile`, `.dockerignore`, `.editorconfig`) are exempt.
+* **Domain Cohesion Advisory (New Files)**: Emits non-blocking `DOMAIN_COHESION_ADVISORY` warnings when a new file uses plural container suffixes (`*utils`, `*helpers`, `*services`, etc.) or multi-component justifications to encourage grouping by domain/feature.
+* **300 LOC Soft Limit & Built-in AST Complexity Analyzer**: Emits non-blocking warnings when a non-exempt file exceeds `SOFT_FILE_LOC_LIMIT = 300` or any function exceeds `MAX_FUNCTION_LOC = 60` (target 15-40), `MAX_CYCLOMATIC = 10` (flat `match`/`switch` arms = `+1`), `MAX_COGNITIVE = 15` (flat `else if` chains and `condition` nodes kept at parent nesting depth), or `MAX_NESTING_DEPTH = 4`. Exempts dedicated test paths, `#[cfg(test)]`/`#[test]`, docs, configs, data, assets, and `.mdc` rule files (`gate_exemptions.rs`).
 * **Rule Precedence Hierarchy**: User's main rules (`AGENTS.md`, `RULES.md`, system prompt) strictly take precedence over injected tool micro-rules. Tool micro-rules appear as `[!NOTE]` advisories.
 * **Critical Hub Guard**: Files with $> 8$ dependents require `justification` with $\ge 10$ characters.
 
@@ -266,8 +270,8 @@ session_continuity(
 | Operation | Description |
 |---|---|
 | `save` | Persist active conversation memory, current stage, modified files, and session metadata into `.agent-context/sessions/session_{pid}_{timestamp}.json`. |
-| `load` | Load a specific session by `session_id`. Resets permissions to zero-trust state (`plan_approved=false`, `edit_authorized=false`). |
-| `switch` | Atomic handoff to an existing session with permission reset. |
+| `load` | Load a specific session by `session_id`. Resets all authorization, verification, fast-path, and architecture flags to Zero-Trust state. |
+| `switch` | Atomic handoff to an existing session (preserving active session if target is missing) with Zero-Trust permission, verification, and fast-path flag reset. |
 | `list` | List all saved session checkpoints with timestamps, stage, notes, and pinned status (Alias: `sessions`). |
 | `diff` | Generate unified git-style change summary of files modified during the active session (Alias: `changes`). |
 | `learn` | Record permanent cross-session project rule or architectural instinct into `.agent-context/learnings.md` with category and optional pinned status. |
@@ -297,10 +301,10 @@ The MCP server returns standardized domain error codes in response text when exe
 | `USER_CONFIRMATION_REQUIRED` | `select_skills` | Skill selection invoked while proposals were pending without confirmation | Pass `user_confirmed=True` after user confirms selection. |
 | `RELATIVE_PATH_REQUIRED` | `workflow_gate` | `authorize_edit` called without file path | Pass exact relative file path in `relative_path`. |
 | `PATH_TRAVERSAL_PROHIBITED` | `workflow_gate` | Path escapes workspace root via `..` or invalid symlink | Specify relative path inside project boundaries. |
-| `300_LOC_CAP_EXCEEDED` | `workflow_gate`, `guidance(verify)` | Attempted to verify (`guidance(operation="verify")`) or advance to `Proposal`/`Review` while a modified non-exempt code file has $\ge 300$ LOC | Decompose file into sub-modules (< 150 LOC each) via paired batch authorization. |
-| `COMPOUND_FILE_NAME_PROHIBITED` | `workflow_gate` | New file name contains a compound plural container suffix (`*modals`, `*services`, etc.) | Name files for a single responsibility. |
-| `MULTI_COMPONENT_NEW_FILE_PROHIBITED` | `workflow_gate` | New file justification describes multiple distinct components | Decompose into separate single-responsibility files. |
 | `HIGH_RISK_JUSTIFICATION_REQUIRED` | `workflow_gate` | Modifying a critical hub file (>8 dependents) with justification < 10 chars | Provide detailed rationale and test verification plan in `justification`. |
+| `TEST_SAFETY_VIOLATION` | `guidance(verify)`, `workflow_gate(advance)` | Modified test has mock namespace/path mismatch (`TEST_MOCK_NAMESPACE_MISMATCH`) or `verification_command` targets prod/destructive state (`VERIFY_COMMAND_PROD_TARGET`) | Switch to `patch.object`/DI or exact imported module path, target temp/in-memory sandbox, or add `test-safety-allow: <rule>` when explicitly verified. |
+
+> **Non-Blocking Quality & Test-Safety Advisories (v2.0.2+)**: Replaced the former hard-block error codes (`300_LOC_CAP_EXCEEDED`, `COMPOUND_FILE_NAME_PROHIBITED`, `MULTI_COMPONENT_NEW_FILE_PROHIBITED`) with non-blocking `DOMAIN_COHESION_ADVISORY`, `Post-Edit Quality & Complexity Advisory (Soft Limit)`, and data-boundary advisories (`TEST_UNSANDBOXED_REAL_STATE`, `TEST_UNSANDBOXED_APP_INIT`, `TEST_UNVERIFIED_SIDE_EFFECT_MOCK`, `PERSISTENCE_OVERWRITE_SAFETY`) surfaced by `workflow_gate` and `guidance(operation="verify")`.
 
 ---
 
@@ -308,7 +312,7 @@ The MCP server returns standardized domain error codes in response text when exe
 
 Resources provide direct read-only access to system status, embedded reference guides, and skill content:
 
-1. `agent-guidance://system/edit-allowed` — Read-only JSON resource returning whether file editing is authorized based on active workflow stage and plan approval.
+1. `agent-guidance://system/edit-allowed` — Read-only JSON resource returning whether file editing is authorized (`stage == "Build" && plan_approved && edit_authorized`).
 2. `standards://version` — JSON object containing server version and engine metadata.
 3. `standards://manifest` — JSON index of embedded standards and skill catalog metadata.
 4. `agent-guidance://system/priority` — Priority gate instructions returned when `PRIORITY_REQUIRED` occurs (also supports legacy alias `agent-guidance-mcp://system/priority`).

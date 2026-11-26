@@ -1,7 +1,7 @@
 use std::path::Path;
 
-/// Determines if a file is exempt from the 300 LOC limit (documentation, configs, datasets, assets, etc.).
-/// All active application and test source code files MUST remain strictly non-exempt (< 300 LOC).
+/// Determines if a file is exempt from code quality & 300 LOC soft limit checks
+/// (documentation, configs, datasets, assets, etc.).
 pub fn is_exempt_from_loc_limit(rel_path: &str) -> bool {
     let clean = rel_path.trim().replace('\\', "/");
     let path = Path::new(&clean);
@@ -43,7 +43,7 @@ pub fn is_exempt_from_loc_limit(rel_path: &str) -> bool {
         matches!(
             ext_lower.as_str(),
             // Documentation & Markup
-            "md" | "markdown" | "mdown" | "mdx" | "txt" | "rst" | "adoc" | "doc" | "docx" | "pdf"
+            "md" | "markdown" | "mdown" | "mdx" | "mdc" | "txt" | "rst" | "adoc" | "doc" | "docx" | "pdf"
             // Data, Serialization & Configurations
             | "json" | "json5" | "jsonl" | "csv" | "tsv" | "yaml" | "yml" | "xml" | "toml" | "lock"
             | "sql" | "env" | "ini" | "cfg" | "conf" | "sum" | "properties" | "parquet" | "dataset"

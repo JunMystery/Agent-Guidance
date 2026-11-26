@@ -32,83 +32,47 @@ Use the [Authorization Cheat Sheet](Authorization_Cheat_Sheet.md) for baseline a
 - Treat client-supplied tenant identifiers as selectors only. Verify that the authenticated principal is authorized to act in the selected tenant.
 - Bind tenant context to a server-verified identity and current tenant membership or service authorization.
 - Propagate server-verified tenant context to components that need it for tenant-sensitive decisions or observability; do not let downstream components replace it with unverified input.
+- Query parameterization prevents injection but does not enforce tenant isolation; tenant authorization and tenant-scoped queries are still required.
 
 <details>
-<summary>Bad example: Trusting client-supplied tenant ID</summary>
+<summary>Illustrative example: Establishing verified tenant context</summary>
 
 ```python
-# Dangerous: The header selects a tenant without checking the caller's membership.
-# Query parameterization prevents injection, not cross-tenant access.
-def get_tenant_data(request):
-    tenant_id = request.headers.get("X-Tenant-ID")  # Attacker can modify!
-    return db.execute("SELECT * FROM data WHERE tenant_id = :tid", {"tid": tenant_id})
-```
-
-</details>
-
-<details>
-<summary>Good example: Verifying tenant context against authenticated identity</summary>
-
-```python
-from functools import wraps
 from contextvars import ContextVar
-from typing import Optional
 
-class TenantContext:
-    def __init__(self, tenant_id: str, user_id: str, roles: list):
-        self.tenant_id = tenant_id
-        self.user_id = user_id
-        self.roles = roles
-        self.is_validated = True
+# ContextVar stores per-context values; the finally block restores the previous value.
+# Tenant-sensitive consumers must reject a missing context, never run an unscoped query.
+current_tenant = ContextVar("current_tenant", default=None)
 
-# Request-local tenant context
-current_tenant: ContextVar[Optional[TenantContext]] = ContextVar(
-    'current_tenant', default=None
-)
+async def tenant_context_middleware(request, call_next):
+    # Client-supplied headers (e.g., X-Tenant-ID) are untrusted selectors, not verified context.
+    # Obtain tenant identity and principal from server-verified authentication claims.
+    # A verified claim may select the tenant, but authorization still depends on issuer
+    # guarantees or checking current tenant membership for the authenticated principal.
+    claims = getattr(request.state, "verified_claims", None)
+    if not claims or "tenant_id" not in claims:
+        # Fail closed if verified tenant authentication context is missing
+        return JSONResponse(status_code=401, content={"error": "Missing verified tenant context"})
 
-class TenantMiddleware:
-    """Verify tenant context against authenticated identity and membership."""
-    
-    async def __call__(self, request, call_next):
-        # A verified claim may select the tenant, but authorization still
-        # depends on the issuer's guarantees or a current membership check.
-        token_claims = request.state.verified_claims  # Set by auth middleware
-        
-        if not token_claims or "tenant_id" not in token_claims:
-            return JSONResponse(status_code=401, content={"error": "Missing tenant context"})
-        
-        tenant_id = token_claims["tenant_id"]
-        
-        principal_id = token_claims["sub"]
-        membership = await self.tenant_service.get_active_membership(
-            principal_id, tenant_id
-        )
-        if not membership:
-            return JSONResponse(status_code=403, content={"error": "Tenant access denied"})
-        
-        # Set tenant context for this request
-        ctx = TenantContext(
-            tenant_id=tenant_id,
-            user_id=principal_id,
-            roles=membership.roles
-        )
-        token = current_tenant.set(ctx)
-        
-        try:
-            response = await call_next(request)
-            return response
-        finally:
-            current_tenant.reset(token)
+    tenant_id = claims["tenant_id"]
+    principal_id = claims["sub"]
 
-def require_tenant(func):
-    """Decorator ensuring tenant context is present."""
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        ctx = current_tenant.get()
-        if not ctx or not ctx.is_validated:
-            raise SecurityException("Tenant context required")
-        return await func(*args, **kwargs)
-    return wrapper
+    membership = await tenant_service.get_active_membership(principal_id, tenant_id)
+    if not membership:
+        # Fail closed if the principal is not authorized for the tenant
+        return JSONResponse(status_code=403, content={"error": "Tenant access denied"})
+
+    # Bind verified context to request-scoped storage
+    token = current_tenant.set({
+        "tenant_id": tenant_id,
+        "user_id": principal_id,
+        "roles": membership.roles,
+    })
+    try:
+        return await call_next(request)
+    finally:
+        # Reliably reset context to prevent leakage across requests or reused workers
+        current_tenant.reset(token)
 ```
 
 </details>
@@ -168,92 +132,11 @@ A normal `SET` persists until the session ends after its transaction commits, wh
 - Fail closed if the tenant context is missing or invalid; do not fall back to an unscoped query.
 - Commit or roll back before returning the connection to the pool.
 
+#### ORM-Level Tenant Filtering
+
 SQLAlchemy [deprecated `QueryEvents.before_compile`](https://docs.sqlalchemy.org/en/20/orm/events.html#sqlalchemy.orm.QueryEvents.before_compile) because it does not cover ORM-level attribute and relationship loads. The current [recommended pattern](https://docs.sqlalchemy.org/en/20/orm/queryguide/api.html#sqlalchemy.orm.with_loader_criteria) combines `SessionEvents.do_orm_execute` with `with_loader_criteria` so criteria propagate to occurrences of the mapped entity, including eager and lazy relationship loads.
 
-<details>
-<summary>Application-Level Enforcement (Python/SQLAlchemy)</summary>
-
-```python
-from sqlalchemy import event, Column, String, text
-from sqlalchemy.orm import Session, declared_attr, with_loader_criteria
-from contextlib import contextmanager
-
-class TenantMixin:
-    """Mixin that adds tenant_id to models that inherit it."""
-    
-    @declared_attr
-    def tenant_id(cls):
-        return Column(String(36), nullable=False, index=True)
-
-class TenantAwareSession(Session):
-    """Session carrying tenant context for participating ORM operations."""
-    
-    def __init__(self, *args, tenant_id: str | None = None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._tenant_id = tenant_id
-    
-    @property
-    def tenant_id(self):
-        if not self._tenant_id:
-            raise SecurityException("Tenant ID not set on session")
-        return self._tenant_id
-
-# Add tenant criteria to ORM SELECTs issued through TenantAwareSession.
-# with_loader_criteria propagates this rule to eager and lazy relationship loads.
-@event.listens_for(TenantAwareSession, "do_orm_execute")
-def add_tenant_filter(execute_state):
-    if (
-        execute_state.is_select
-        and not execute_state.is_column_load
-        and not execute_state.is_relationship_load
-    ):
-        tenant_id = execute_state.session.tenant_id
-        execute_state.statement = execute_state.statement.options(
-            with_loader_criteria(
-                TenantMixin,
-                lambda model: model.tenant_id == tenant_id,
-                include_aliases=True,
-            )
-        )
-
-# Set and validate tenant_id for new mapped objects in this session.
-@event.listens_for(TenantAwareSession, "before_flush")
-def set_tenant_on_insert(session, flush_context, instances):
-    tenant_id = session.tenant_id
-    for target in session.new:
-        if isinstance(target, TenantMixin):
-            if target.tenant_id not in (None, tenant_id):
-                raise SecurityException("Object tenant does not match session")
-            target.tenant_id = tenant_id
-
-# Secure session factory
-@contextmanager
-def tenant_session(tenant_id: str):
-    """Create a tenant-scoped database session."""
-    ctx = current_tenant.get()
-    if not ctx or ctx.tenant_id != tenant_id:
-        raise SecurityException("Tenant session requires verified context")
-
-    session = TenantAwareSession(bind=engine, tenant_id=tenant_id)
-    
-    try:
-        # The final true makes the tenant context transaction-local
-        session.execute(
-            text("SELECT set_config('app.current_tenant', :tenant_id, true)"),
-            {"tenant_id": tenant_id}
-        )
-        yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
-```
-
-</details>
-
-This ORM helper is defense in depth, not complete enforcement. It applies tenant criteria to ORM SELECTs issued through `TenantAwareSession`, with the criteria propagated to relationship loaders. Raw SQL, Core connections, bulk operations, and code using another session type require separate controls; use database policies or constrained roles as the final boundary where possible.
+ORM-level filtering is defense in depth, not a complete tenant-isolation boundary. The handler in the SQLAlchemy documentation adds its criteria to ORM `SELECT` statements only, and only on sessions it is registered on. [`do_orm_execute`](https://docs.sqlalchemy.org/en/20/orm/events.html#sqlalchemy.orm.SessionEvents.do_orm_execute) does not run for flush writes or for Core connections, and raw SQL and Core statements run through the session get no tenant criteria. Set or validate `tenant_id` from the verified tenant context in a `before_flush` listener, add an explicit tenant predicate to raw SQL and bulk statements, and keep database policies and constrained roles as the final boundary where possible.
 
 #### Verify Tenant Isolation
 
@@ -272,85 +155,27 @@ A hand-maintained table list can drift: the same omission that leaves RLS off a 
 - Include tenant scope in the lookup or authorization policy when ownership is tenant-specific. A composite key (`tenant_id` + `resource_id`) is one option, not a universal requirement.
 - Enforce authorization at a boundary traversed by every tenant-owned access path. Add data-layer checks as defense in depth where the architecture supports them.
 - Treat opaque or random identifiers as defense in depth against enumeration, not as a substitute for authorization.
+- Apply object-level access control checks according to the [OWASP Insecure Direct Object Reference Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Insecure_Direct_Object_Reference_Prevention_Cheat_Sheet.html).
 
 <details>
-<summary>Bad example: Direct object reference without tenant validation</summary>
+<summary>Illustrative example: Tenant-scoped resource lookup</summary>
 
 ```python
-# Dangerous: Only checks resource_id, not tenant ownership
-@app.get("/api/documents/{document_id}")
-async def get_document(document_id: str):
-    doc = db.query(Document).filter(Document.id == document_id).first()
-    if not doc:
-        raise HTTPException(404)
-    return doc  # Could return another tenant's document!
-```
+# verified_tenant_id comes from the server-verified tenant context (see section 1), never from request input
+# Architectures using separate schemas, databases, or RLS enforce this boundary at the data layer
+document = (
+    db.query(Document)
+    .filter(
+        Document.id == document_id,
+        Document.tenant_id == verified_tenant_id,
+    )
+    .first()
+)
+if not document:
+    # Return 404 rather than 403 so the response does not reveal that the object exists in another tenant
+    raise HTTPException(status_code=404, detail="Document not found")
 
-</details>
-
-<details>
-<summary>Good example: Tenant-scoped resource access</summary>
-
-```python
-from uuid import UUID
-from typing import TypeVar, Generic, Type
-
-T = TypeVar('T')
-
-class TenantScopedRepository(Generic[T]):
-    """Repository that scopes the operations provided below to one tenant."""
-    
-    def __init__(self, model: Type[T], session: Session):
-        self.model = model
-        self.session = session
-    
-    @property
-    def tenant_id(self) -> str:
-        ctx = current_tenant.get()
-        if not ctx:
-            raise SecurityException("Tenant context required")
-        return ctx.tenant_id
-    
-    def get_by_id(self, resource_id: UUID) -> Optional[T]:
-        """Get resource only if it belongs to current tenant."""
-        return self.session.query(self.model).filter(
-            self.model.id == resource_id,
-            self.model.tenant_id == self.tenant_id  # Tenant-owned resource
-        ).first()
-    
-    def list_all(self, limit: int = 100, offset: int = 0) -> list[T]:
-        """List resources for current tenant only."""
-        return self.session.query(self.model).filter(
-            self.model.tenant_id == self.tenant_id
-        ).limit(limit).offset(offset).all()
-    
-    def create(self, **kwargs) -> T:
-        """Create resource with tenant_id automatically set."""
-        if 'tenant_id' in kwargs and kwargs['tenant_id'] != self.tenant_id:
-            raise SecurityException("Cannot create resource for different tenant")
-        
-        kwargs['tenant_id'] = self.tenant_id
-        instance = self.model(**kwargs)
-        self.session.add(instance)
-        return instance
-    
-    def delete(self, resource_id: UUID) -> bool:
-        """Delete resource only if it belongs to current tenant."""
-        result = self.session.query(self.model).filter(
-            self.model.id == resource_id,
-            self.model.tenant_id == self.tenant_id
-        ).delete()
-        return result > 0
-
-# Usage
-@app.get("/api/documents/{document_id}")
-@require_tenant
-async def get_document(document_id: UUID, db: Session = Depends(get_db)):
-    repo = TenantScopedRepository(Document, db)
-    doc = repo.get_by_id(document_id)
-    if not doc:
-        raise HTTPException(404, "Document not found")  # Don't reveal if it exists for other tenant
-    return doc
+# Tenant scoping is necessary but not sufficient: also check the caller's permission on this object (owner, role or ACL)
 ```
 
 </details>
@@ -427,125 +252,12 @@ async def get_country_codes():
 
 - When tenants share capacity or quotas, include tenant identity as one rate-limit dimension alongside any required global, endpoint, user, or IP limits.
 - Rate limits at the HTTP boundary do not constrain every shared resource. Where tenant load can affect other tenants, apply tenant-aware limits or scheduling to the relevant bottlenecks, such as concurrent work, queued messages, database connections, fan-out, CPU, or memory. Retain global safety limits, and isolate a worker or resource pool when the risk or service commitment justifies the operational cost. The [AWS SaaS Lens](https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/pe-selection.html) describes scaling, throttling, and selective resource isolation as complementary noisy-neighbor controls.
-- Validate server-verified tenant context on every tenant-scoped API request. Public or global endpoints need no artificial tenant context.
+- Choose tenant quotas and limits according to capacity, abuse risk, contractual quotas, and service tiers rather than arbitrary hardcoded values. Support appropriate time windows and burst controls where applicable.
+- Use shared counters with atomic updates when limits must apply across multiple application instances.
+- Communicate throttling appropriately, such as returning HTTP 429 and a `Retry-After` header where applicable.
+- Validate server-verified tenant context on every tenant-scoped API request, and mount tenant-aware middleware only on routes where tenant context is required. Public or global endpoints need no artificial tenant context.
 - Bind API credentials to explicit tenant sets, environments, and permission scopes. An intentionally cross-tenant service identity must be separately authorized and least privileged.
 - When B2B request signing is required, bind the signature to the security-relevant request context, such as tenant selection, target audience, method, path, body digest, and expiration, as applicable.
-
-The limits below are illustrative. Choose production limits from capacity, abuse risk, and contractual quotas, and mount tenant-aware middleware only on routes where tenant context is required.
-
-<details>
-<summary>Tenant-Aware Rate Limiting</summary>
-
-```python
-import time
-from dataclasses import dataclass
-from enum import Enum
-
-class TenantTier(Enum):
-    FREE = "free"
-    STARTER = "starter"
-    BUSINESS = "business"
-    ENTERPRISE = "enterprise"
-
-@dataclass
-class RateLimitConfig:
-    requests_per_minute: int
-    requests_per_day: int
-    burst_size: int
-
-TIER_LIMITS = {
-    TenantTier.FREE: RateLimitConfig(60, 1000, 10),
-    TenantTier.STARTER: RateLimitConfig(300, 10000, 50),
-    TenantTier.BUSINESS: RateLimitConfig(1000, 100000, 100),
-    TenantTier.ENTERPRISE: RateLimitConfig(5000, 1000000, 500),
-}
-
-class TenantRateLimiter:
-    """One tenant dimension in a broader rate-limiting strategy."""
-    
-    def __init__(self, redis_client):
-        self.redis = redis_client
-    
-    async def check_rate_limit(self, tenant_id: str, tenant_tier: TenantTier) -> dict:
-        """Check and update rate limit for tenant."""
-        config = TIER_LIMITS[tenant_tier]
-        now = time.time()
-        minute_key = f"rl:{tenant_id}:min:{int(now // 60)}"
-        day_key = f"rl:{tenant_id}:day:{int(now // 86400)}"
-        
-        pipe = self.redis.pipeline()
-        
-        # Increment counters
-        pipe.incr(minute_key)
-        pipe.expire(minute_key, 60)
-        pipe.incr(day_key)
-        pipe.expire(day_key, 86400)
-        
-        results = pipe.execute()
-        minute_count = results[0]
-        day_count = results[2]
-        
-        # Check limits
-        if minute_count > config.requests_per_minute:
-            return {
-                "allowed": False,
-                "reason": "minute_limit_exceeded",
-                "retry_after": 60 - (now % 60),
-                "limit": config.requests_per_minute
-            }
-        
-        if day_count > config.requests_per_day:
-            return {
-                "allowed": False,
-                "reason": "daily_limit_exceeded",
-                "retry_after": 86400 - (now % 86400),
-                "limit": config.requests_per_day
-            }
-        
-        return {
-            "allowed": True,
-            "remaining_minute": config.requests_per_minute - minute_count,
-            "remaining_day": config.requests_per_day - day_count
-        }
-
-class RateLimitMiddleware:
-    """Middleware for routes that require tenant-scoped rate limits."""
-    
-    async def __call__(self, request, call_next):
-        ctx = current_tenant.get()
-        if not ctx:
-            return JSONResponse(
-                status_code=401,
-                content={"error": "Tenant context required"}
-            )
-        
-        tenant = await self.tenant_service.get_tenant(ctx.tenant_id)
-        result = await self.rate_limiter.check_rate_limit(
-            ctx.tenant_id, 
-            tenant.tier
-        )
-        
-        if not result["allowed"]:
-            return JSONResponse(
-                status_code=429,
-                content={"error": "Rate limit exceeded", "details": result},
-                headers={
-                    "Retry-After": str(int(result["retry_after"])),
-                    "X-RateLimit-Limit": str(result["limit"]),
-                    "X-RateLimit-Remaining": "0"
-                }
-            )
-        
-        response = await call_next(request)
-        
-        # Add rate limit headers
-        response.headers["X-RateLimit-Remaining-Minute"] = str(result["remaining_minute"])
-        response.headers["X-RateLimit-Remaining-Day"] = str(result["remaining_day"])
-        
-        return response
-```
-
-</details>
 
 #### Tenant-Aware Asynchronous Work
 
@@ -559,125 +271,14 @@ Classify asynchronous work as global, tenant-scoped, or explicitly cross-tenant.
 ### 6. File Storage & Blob Isolation
 
 - Classify stored objects as global, tenant-scoped, or user-scoped. Keep intentionally shared assets in an explicit global namespace.
-- Partition tenant-scoped objects with a tenant-aware key, bucket, account, or enforceable storage policy.
-- Authorize access to the exact object and operation before serving it or generating a signed URL.
-- Limit signed URLs to the required object and method, with a lifetime appropriate to the operation and revocation model. The tenant identifier does not need to appear in the URL when authorization happened before signing.
-- Use tenant-specific encryption keys when the risk or compliance model requires cryptographic isolation. A shared managed key with enforced access context can also be appropriate.
-
-<details>
-<summary>Illustrative Tenant-Scoped File Storage</summary>
-
-```python
-import boto3
-from botocore.config import Config
-from datetime import datetime
-from pathlib import PurePosixPath
-from typing import Optional
-import re
-
-class TenantFileStorage:
-    """Illustrative S3 helper for tenant-scoped objects."""
-    
-    def __init__(self, bucket_name: str, kms_key_id: str = None):
-        self.bucket = bucket_name
-        self.s3 = boto3.client('s3', config=Config(signature_version='s3v4'))
-        self.kms_key_id = kms_key_id
-    
-    def _get_tenant_prefix(self, tenant_id: str) -> str:
-        """Generate tenant-specific path prefix."""
-        # Naming is not authorization. Accept only the application's canonical
-        # tenant identifier format so it cannot alter the object-key structure.
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", tenant_id):
-            raise ValueError("Invalid tenant identifier")
-        return f"tenants/{tenant_id}"
-    
-    def _build_key(self, tenant_id: str, file_path: str) -> str:
-        """Build full S3 key with tenant isolation."""
-        path = PurePosixPath(file_path)
-        if not path.parts or path.is_absolute() or ".." in path.parts or "\\" in file_path:
-            raise ValueError("Invalid object path")
-        return f"{self._get_tenant_prefix(tenant_id)}/{path.as_posix()}"
-    
-    async def upload_file(self, tenant_id: str, file_path: str, 
-                         content: bytes, content_type: str) -> dict:
-        """Upload file for tenant."""
-        await authorize_file_access(tenant_id, file_path, "put_object")
-        key = self._build_key(tenant_id, file_path)
-        
-        extra_args = {
-            'ContentType': content_type,
-            'Metadata': {
-                'tenant-id': tenant_id,
-                'uploaded-at': datetime.utcnow().isoformat()
-            }
-        }
-        
-        # Use tenant-specific KMS key if available
-        if self.kms_key_id:
-            extra_args['ServerSideEncryption'] = 'aws:kms'
-            extra_args['SSEKMSKeyId'] = self.kms_key_id
-        
-        self.s3.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=content,
-            **extra_args
-        )
-        
-        return {"key": key, "size": len(content)}
-    
-    async def get_file(self, tenant_id: str, file_path: str) -> Optional[bytes]:
-        """Get file only if it belongs to tenant."""
-        await authorize_file_access(tenant_id, file_path, "get_object")
-        key = self._build_key(tenant_id, file_path)
-        
-        try:
-            response = self.s3.get_object(Bucket=self.bucket, Key=key)
-            
-            # Verify tenant ownership from metadata
-            metadata_tenant = response.get('Metadata', {}).get('tenant-id')
-            if metadata_tenant != tenant_id:
-                raise SecurityException("Tenant mismatch in file metadata")
-            
-            return response['Body'].read()
-        except self.s3.exceptions.NoSuchKey:
-            return None
-    
-    async def generate_presigned_url(self, tenant_id: str, file_path: str,
-                                     expiration: int = 3600,
-                                     operation: str = 'get_object') -> str:
-        """Authorize and sign one object operation for a verified tenant."""
-        await authorize_file_access(tenant_id, file_path, operation)
-        key = self._build_key(tenant_id, file_path)
-
-        url = self.s3.generate_presigned_url(
-            ClientMethod=operation,
-            Params={
-                'Bucket': self.bucket,
-                'Key': key,
-            },
-            ExpiresIn=expiration
-        )
-        
-        return url
-    
-    async def delete_tenant_data(self, tenant_id: str):
-        """Delete current objects; versions and backups follow retention policy."""
-        # The delimiter prevents a tenant such as "acme" from matching
-        # another tenant's "acme-west" prefix.
-        prefix = f"{self._get_tenant_prefix(tenant_id)}/"
-        
-        paginator = self.s3.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
-            objects = page.get('Contents', [])
-            if objects:
-                self.s3.delete_objects(
-                    Bucket=self.bucket,
-                    Delete={'Objects': [{'Key': obj['Key']} for obj in objects]}
-                )
-```
-
-</details>
+- Partition tenant-scoped objects with a tenant-aware object key, bucket, account, or enforceable storage policy. Object naming or prefixes alone are not authorization boundaries.
+- Validate tenant identifiers against an allowlisted canonical format, alongside object-path validation. Reject absolute paths, `..` traversal components, and path-separator tricks that could escape the tenant namespace.
+- Authorize the exact tenant, object, and operation before you upload or download an object, delete it, or generate a signed URL.
+- Verify object ownership where appropriate; do not trust client-supplied tenant metadata as authorization proof.
+- Restrict signed URLs to the required object and operation, with an appropriate expiration and revocation model. The tenant identifier does not need to appear in the URL when authorization happened before signing.
+- Ensure tenant deletion targets only that tenant's objects. Use an exact tenant-prefix boundary, such as `tenants/acme/` rather than `tenants/acme`, because the latter could also match `tenants/acme-west/`.
+- Account for object versions, replicas, and backups when applying retention and deletion policies.
+- Use tenant-specific encryption keys when required by the risk or compliance model; shared managed keys with enforced access context may also be appropriate.
 
 ### 7. Tenant Onboarding & Offboarding Security
 
@@ -701,162 +302,16 @@ A shared backup can contain data from several tenants. For a single-tenant recov
 
 ### 8. Logging, Monitoring & Audit
 
-- Include server-verified tenant context in tenant-scoped security and audit events; global infrastructure events may have no tenant.
-- A centralized audit store is acceptable when read access enforces tenant scope and cross-tenant access requires an explicit platform permission.
+- Include server-verified tenant context in tenant-scoped security and audit events, and record the authenticated actor (user or service identity) when available. Do not require an authenticated actor for events where none exists; global infrastructure events may have no tenant.
+- A centralized audit store is acceptable when read access enforces tenant scope. Cross-tenant audit reads and writes require explicit platform authorization.
+- Distinguish tenant audit readers from platform auditors. Tenant administrator rights must not grant platform-wide audit access.
+- Enforce append-only audit behavior through database permissions or storage controls such as write-once, read-many (WORM) rather than relying on application-level methods alone.
+- Use tamper-evident mechanisms to detect modifications to stored audit records; tamper detection identifies modifications rather than preventing them.
 - Monitor denied or unexpected cross-tenant access attempts without treating explicitly authorized platform operations as violations.
-- Alert on tenant-isolation control failures and suspicious denial patterns.
+- Alert on tenant-isolation control failures and repeated suspicious denial patterns.
+- Explicitly exclude secrets from logs and minimize sensitive tenant data. Mask or otherwise protect sensitive fields that genuinely need to be retained, according to the applicable policy.
 - Apply the documented access and retention policy for each audit-data class.
-
-<details>
-<summary>Tenant-Aware Logging & Monitoring</summary>
-
-```python
-import structlog
-from typing import Any, Dict
-from datetime import datetime
-import secrets
-
-class TenantAwareLogger:
-    """Logger that includes verified tenant context when one is active."""
-    
-    def __init__(self):
-        self.logger = structlog.get_logger()
-    
-    def _enrich_with_tenant(self, event_data: dict) -> dict:
-        """Add tenant context to log entry."""
-        ctx = current_tenant.get()
-        if ctx:
-            event_data["tenant_id"] = ctx.tenant_id
-            event_data["user_id"] = ctx.user_id
-        return event_data
-    
-    def info(self, message: str, **kwargs):
-        self.logger.info(message, **self._enrich_with_tenant(kwargs))
-    
-    def warning(self, message: str, **kwargs):
-        self.logger.warning(message, **self._enrich_with_tenant(kwargs))
-    
-    def error(self, message: str, **kwargs):
-        self.logger.error(message, **self._enrich_with_tenant(kwargs))
-    
-    def security_event(self, event_type: str, severity: str, **kwargs):
-        """Log security-relevant events."""
-        self.logger.warning(
-            "security_event",
-            event_type=event_type,
-            severity=severity,
-            **self._enrich_with_tenant(kwargs)
-        )
-
-class TenantAuditLog:
-    """Audit API with tenant-aware reads and append-only writes."""
-    
-    def __init__(self, db):
-        self.db = db
-    
-    async def log(self, action: str, details: Dict[str, Any], 
-                  tenant_id: str = None):
-        """Record audit entry."""
-        ctx = current_tenant.get()
-        if (
-            ctx
-            and tenant_id
-            and tenant_id != ctx.tenant_id
-            and not has_permission(ctx, "platform:audit:write")
-        ):
-            raise SecurityException("Cannot write another tenant's audit log")
-
-        effective_tenant_id = tenant_id or (ctx.tenant_id if ctx else "system")
-        
-        entry = {
-            "id": secrets.token_urlsafe(16),
-            "tenant_id": effective_tenant_id,
-            "user_id": ctx.user_id if ctx else None,
-            "action": action,
-            "details": details,
-            "timestamp": datetime.utcnow(),
-            "ip_address": get_client_ip(),
-            "user_agent": get_user_agent()
-        }
-        
-        # This API only appends. Database permissions, tamper-evident storage,
-        # or WORM controls must enforce the required immutability properties.
-        await self.db.execute("""
-            INSERT INTO audit_log 
-            (id, tenant_id, user_id, action, details, timestamp, ip_address, user_agent)
-            VALUES (:id, :tenant_id, :user_id, :action, :details, :timestamp, :ip_address, :user_agent)
-        """, entry)
-    
-    async def get_tenant_audit_trail(self, tenant_id: str, 
-                                     start_date: datetime,
-                                     end_date: datetime) -> list:
-        """Retrieve audit trail for a specific tenant."""
-        ctx = current_tenant.get()
-        
-        # Tenant audit readers and platform auditors are distinct permissions;
-        # a tenant-local admin is not implicitly a platform auditor.
-        can_read_tenant = (
-            ctx
-            and ctx.tenant_id == tenant_id
-            and has_permission(ctx, "tenant:audit:read")
-        )
-        can_read_platform = ctx and has_permission(ctx, "platform:audit:read")
-        if not (can_read_tenant or can_read_platform):
-            raise SecurityException("Audit access denied")
-        
-        return await self.db.fetch_all("""
-            SELECT * FROM audit_log 
-            WHERE tenant_id = :tenant_id 
-            AND timestamp BETWEEN :start AND :end
-            ORDER BY timestamp DESC
-        """, {"tenant_id": tenant_id, "start": start_date, "end": end_date})
-
-class CrossTenantAccessMonitor:
-    """Monitor and alert on potential cross-tenant access attempts."""
-    
-    def __init__(self, alert_service):
-        self.alerts = alert_service
-        self.violation_counts = {}
-    
-    async def check_access(self, requested_tenant: str, 
-                          resource_type: str, resource_id: str):
-        """Check for cross-tenant access attempts."""
-        ctx = current_tenant.get()
-        
-        if not ctx or not await authorize_tenant_access(
-            ctx, requested_tenant, resource_type, resource_id
-        ):
-            # Log a denied attempt, not an explicitly authorized platform action
-            logger.security_event(
-                "cross_tenant_access_attempt",
-                severity="HIGH",
-                requested_tenant=requested_tenant,
-                resource_type=resource_type,
-                resource_id=resource_id
-            )
-            
-            # Track violations per user
-            principal_id = ctx.user_id if ctx else "anonymous"
-            source_tenant = ctx.tenant_id if ctx else "none"
-            key = f"{principal_id}:{source_tenant}"
-            self.violation_counts[key] = self.violation_counts.get(key, 0) + 1
-            
-            # Alert on repeated attempts
-            if self.violation_counts[key] >= 3:
-                await self.alerts.send(
-                    severity="CRITICAL",
-                    message="Repeated cross-tenant access attempts detected",
-                    details={
-                        "user_id": principal_id,
-                        "tenant_id": source_tenant,
-                        "attempts": self.violation_counts[key]
-                    }
-                )
-            
-            raise SecurityException("Access denied")
-```
-
-</details>
+- Configure collection, protection, and retention according to the [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html).
 
 ## Do's and Don'ts
 

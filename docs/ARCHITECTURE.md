@@ -10,24 +10,24 @@ Agent Guidance MCP is a **100% Native Rust 2024 Edition** MCP server that gives 
 
 ## Rust Module Map
 
-The codebase strictly enforces Clean Architecture and a mandatory **< 300 LOC hard cap per file**:
+The codebase follows Clean Architecture, domain/feature cohesion, focused functions (`<= 60 LOC`), and a **300 LOC soft file-size guideline**:
 
 ```
 src/
 ├── main.rs            # Binary entrypoint — CLI flags, auto-detects daemon/proxy mode
-├── cli/               # CLI Command Handlers & Interactive Wizards (< 300 LOC each)
+├── cli/               # CLI Command Handlers & Interactive Wizards
 │   ├── cleanup.rs     # Prune dead projects, vacuum usage.db, rotate old logs
 │   ├── setup_server.rs# Interactive CLI wizard for remote ML worker setup
 │   └── mod.rs
-├── client/            # Remote ML Worker Client (< 300 LOC each)
+├── client/            # Remote ML Worker Client
 │   ├── http.rs        # HTTP agent for remote embeddings & cross-encoder reranking
 │   ├── types.rs       # Remote API request & response models
 │   └── mod.rs
-├── config/            # Centralized Configuration Subsystem (< 300 LOC each)
+├── config/            # Centralized Configuration Subsystem
 │   ├── store.rs       # TOML configuration loading and persistence (~/.agent-guidance/config.toml)
 │   ├── watcher.rs     # Threaded watcher for real-time config updates
 │   └── mod.rs
-├── daemon/            # Singleton Daemon & IPC Subsystem (< 300 LOC each)
+├── daemon/            # Singleton Daemon & IPC Subsystem
 │   ├── lifecycle.rs   # Ref-counted client connection tracking, 60s cooldown timer
 │   ├── ide_detector.rs# Process scanner for 26 IDEs (prevents premature teardown)
 │   ├── server.rs      # Named pipe (Windows) / Unix socket server dispatch
@@ -45,7 +45,7 @@ src/
 │   ├── rules.rs       # Tech stack & language-specific micro-rulesets
 │   └── mod.rs
 ├── context/           # Project Context, AST Analysis & GraphRAG Engine
-│   ├── ast/           # Polyglot AST parsers (Rust, TS/JS, Python, Go, Kotlin, Vue, Svelte, Astro, SQL, Prisma)
+│   ├── ast/           # Polyglot AST parsers (Rust, TS/JS, Python, Go, Kotlin, Vue, Svelte, Astro, SQL, Prisma) + complexity & test-safety analyzers (metrics*.rs, test_safety*.rs)
 │   ├── indexer/       # Symbol indexing, doc data extraction, write-through AST invalidation (< 10ms)
 │   ├── scanner.rs     # Bounded workspace scanner (max_depth=3 default, .gitignore & exclusion filters)
 │   ├── exclusion.rs   # Centralized O(1) exclusion & filtering engine for cache, temp & build artifacts
@@ -59,18 +59,20 @@ src/
 │   ├── search/        # Search precision engine (Dynamic IDF down-weighting & Intent Gating)
 │   ├── multi_project.rs# Multi-project cross-referencing and read-only secondary db inspection
 │   └── hnsw/          # High-performance in-memory vector index for symbol retrieval
-├── dashboard/         # Embedded Web Dashboard Server & REST API (< 300 LOC each)
+├── dashboard/         # Embedded Web Dashboard Server & REST API
 │   ├── stats.rs       # GET /api/stats with 2s TTL in-memory cache
 │   ├── stats_query.rs # SQLite queries for 24h summaries, tool breakdown, phase cadence
 │   ├── graph.rs       # GET /api/graph code graph serializer & Mermaid DAG exporter
 │   ├── graph_query.rs # Graph query builder and caller/callee edge extraction
 │   ├── projects.rs    # GET /api/projects multi-repository registry with active/missing disk checks & root resolution
+│   ├── projects_container.rs # Generic repository container boundary detection
 │   ├── projects_path.rs # Project root resolution (.agent-context & .git anchor detection)
 │   ├── projects_prune.rs# Auto-prune and stale project cleaner
+│   ├── rules_api.rs   # Micro-rules REST API with legacy default auto-migration
 │   ├── logs_api.rs    # GET /api/logs paginated diagnostic log query & clear endpoint
 │   └── mod.rs         # tiny_http worker pool, asset router, port allocator (11997)
 ├── dashboard_src/     # Dashboard Frontend SPA (HTML5, Vanilla ES Modules, CSS, SVG)
-├── mcp/               # Model Context Protocol Engine (< 300 LOC each)
+├── mcp/               # Model Context Protocol Engine
 │   ├── router/        # MCP JSON-RPC protocol router & tool schema definitions
 │   ├── state/         # ServerState, stage state machine, 31-keyword multi-lingual approval
 │   ├── tools/         # 6 core tool dispatchers (pipeline, skills, guidance, context, gate, continuity)
@@ -306,7 +308,7 @@ task_pipeline(task, project_path, phase)
   ├─ detect_project_path() → resolve workspace root
   ├─ detect_project_architecture() → Clean_Architecture / Layered_Architecture / Package_By_Feature / Orchestrator / CLI_Pipeline / Flat_Library
   ├─ query SQLite code_graph.db → fast-path file count (<1ms)
-  ├─ generate_dynamic_blueprint() → upfront modularity blueprint (<300 LOC target)
+  ├─ generate_dynamic_blueprint() → domain/feature blueprint & >300 LOC review candidates
   ├─ get_semantic_relevant_learnings() → inject past session learnings
   ├─ get_phase_rules() → phase-targeted execution mandates
   ├─ evaluate approval keywords → auto-transition Plan -> Build if approved

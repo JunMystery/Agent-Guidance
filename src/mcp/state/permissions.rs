@@ -23,6 +23,24 @@ impl ServerState {
             self.priority_gate_check()?;
         }
 
+        if !self.pending_skill_proposals.is_empty() {
+            let blocks_edit_gate = (tool_name == "workflow_gate"
+                && matches!(
+                    args.get("action").and_then(|a| a.as_str()),
+                    Some("authorize_edit" | "advance" | "advance_stage" | "approve_plan" | "approve" | "set_stage")
+                ))
+                || (tool_name == "project_context"
+                    && (args.get("authorize").and_then(|v| v.as_bool()).unwrap_or(false)
+                        || args.get("pre_authorize").and_then(|v| v.as_bool()).unwrap_or(false)
+                        || matches!(
+                            args.get("operation").and_then(|o| o.as_str()),
+                            Some("read_and_authorize" | "read_auth")
+                        )));
+            if blocks_edit_gate {
+                return Err("SKILL_PROPOSAL_PENDING: Pending skill proposals must be confirmed via `ask_question` and `select_skills` before authorizing code edits or advancing past planning.".to_string());
+            }
+        }
+
         // 3. Perform Stage Checks
         match self.workflow_stage.as_str() {
             "Context" => {
@@ -37,31 +55,31 @@ impl ServerState {
                 }
                 Ok(())
             }
-            "Plan" => {
-                if tool_name == "project_context" {
-                    let op = args.get("operation").and_then(|o| o.as_str()).unwrap_or("");
-                    if op == "diff" {
-                        return Err(format!(
-                            "WORKFLOW_STAGE_BLOCKED: Operation '{}' on project_context is blocked in 'Plan' stage.",
-                            op
-                        ));
-                    }
-                }
-                Ok(())
-            }
+            "Plan" => Ok(()),
             "Ask_Revise" => {
                 if tool_name == "project_context" {
                     let op = args.get("operation").and_then(|o| o.as_str()).unwrap_or("");
                     if matches!(
                         op,
                         "read"
+                            | "cluster_read"
+                            | "read_cluster"
+                            | "read_and_authorize"
+                            | "read_auth"
                             | "search"
+                            | "graph_rag"
+                            | "navigate"
+                            | "subgraph_bundle"
+                            | "bundle"
+                            | "data_flow"
+                            | "dataflow"
                             | "symbols"
                             | "references"
                             | "structure"
                             | "callers"
+                            | "incoming_calls"
                             | "callees"
-                            | "diff"
+                            | "outgoing_calls"
                     ) {
                         return Err(format!(
                             "WORKFLOW_STAGE_BLOCKED: Code reading operation '{}' is blocked in 'Ask_Revise' stage.",
@@ -122,9 +140,14 @@ impl ServerState {
             "Proposal" => {
                 if tool_name == "project_context" {
                     let op = args.get("operation").and_then(|o| o.as_str()).unwrap_or("");
-                    if matches!(op, "diff" | "structure" | "symbols") {
+                    let req_auth = args
+                        .get("authorize")
+                        .or_else(|| args.get("pre_authorize"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if req_auth || matches!(op, "read_and_authorize" | "read_auth" | "structure" | "symbols") {
                         return Err(format!(
-                            "WORKFLOW_STAGE_BLOCKED: Operation '{}' is blocked in 'Proposal' stage.",
+                            "WORKFLOW_STAGE_BLOCKED: Operation '{}' (or authorize=true) is blocked in 'Proposal' stage.",
                             op
                         ));
                     }

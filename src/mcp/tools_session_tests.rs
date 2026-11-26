@@ -214,3 +214,57 @@ fn test_session_continuity_list_and_switch() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_session_switch_failed_lookup_preserves_state_and_resets_flags() {
+    let temp_dir = std::env::temp_dir().join(format!("tools_switch_safe_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let mut target = ServerState::new();
+    target.verification_passed = true;
+    target.is_fast_path = true;
+    target.queue_deferred_authorization(&["src/a.rs".to_string()]);
+    target.save_to_dir(&temp_dir).unwrap();
+
+    let mut active = ServerState::new();
+    active.priority_gate_pass();
+    active.workflow_stage = "Build".to_string();
+    active.plan_approved = true;
+    active.record_modified_file("src/keep.rs");
+
+    let miss = crate::mcp::router::handle_request(
+        "tools/call",
+        Some(json!({
+            "name": "session_continuity",
+            "arguments": {
+                "operation": "switch",
+                "session_id": "nonexistent_session_999",
+                "project_path": temp_dir.to_str().unwrap()
+            }
+        })),
+        &mut active,
+    )
+    .unwrap();
+    assert!(miss["content"][0]["text"].as_str().unwrap().contains("Failed to switch"));
+    assert_eq!(active.modified_files, vec!["src/keep.rs"]);
+    assert!(active.plan_approved);
+
+    crate::mcp::router::handle_request(
+        "tools/call",
+        Some(json!({
+            "name": "session_continuity",
+            "arguments": {
+                "operation": "switch",
+                "session_id": target.session_id,
+                "project_path": temp_dir.to_str().unwrap()
+            }
+        })),
+        &mut active,
+    )
+    .unwrap();
+    assert!(!active.verification_passed);
+    assert!(!active.is_fast_path);
+    assert!(active.deferred_authorized_paths.is_empty());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

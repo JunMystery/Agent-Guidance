@@ -145,4 +145,25 @@ mod tests {
         assert!(state.deferred_authorized_paths.contains(&"src/handler.rs".to_string()));
         assert!(state.deferred_authorized_paths.contains(&"src/repo.rs".to_string()));
     }
+
+    #[test]
+    fn test_subgraph_bundle_authorize_enforces_fast_path_boundary() {
+        let (guard, _db) = create_mock_project();
+        let mut state = ServerState::new();
+        state.workspace_roots = vec![guard.dir.to_string_lossy().to_string()];
+        state.workflow_stage = "Build".to_string();
+        state.plan_approved = true;
+        state.is_fast_path = true;
+
+        let res = handle_subgraph_bundle(
+            &json!({"authorize": true, "authorize_all": true}),
+            &guard.dir,
+            "process_data",
+            &mut state,
+        );
+        assert!(res.contains("FAST_PATH_BOUNDARY_EXCEEDED"));
+        assert!(!state.is_fast_path);
+        assert!(!state.plan_approved);
+        assert_eq!(state.workflow_stage, "Plan");
+    }
 }

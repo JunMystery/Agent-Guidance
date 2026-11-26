@@ -9,6 +9,7 @@ mod tests {
     fn test_is_exempt_from_loc_limit() {
         // Documentation & Markdown
         assert!(is_exempt_from_loc_limit("docs/planning/phases/01_phase_core_dataset.md"));
+        assert!(is_exempt_from_loc_limit(".cursor/rules/agent-guidance.mdc"));
         assert!(is_exempt_from_loc_limit("README.md"));
         assert!(is_exempt_from_loc_limit("notes.txt"));
         assert!(is_exempt_from_loc_limit("doc.pdf"));
@@ -70,8 +71,8 @@ mod tests {
         assert!(res.is_ok());
         let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
         assert!(text.contains("Status: PASSED"));
-        assert!(!text.contains("300_LOC_CAP_EXCEEDED"));
-        assert!(!text.contains("300 LOC Modular Refactoring Mandate"));
+        assert!(!text.contains("Soft File LOC Notice"));
+        assert!(!text.contains("DOMAIN_COHESION_ADVISORY"));
 
         // Read large markdown file
         let read_res = handle_tool_call(
@@ -85,7 +86,7 @@ mod tests {
         );
         assert!(read_res.is_ok());
         let read_text = read_res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
-        assert!(!read_text.contains("ARCHITECTURE MANDATE (300 LOC Cap Exceeded)"));
+        assert!(!read_text.contains("Code Quality Note (Soft Limit > 300 LOC)"));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

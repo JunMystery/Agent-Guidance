@@ -210,8 +210,8 @@ mod tests {
     }
 
     #[test]
-    fn test_deferred_pre_authorization_blocks_compound_plural() {
-        let temp_dir = std::env::temp_dir().join(format!("ag_defer_block_{}", std::process::id()));
+    fn test_deferred_pre_authorization_warns_compound_plural_without_blocking() {
+        let temp_dir = std::env::temp_dir().join(format!("ag_defer_warn_{}", std::process::id()));
         let _ = fs::create_dir_all(temp_dir.join("src"));
 
         let mut state = ServerState::new();
@@ -233,9 +233,9 @@ mod tests {
 
         assert!(res.is_ok());
         let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
-        assert!(text.contains("Pre-Authorization Validation Blocked"), "Compound plural must be blocked: {}", text);
-        assert!(text.contains("COMPOUND_FILE_NAME_PROHIBITED"));
-        assert!(state.deferred_authorized_paths.is_empty(), "Blocked path must not be enqueued");
+        assert!(text.contains("Deferred Pre-Authorization Queued"), "Compound plural must still queue: {}", text);
+        assert!(text.contains("DOMAIN_COHESION_ADVISORY"));
+        assert_eq!(state.deferred_authorized_paths.len(), 1);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

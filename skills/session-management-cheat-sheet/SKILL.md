@@ -10,7 +10,7 @@ Web applications can create sessions to keep track of anonymous users after the 
 
 Once an authenticated session has been established, the session ID (or token) is temporarily equivalent to the strongest authentication method used by the application, such as username and password, passphrases, one-time passwords (OTP), client-based digital certificates, smartcards, or biometrics (such as fingerprint or eye retina). See the OWASP [Authentication Cheat Sheet](Authentication_Cheat_Sheet.md).
 
-HTTP is a stateless protocol ([RFC2616](https://www.ietf.org/rfc/rfc2616.txt) section 5), where each request and response pair is independent of other web interactions. Therefore, in order to introduce the concept of a session, it is required to implement session management capabilities that link both the authentication and access control (or authorization) modules commonly available in web applications:
+HTTP is a stateless protocol ([RFC 9110, Section 3.3](https://www.rfc-editor.org/rfc/rfc9110#section-3.3)), where each request and response pair is independent of other web interactions. Therefore, in order to introduce the concept of a session, it is required to implement session management capabilities that link both the authentication and access control (or authorization) modules commonly available in web applications:
 
 ![SessionDiagram](../assets/Session_Management_Cheat_Sheet_Diagram.png)
 
@@ -70,9 +70,9 @@ It is recommended to use the session ID created by your language or framework. I
 
 ## Session Management Implementation
 
-The session management implementation defines the exchange mechanism that will be used between the user and the web application to share and continuously exchange the session ID. There are multiple mechanisms available in HTTP to maintain session state within web applications, such as cookies (standard HTTP header), URL parameters (URL rewriting – [RFC2396](https://www.ietf.org/rfc/rfc2396.txt)), URL arguments on GET requests, body arguments on POST requests, such as hidden form fields (HTML forms), or proprietary HTTP headers.
+The session management implementation defines the exchange mechanism that will be used between the user and the web application to share and continuously exchange the session ID. There are multiple mechanisms available in HTTP to maintain session state within web applications, such as cookies (standard HTTP header), URL parameters (URL rewriting – [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986)), URL arguments on GET requests, body arguments on POST requests, such as hidden form fields (HTML forms), or proprietary HTTP headers.
 
-The preferred session ID exchange mechanism should allow defining advanced token properties, such as the token expiration date and time, or granular usage constraints. This is one of the reasons why cookies (RFCs [2109](https://www.ietf.org/rfc/rfc2109.txt) & [2965](https://www.ietf.org/rfc/rfc2965.txt) & [6265](https://www.ietf.org/rfc/rfc6265.txt)) are one of the most extensively used session ID exchange mechanisms, offering advanced capabilities not available in other methods.
+The preferred session ID exchange mechanism should allow defining advanced token properties, such as the token expiration date and time, or granular usage constraints. This is one of the reasons why cookies ([RFC 6265](https://www.rfc-editor.org/rfc/rfc6265), which obsoletes RFC 2965 and deprecates the `Cookie2` and `Set-Cookie2` header fields) are one of the most extensively used session ID exchange mechanisms, offering advanced capabilities not available in other methods.
 
 The usage of specific session ID exchange mechanisms, such as those where the ID is included in the URL, might disclose the session ID (in web links and logs, web browser history and bookmarks, the Referer header or search engines), as well as facilitate other attacks, such as the manipulation of the ID or [session fixation attacks](https://www.acrossecurity.com/papers/session_fixation.pdf).
 
@@ -349,6 +349,10 @@ Web applications should provide mechanisms that allow security aware users to ac
 #### Logout Button
 
 Web applications must provide a visible and easily accessible logout (logoff, exit, or close session) button that is available on the web application header or menu and reachable from every web application resource and page, so that the user can manually close the session at any time. As described in *Session_Expiration* section, the web application must invalidate the session at least on server side.
+
+All session IDs belonging to the same logical authenticated session must be revoked together. This includes IDs issued through successive or concurrent rotations, as well as previous IDs still accepted during the associated grace period.
+
+Once [logout of that session](https://github.com/OWASP/ASVS/blob/v5.0.0/5.0/en/0x16-V7-Session-Management.md#v74-session-termination) completes, none of these IDs may be accepted for authentication or renewal of the terminated session. This also applies to IDs issued by renewal or session-save operations already in progress during logout. Applications may also terminate independently authenticated sessions under a broader logout policy.
 
 **NOTE**: Unfortunately, not all web applications facilitate users to close their current session. Thus, client-side enhancements allow conscientious users to protect their sessions by helping to close them diligently.
 

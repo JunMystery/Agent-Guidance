@@ -38,50 +38,56 @@ pub(crate) fn handle_precode(
         "General"
     };
 
-    let lang_rules = match primary_lang {
-        "Rust" => {
-            "- Rust Safety: Explicit lifetime/borrowing checks, handle Result/Option cleanly, avoid unwrap() in production paths."
-        }
-        "Kotlin/Java" => {
-            "- Kotlin/Java Safety: Scope coroutines to Dispatchers.IO/Default, avoid forced unwraps (!!), respect StateFlow/LiveData lifecycles, keep Compose functions idempotent."
-        }
-        "Go" => {
-            "- Go Safety: Enforce explicit error checking (if err != nil), bind goroutine lifecycles to context.Context cancellation, avoid data races on shared structs."
-        }
-        "Python" => {
-            "- Python Safety: Type hints, handle None dereferences explicitly, avoid mutable default arguments."
-        }
-        "TypeScript/JavaScript" => {
-            "- TS/JS Safety: Strict type definitions, optional chaining (`?.`), nullish coalescing (`??`)."
-        }
-        _ => {
-            "- Language Safety: Verify non-null objects before dereferencing, enforce explicit error handling."
-        }
+    let (lang_rules, linter_hint) = match primary_lang {
+        "Rust" => (
+            "- Rust Safety: Explicit lifetime/borrowing checks, handle Result/Option cleanly, avoid unwrap() in production paths.",
+            "cargo clippy --all-targets",
+        ),
+        "Kotlin/Java" => (
+            "- Kotlin/Java Safety: Scope coroutines to Dispatchers.IO/Default, avoid forced unwraps (!!), respect StateFlow/LiveData lifecycles, keep Compose functions idempotent.",
+            "ktlint / detekt",
+        ),
+        "Go" => (
+            "- Go Safety: Enforce explicit error checking (if err != nil), bind goroutine lifecycles to context.Context cancellation, avoid data races on shared structs.",
+            "golangci-lint run",
+        ),
+        "Python" => (
+            "- Python Safety: Type hints, handle None dereferences explicitly, avoid mutable default arguments.",
+            "ruff check .",
+        ),
+        "TypeScript/JavaScript" => (
+            "- TS/JS Safety: Strict type definitions, optional chaining (`?.`), nullish coalescing (`??`).",
+            "eslint .",
+        ),
+        _ => (
+            "- Language Safety: Verify non-null objects before dereferencing, enforce explicit error handling.",
+            "language static linter",
+        ),
     };
 
     let arch_blueprint = match active_arch.as_str() {
         "Clean_Architecture" => {
-            "- Upfront Blueprint: Entry Dispatcher (< 100 LOC) -> `domain/` models/traits (< 200 LOC) -> `usecase/` business logic (< 250 LOC) -> `infrastructure/` (< 250 LOC)."
+            "- Domain/Feature Grouping: Colocate files by domain (`domain/`, `usecase/`, `infrastructure/`, `entrypoint/`) so changes stay localized."
         }
         "Layered_Architecture" => {
-            "- Upfront Blueprint: Dispatcher (< 100 LOC) -> `controllers/` (< 200 LOC) -> `services/` (< 250 LOC) -> `models/` (< 150 LOC)."
+            "- Domain/Feature Grouping: Group cohesive use cases across `controllers/`, `services/`, `models/`."
         }
         "Package_By_Feature" => {
-            "- Upfront Blueprint: Feature Entry (< 100 LOC) -> feature-specific handler (< 200 LOC) -> feature types (< 150 LOC)."
+            "- Domain/Feature Grouping: Keep feature entry, handlers, service, and types colocated under `<feature>/`."
         }
         "CLI_Pipeline" => {
-            "- Upfront Blueprint: CLI entrypoint main (< 80 LOC) -> `commands/` sub-handlers (< 200 LOC) -> core execution engine (< 250 LOC)."
+            "- Domain/Feature Grouping: Keep `main` as thin CLI dispatcher, group sub-commands in `commands/`, and core logic in `core/`."
         }
         "Flat_Library" => {
-            "- Upfront Blueprint: Public API facade (< 120 LOC) -> focused internal modules (< 250 LOC each)."
+            "- Domain/Feature Grouping: Keep public API facade clean and group internal modules by domain."
         }
         _ => {
-            "- Upfront Blueprint: Thin main dispatcher (< 100 LOC) -> dedicated feature sub-modules (< 250 LOC each)."
+            "- Domain/Feature Grouping: Group files serving the same use case or domain close together to minimize cross-module side effects."
         }
     };
 
     format!(
-        "# Pre-Code Verification Checklist\n\n- Primary Language: {}\n- Architecture Pattern: {}\n\n1. **Upfront Architecture & 300 LOC Cap (Mandatory)**:\n   {}\n   - *Hard Rule*: Do NOT wait for files to reach 300 LOC to refactor. Create sub-modules from line 1.\n2. **Language Rules**:\n   {}\n3. **Symbol & API Grounding**:\n   - Verify symbol signatures using `project_context(operation=\"symbols\")` or search before modifying callers.\n4. **Error Handling Integrity**:\n   - Preserve existing error boundaries. Never use unwrap() or empty catch blocks in production paths.",
-        primary_lang, active_arch, arch_blueprint, lang_rules
+        "# Pre-Code Verification Checklist\n\n- Primary Language: {}\n- Architecture Pattern: {}\n\n1. **Domain Cohesion & Soft Quality Thresholds**:\n   {}\n   - *Soft 300 LOC Limit*: Treat 300 LOC as a review prompt (is this file mixing unrelated responsibilities?), not a hard wall. Prioritize small functions (15-40 LOC; warn > 60 LOC, cyclomatic <= 10, cognitive <= 15, nesting <= 4).\n2. **Language Rules & Static Linter**:\n   {}\n   - *Static Analysis*: Run `{}` alongside tests to catch complexity and nesting early.\n3. **Symbol & API Grounding**:\n   - Verify symbol signatures using `project_context(operation=\"symbols\")` or search before modifying callers.\n4. **Error Handling Integrity**:\n   - Preserve existing error boundaries. Never use unwrap() or empty catch blocks in production paths.\n5. **Test Isolation & Data-Boundary Safety**:\n   - Isolate tests into temp/in-memory sandboxes (never write to live APPDATA/~/.config/prod DB); prefer `patch.object`/DI over string-path mocks with call assertions, and use narrow atomic writes + empty-payload guards on production storage/backups.",
+        primary_lang, active_arch, arch_blueprint, lang_rules, linter_hint
     )
 }

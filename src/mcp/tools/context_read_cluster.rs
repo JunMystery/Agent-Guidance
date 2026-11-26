@@ -24,6 +24,10 @@ pub(crate) fn handle_cluster_read(
         .get("line_numbers")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let allow_cross = arguments
+        .get("allow_cross_workspace")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let max_files = paths.len().min(8);
     for (idx, raw_spec) in paths.iter().take(max_files).enumerate() {
@@ -32,7 +36,7 @@ pub(crate) fn handle_cluster_read(
             continue;
         }
 
-        let full_path = match validate_path_scoped(proj_path, &spec.clean_path, true) {
+        let full_path = match validate_path_scoped(proj_path, &spec.clean_path, allow_cross) {
             Ok(p) => p,
             Err(err_msg) => {
                 sections.push(format!(
@@ -78,15 +82,22 @@ pub(crate) fn handle_cluster_read(
 
                 // 1. Line Range Slicing
                 if let Some((start, end)) = spec.line_range {
-                    let s = start.max(1).min(total_lines);
-                    let e = end.max(s).min(total_lines);
-                    let slice = &lines[s - 1..e];
-                    total_lines_read += slice.len();
-                    let rendered = render_lines(slice, s, show_line_numbers || true);
-                    sections.push(format!(
-                        "### [{}/{}] File: `{}` (Lines {}-{} of {})\n\n```{}\n{}\n```",
-                        idx + 1, max_files, spec.clean_path, s, e, total_lines, lang_str, rendered
-                    ));
+                    if total_lines == 0 {
+                        sections.push(format!(
+                            "### [{}/{}] File: `{}` (Empty file, 0 lines)\n\n```{}\n\n```",
+                            idx + 1, max_files, spec.clean_path, lang_str
+                        ));
+                    } else {
+                        let s = start.max(1).min(total_lines);
+                        let e = end.max(s).min(total_lines);
+                        let slice = &lines[s - 1..e];
+                        total_lines_read += slice.len();
+                        let rendered = render_lines(slice, s, show_line_numbers || true);
+                        sections.push(format!(
+                            "### [{}/{}] File: `{}` (Lines {}-{} of {})\n\n```{}\n{}\n```",
+                            idx + 1, max_files, spec.clean_path, s, e, total_lines, lang_str, rendered
+                        ));
+                    }
                 // 2. Semantic Symbol Slicing
                 } else if let Some(ref sym) = spec.target_symbol {
                     let ast_lang = AstLanguage::from_path(&spec.clean_path);
@@ -133,7 +144,7 @@ pub(crate) fn handle_cluster_read(
                 // 3. Fallback / Large File Skeleton
                 } else if (total_lines > 300 || budget_exceeded) && !is_exempt {
                     let skeleton = crate::optimizer::skeleton::generate_code_skeleton(&content, &spec.clean_path);
-                    let reason = if budget_exceeded { "Cluster Line Budget (1000 lines) Exceeded" } else { "300 LOC Cap Exceeded" };
+                    let reason = if budget_exceeded { "Cluster Line Budget (1000 lines) Exceeded" } else { "Token Read Cap (> 300 LOC)" };
                     sections.push(format!(
                         "### [{}/{}] File: `{}`\n```{}\n{}\n```\n[ag: AST Structural Skeleton ({} lines) | {} | use #symbol or :start-end for specific section]",
                         idx + 1, max_files, spec.clean_path, lang_str, skeleton, total_lines, reason

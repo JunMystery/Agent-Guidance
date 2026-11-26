@@ -35,9 +35,9 @@ pub(crate) fn handle_search(
                 "file_match" => format!("(score: {:.2}) [file match]", r.score),
                 "alias_cache" => format!("(confidence: {:.2}) [alias cache]", (r.score / 2.0).clamp(0.0, 1.0)),
                 "symbol_fts" => format!("(score: {:.2}) [symbol index: bm25]", r.score),
-                "symbol_vector" => format!("(cosine: {:.2}) [semantic symbol]", r.score),
+                "symbol_vector" => format!("(score: {:.2}) [semantic symbol]", r.score),
                 "content_fts" => format!("(score: {:.2}) [content index: bm25]", r.score),
-                "content_vector" => format!("(cosine: {:.2}) [RAG content vector]", r.score),
+                "content_vector" => format!("(score: {:.2}) [RAG content vector]", r.score),
                 other => format!("({}) [{}]", r.score, other),
             };
 

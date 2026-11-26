@@ -123,17 +123,18 @@ Agent-Guidance-MCP/
 
 ## Version Bump
 
-Update these files when releasing a new version:
+Run the single-source-of-truth synchronizer script when releasing a new version:
 
-| File | Line | Action |
-|---|---|---|
-| `Cargo.toml` | 3 | Set `version = "X.Y.Z"` |
-| `.github/workflows/release.yml` | 5 | Update default tag for workflow_dispatch (optional) |
+```bash
+python scripts/sync-version.py X.Y.Z
+```
+
+This updates `Cargo.toml`, `Cargo.lock`, `build.rs`, `package.json`, `packaging/npm/package.json`, `packaging/homebrew/agent-guidance.rb`, `scripts/install.ps1`, `scripts/install.sh`, and `src/dashboard_src/package.json`. Update `.github/workflows/release.yml` default tag example if desired.
 
 Files that auto-follow via `env!("CARGO_PKG_VERSION")` (no manual change):
 - `src/main.rs`, `src/mcp/router.rs`
 
-Procedure: `Cargo.toml` → `cargo build --release` → `git tag vX.Y.Z` → `git push --tags`.
+Procedure: `python scripts/sync-version.py X.Y.Z` → `cargo build --release` → `git tag vX.Y.Z` → `git push --tags`.
 
 ## Related Docs
 

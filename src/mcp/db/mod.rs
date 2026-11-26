@@ -63,6 +63,8 @@ fn init_db_internal(db_path: &PathBuf) -> Result<()> {
             | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )?;
 
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(2000));
+    let _ = conn.query_row("PRAGMA journal_mode = WAL;", [], |r| r.get::<_, String>(0));
     let _ = conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL;");
 
     conn.execute_batch(

@@ -4,14 +4,10 @@ use std::path::Path;
 use crate::mcp::state::ServerState;
 use super::helpers::resolve_architecture_pattern;
 
-pub(crate) fn handle_approve_plan(
-    arguments: &Value,
-    state: &mut ServerState,
-    user_confirmed: bool,
+pub(crate) fn validate_approval_not_question_response(
     user_msg: Option<&str>,
-    proj_path: &Path,
-) -> String {
-    // 1. Check if user_msg contains ask_question responses (e.g. A1:, A2:)
+    justification: &str,
+) -> Option<String> {
     if let Some(msg) = user_msg {
         let msg_trimmed = msg.trim();
         if msg_trimmed.starts_with("A1:")
@@ -19,17 +15,10 @@ pub(crate) fn handle_approve_plan(
             || msg_trimmed.contains("\nA1:")
             || msg_trimmed.contains("\nA2:")
         {
-            state.plan_approved = false;
-            return "# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED | Error: QUESTION_RESPONSE_NOT_PLAN_APPROVAL: Answering an `ask_question` prompt (/grill-me) is design feedback, NOT plan approval. Synthesize decisions into `implementation_plan.md` (`RequestFeedback: true`) in a standalone turn and wait for explicit user approval (Proceed button).".to_string();
+            return Some("# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED | Error: QUESTION_RESPONSE_NOT_PLAN_APPROVAL: Answering an `ask_question` prompt (/grill-me) is design feedback, NOT plan approval. Synthesize decisions into `implementation_plan.md` (`RequestFeedback: true`) in a standalone turn and wait for explicit user approval (Proceed button).".to_string());
         }
-        state.process_user_message(msg);
     }
 
-    // 2. Check if justification indicates substitution of ask_question choices for plan approval
-    let justification = arguments
-        .get("justification")
-        .and_then(|j| j.as_str())
-        .unwrap_or("");
     let just_lower = justification.to_lowercase();
     if just_lower.contains("chọn phương án")
         || just_lower.contains("chọn đáp án")
@@ -51,22 +40,39 @@ pub(crate) fn handle_approve_plan(
             .unwrap_or(false);
 
         if !has_explicit_approval {
-            state.plan_approved = false;
-            return "# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED | Error: QUESTION_CHOICE_NOT_PLAN_APPROVAL: Answering an `ask_question` prompt (/grill-me) is design clarification, NOT plan approval. Present `implementation_plan.md` (`RequestFeedback: true`) in a standalone turn (without calling ask_question) and wait for the user to explicitly click 'Proceed' or send plan approval.".to_string();
+            return Some("# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED | Error: QUESTION_CHOICE_NOT_PLAN_APPROVAL: Answering an `ask_question` prompt (/grill-me) is design clarification, NOT plan approval. Present `implementation_plan.md` (`RequestFeedback: true`) in a standalone turn (without calling ask_question) and wait for the user to explicitly click 'Proceed' or send plan approval.".to_string());
         }
     }
 
-    if !user_confirmed && !state.plan_approved && user_msg.is_none() {
+    None
+}
+
+pub(crate) fn handle_approve_plan(
+    arguments: &Value,
+    state: &mut ServerState,
+    user_confirmed: bool,
+    user_msg: Option<&str>,
+    proj_path: &Path,
+) -> String {
+    let justification = arguments
+        .get("justification")
+        .and_then(|j| j.as_str())
+        .unwrap_or("");
+
+    if let Some(blocked) = validate_approval_not_question_response(user_msg, justification) {
+        state.plan_approved = false;
+        return blocked;
+    }
+
+    let msg_approves = user_msg.map(ServerState::is_approval_message).unwrap_or(false);
+    if !user_confirmed && !msg_approves && !state.plan_approved {
         return "# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED | Error: USER_APPROVAL_REQUIRED: Plan approval cannot be self-granted by AI agents. You MUST present `implementation_plan.md` (`RequestFeedback: true`) in a standalone turn and wait for the user to explicitly click 'Proceed' or send an approval message. Never use `ask_question` answers as a substitute for plan approval.".to_string();
     }
 
-    state.approve_plan();
-
     let mut paths = super::gate_edit::extract_target_paths(arguments);
-    let deferred = state.drain_deferred_authorized_paths();
-    for dp in deferred {
-        if !paths.contains(&dp) {
-            paths.push(dp);
+    for dp in &state.deferred_authorized_paths {
+        if !paths.contains(dp) {
+            paths.push(dp.clone());
         }
     }
 
@@ -95,6 +101,8 @@ pub(crate) fn handle_approve_plan(
             return blocked_msg;
         }
 
+        state.approve_plan();
+        state.clear_deferred_authorized_paths();
         let _ = state.set_stage("Build");
         let raw_arch = arguments
             .get("architecture_pattern")
@@ -111,6 +119,7 @@ pub(crate) fn handle_approve_plan(
             &paths,
             justification,
             &arch_pattern,
+            allow_cross,
             state,
         );
 
@@ -136,6 +145,7 @@ pub(crate) fn handle_approve_plan(
         );
     }
 
+    state.approve_plan();
     let _ = state.auto_checkpoint(proj_path);
     format!(
         "# Workflow Gate: [approve_plan]\n\nStatus: PASSED | Plan Approved: true | Stage: {}",
@@ -144,13 +154,32 @@ pub(crate) fn handle_approve_plan(
 }
 
 pub(crate) fn handle_pass_verification(
+    arguments: &Value,
     state: &mut ServerState,
     proj_path: &Path,
 ) -> String {
+    let output = arguments
+        .get("verification_output")
+        .or_else(|| arguments.get("command_output"))
+        .and_then(|v| v.as_str());
+
+    if let Some(expected_kw) = state.expected_output_keyword.as_deref().filter(|k| !k.is_empty()) {
+        let matched = output.map(|actual| actual.contains(expected_kw)).unwrap_or(false);
+        if !matched {
+            state.verification_passed = false;
+            let _ = state.auto_checkpoint(proj_path);
+            return format!(
+                "# Workflow Gate: [pass_verification]\n\nStatus: BLOCKED (VERIFICATION_KEYWORD_MISSING) | Expected Keyword: `{}`\n\nVerification output was missing or did not match the registered contract keyword.",
+                expected_kw
+            );
+        }
+    }
+
+    state.verification_passed = true;
     state.fix_attempts = 0;
     let _ = state.auto_checkpoint(proj_path);
     format!(
-        "# Workflow Gate: [pass_verification]\n\nStatus: PASSED | Plan Approved: {} | Stage: {} | Fix Attempts: 0\n\nVerification passed and recorded in session checkpoint.",
+        "# Workflow Gate: [pass_verification]\n\nStatus: PASSED | Plan Approved: {} | Stage: {} | Verification Passed: true | Fix Attempts: 0\n\nVerification passed and recorded in session checkpoint.",
         state.plan_approved, state.workflow_stage
     )
 }
@@ -178,7 +207,7 @@ pub(crate) fn handle_set_architecture(
 }
 
 pub(crate) fn handle_rollback(
-    state: &ServerState,
+    state: &mut ServerState,
     proj_path: &Path,
 ) -> String {
     match crate::mcp::impact::restore_session_snapshots(proj_path, &state.session_id) {
@@ -189,6 +218,9 @@ pub(crate) fn handle_rollback(
                     state.session_id
                 )
             } else {
+                state.verification_passed = false;
+                state.modified_files.clear();
+                let _ = state.auto_checkpoint(proj_path);
                 format!(
                     "# Rollback Guard: [rollback] SUCCESS\n\nSuccessfully restored {} file(s) to their pre-edit state for session '{}':\n\n{}",
                     restored.len(),

@@ -12,7 +12,8 @@ pub fn get_tools_list() -> Value {
                         "task": { "type": "string", "description": "The task description or goal" },
                         "project_path": { "type": "string", "description": "Absolute path of your active working repository (e.g. 'E:/Github/Device-Ping')" },
                         "conversation_id": { "type": "string", "description": "Optional native conversation or session UUID from host IDE/Agent to bind session state" },
-                        "phase": { "type": "string", "enum": ["plan", "build", "implement", "test", "debug", "review", "refactor"], "description": "Active development phase for per-phase context reset" }
+                        "phase": { "type": "string", "enum": ["plan", "build", "implement", "test", "debug", "review", "refactor"], "description": "Active development phase for per-phase context reset" },
+                        "is_minor": { "type": "boolean", "description": "Explicitly request Minor Task Fast-Path Exemption (single-file typos/docs/trivial patches)" }
                     },
                     "required": ["task", "project_path", "phase"]
                 }
@@ -54,7 +55,7 @@ pub fn get_tools_list() -> Value {
             },
             {
                 "name": "guidance",
-                "description": "Standards catalog, 2-stage vector search, 279 embedded skills (440 vector passages), pre-code architecture blueprints, and empirical verification contracts.",
+                "description": "Standards catalog, 2-stage vector search across embedded and workspace skills, pre-code architecture blueprints, and empirical verification contracts.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -104,7 +105,12 @@ pub fn get_tools_list() -> Value {
                         "edges": { "type": "array", "items": { "type": "object" }, "description": "Array of semantic edges for enrich_graph: [{source, target, relation, description, confidence}]" },
                         "summaries": { "type": "array", "items": { "type": "object" }, "description": "Array of domain summaries for enrich_graph: [{module_path, title, summary, tags}]" },
                         "scope": { "type": "string", "enum": ["symbols", "files", "edges", "content"], "description": "Scope filter for navigate operation" },
-                        "view_mode": { "type": "string", "enum": ["full", "skeleton", "zoom", "slice"], "description": "View mode for 'read' operation: 'full' (capped 300 LOC), 'skeleton' (AST structural outline), 'zoom'/'slice' (focused implementation with folded siblings)" }
+                        "view_mode": { "type": "string", "enum": ["full", "skeleton", "zoom", "slice"], "description": "View mode for 'read' operation: 'full' (capped 300 LOC), 'skeleton' (AST structural outline), 'zoom'/'slice' (focused implementation with folded siblings)" },
+                        "authorize": { "type": "boolean", "description": "Also request or queue edit authorization for the read target file(s)" },
+                        "line_numbers": { "type": "boolean", "description": "Include L-prefixed line numbers in read output" },
+                        "justification": { "type": "string", "description": "Reason and test mitigation plan when authorize=true" },
+                        "architecture_pattern": { "type": "string", "enum": ["Auto", "Clean_Architecture", "Layered_Architecture", "Package_By_Feature", "Orchestrator", "CLI_Pipeline", "Flat_Library"], "description": "Architecture pattern used when authorize=true" },
+                        "allow_cross_workspace": { "type": "boolean", "description": "Explicitly allow read-authorization across external workspace boundaries" }
                     },
                     "required": ["operation", "project_path"]
                 }
@@ -124,7 +130,10 @@ pub fn get_tools_list() -> Value {
                         "relative_paths": { "type": "array", "items": { "type": "string" }, "description": "Batch authorization: array of relative file paths to authorize in a single turn (or pre-authorize at approve_plan)" },
                         "risk_level": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"], "description": "Declared risk level (for authorize_edit / advance)" },
                         "justification": { "type": "string", "description": "Reason and test mitigation plan for edits (Mandatory for High Risk / Critical Hub files)" },
-                        "architecture_pattern": { "type": "string", "enum": ["Auto", "Clean_Architecture", "Layered_Architecture", "Package_By_Feature", "Orchestrator", "CLI_Pipeline", "Flat_Library"], "description": "Declared architecture pattern (for authorize_edit / advance). Default is 'Auto' (auto-detects project architecture)." }
+                        "architecture_pattern": { "type": "string", "enum": ["Auto", "Clean_Architecture", "Layered_Architecture", "Package_By_Feature", "Orchestrator", "CLI_Pipeline", "Flat_Library"], "description": "Declared architecture pattern (for authorize_edit / advance). Default is 'Auto' (auto-detects project architecture)." },
+                        "allow_cross_workspace": { "type": "boolean", "description": "Explicitly permit modifying files outside the primary IDE workspace root" },
+                        "artifact_path": { "type": "string", "description": "Optional path to implementation_plan.md for approve_plan auto-discovery" },
+                        "verification_output": { "type": "string", "description": "Optional command output text validated against expected_output_keyword during pass_verification" }
                     },
                     "required": ["action"]
                 }

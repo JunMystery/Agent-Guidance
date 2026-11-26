@@ -8,28 +8,18 @@ pub(crate) fn handle_batch_authorize(
     paths: &[String],
     justification: &str,
     arch_pattern: &str,
+    allow_cross: bool,
     state: &mut ServerState,
 ) -> String {
     if paths.is_empty() {
         return "# Edit Approval Gate Authorization\n\n- Status: BLOCKED (NO_FILES_SPECIFIED)\n\nError: `relative_paths` array is empty. Please provide at least one target file path.".to_string();
     }
 
-    state.edit_authorized = true;
-    state.active_architecture_pattern = Some(arch_pattern.to_string());
-
-    let has_new_file = paths.iter().any(|p| {
-        let clean = p.trim().replace('\\', "/");
-        if clean.is_empty() {
-            return false;
-        }
-        let full = proj_path.join(&clean);
-        !full.exists()
-    });
-
     let mut passed_count = 0;
     let mut blocked_count = 0;
     let mut details = Vec::new();
     let mut co_change_tips = Vec::new();
+    let mut quality_advisories = Vec::new();
 
     for rel_path in paths {
         let clean_path = rel_path.trim().replace('\\', "/");
@@ -42,8 +32,8 @@ pub(crate) fn handle_batch_authorize(
             &clean_path,
             justification,
             arch_pattern,
+            allow_cross,
             state,
-            has_new_file,
         );
 
         if outcome.is_passed {
@@ -66,6 +56,9 @@ pub(crate) fn handle_batch_authorize(
             if let Some(tip) = outcome.co_change_tip {
                 co_change_tips.push(tip);
             }
+            if let Some(adv) = outcome.quality_advisory {
+                quality_advisories.push(adv);
+            }
         } else {
             blocked_count += 1;
             details.push(format!(
@@ -78,6 +71,11 @@ pub(crate) fn handle_batch_authorize(
                     .unwrap_or_else(|| "Validation failed".to_string())
             ));
         }
+    }
+
+    if passed_count > 0 {
+        state.edit_authorized = true;
+        state.active_architecture_pattern = Some(arch_pattern.to_string());
     }
 
     let _ = state.auto_checkpoint(proj_path);
@@ -102,6 +100,12 @@ pub(crate) fn handle_batch_authorize(
         state.workflow_stage,
         details.join("\n")
     );
+
+    if !quality_advisories.is_empty() {
+        out.push_str("\n### Code Quality & Cohesion Advisories (Soft Limit)\n");
+        out.push_str(&quality_advisories.join("\n"));
+        out.push('\n');
+    }
 
     if !co_change_tips.is_empty() {
         out.push_str("\n### Co-Change Coupling Alerts\n");

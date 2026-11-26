@@ -117,9 +117,9 @@ fn test_precode_upfront_split_blueprint() {
     );
     assert!(res.is_ok());
     let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
-    assert!(text.contains("Upfront Architecture & 300 LOC Cap (Mandatory)"));
+    assert!(text.contains("Domain Cohesion & Soft Quality Thresholds"));
     assert!(text.contains("CLI_Pipeline"));
-    assert!(text.contains("CLI entrypoint main (< 80 LOC)"));
+    assert!(text.contains("cargo clippy"));
 }
 
 #[test]
@@ -281,4 +281,26 @@ fn test_guidance_search_mentioned_skill_prioritized_with_recommended() {
     assert!(text.contains("SKILL_PROPOSAL: MANDATORY USER INTERACTION REQUIRED"));
     assert!(text.contains("ask_question"));
     assert!(text.contains("(Recommended) agent-guidance"));
+}
+
+#[test]
+fn test_guidance_get_and_workflow_accept_topic_param() {
+    let mut state = ServerState::new();
+    let get_res = handle_tool_call(
+        "guidance",
+        json!({ "operation": "get", "topic": "agent-guidance" }),
+        &mut state,
+    )
+    .unwrap();
+    let get_text = get_res["content"][0]["text"].as_str().unwrap();
+    assert!(!get_text.contains("Skill asset not found"));
+
+    let wf_res = handle_tool_call(
+        "guidance",
+        json!({ "operation": "workflow", "topic": "code" }),
+        &mut state,
+    )
+    .unwrap();
+    let wf_text = wf_res["content"][0]["text"].as_str().unwrap();
+    assert!(!wf_text.contains("# Dev Workflow Guidance: [plan]"));
 }

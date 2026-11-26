@@ -25,7 +25,12 @@ pub(crate) fn handle(
         .and_then(|p| p.as_str())
         .unwrap_or(".");
     let proj_path = detect_project_path(proj_path_arg, state);
+    let had_prior_plan_turn = state.workflow_stage == "Plan"
+        && (state.user_intent_summary.is_some() || !state.recent_tasks.is_empty());
     state.update_project_path(&proj_path);
+    if state.workflow_stage == "Context" {
+        state.workflow_stage = "Plan".to_string();
+    }
 
     // Fast-Path Exemption for Minor Tasks (typos, comments, docs, single-file patches)
     if is_minor_task(task, &arguments) {
@@ -35,6 +40,11 @@ pub(crate) fn handle(
         state.edit_authorized = true;
         state.is_fast_path = true;
         state.fast_path_files.clear();
+        state.pending_skill_proposals.clear();
+        state.clear_deferred_authorized_paths();
+        state.verification_passed = false;
+        state.verification_command = None;
+        state.expected_output_keyword = None;
         state.user_intent_summary = Some(task.to_string());
         state.active_task = Some(task.to_string());
         state.active_phase = Some("build".to_string());
@@ -61,31 +71,39 @@ pub(crate) fn handle(
 
     // Record active phase and auto-reset approval state when starting a new planning phase
     let is_same_task = state.user_intent_summary.as_deref() == Some(task);
-    let is_approval_msg = state.process_user_message(task);
+    let task_lower = task.to_lowercase();
+    let is_explicit_gui_approval = task_lower.contains("implementation_plan")
+        || task_lower.contains("approved this document")
+        || task_lower.contains("proceeded with implementation plan")
+        || task_lower.contains("proceed with implementation plan");
+    let is_approval_msg = (had_prior_plan_turn || is_explicit_gui_approval)
+        && ServerState::is_gui_or_short_plan_approval(task);
     state.active_phase = Some(phase.clone());
     if is_approval_msg {
         state.workflow_stage = "Build".to_string();
-        state.plan_approved = true;
-        state.edit_authorized = true;
+        state.approve_plan();
+        state.edit_authorized = false;
         let _ = state.save_to_dir(&proj_path);
         tracing::info!("Detected plan approval in task pipeline; transitioned to Build stage with plan_approved=true.");
-    } else if phase == "plan" {
-        // Only reset approval if this is a different task or if not already in Build/Test_Recheck
-        if !is_same_task || (state.workflow_stage != "Build" && state.workflow_stage != "Test_Recheck") {
-            state.workflow_stage = "Plan".to_string();
-            state.plan_approved = false;
-            state.edit_authorized = false;
-            state.verification_passed = false;
-            state.verification_command = None;
-            state.expected_output_keyword = None;
-            let _ = state.save_to_dir(&proj_path);
-            tracing::info!(
-                "Reset workflow stage to 'Plan' and plan_approved to false for new task pipeline execution."
-            );
-        }
+    } else if (matches!(raw_phase, None | Some("plan")) && !is_same_task)
+        || (phase == "plan"
+            && (!is_same_task
+                || (state.workflow_stage != "Build" && state.workflow_stage != "Test_Recheck")))
+    {
+        state.workflow_stage = "Plan".to_string();
+        state.plan_approved = false;
+        state.edit_authorized = false;
+        state.verification_passed = false;
+        state.verification_command = None;
+        state.expected_output_keyword = None;
+        state.clear_deferred_authorized_paths();
+        state.clear_fast_path();
+        let _ = state.save_to_dir(&proj_path);
+        tracing::info!(
+            "Reset workflow stage to 'Plan' and plan_approved to false for new task pipeline execution."
+        );
     } else if (phase == "build" || phase == "fix" || phase == "refactor") && state.plan_approved {
         state.workflow_stage = "Build".to_string();
-        state.edit_authorized = true;
     }
     state.user_intent_summary = Some(task.to_string());
     state.active_task = Some(task.to_string());
@@ -152,13 +170,13 @@ pub(crate) fn handle(
             "-> NEXT STEP: Skill discovery complete (no confirmation needed). Proceed directly to task planning or codebase inspection (`project_context`)."
         }
     } else if phase == "plan" {
-        "-> NEXT STEP: Call `guidance(operation=\"search\", task=\"...\")` FIRST to discover and propose required domain skills. When skills are proposed, ask user via `ask_question` before invoking `select_skills(skills=[...], user_confirmed=true)`. If no matching skills are found, proceed directly to task planning or codebase inspection (`project_context`) without asking."
+        "-> NEXT STEP: Call `guidance(operation=\"search\", query=\"...\")` FIRST to discover and propose required domain skills. When skills are proposed, ask user via `ask_question` before invoking `select_skills(skills=[...], user_confirmed=true)`. If no matching skills are found, proceed directly to task planning or codebase inspection (`project_context`) without asking."
     } else if phase == "build" || phase == "fix" || phase == "refactor" {
         "-> NEXT STEP: If codebase inspection is needed, use `project_context(operation=\"search\" | \"read\")`. When ready to write code, obtain authorization via `workflow_gate(action=\"authorize_edit\", ...)`."
     } else if phase == "test" {
         "-> NEXT STEP: Run verification commands with `guidance(operation=\"verify\", verification_command=\"...\", expected_output_keyword=\"...\")`."
     } else if phase == "review" {
-        "-> NEXT STEP: Inspect changes with `project_context(operation=\"read\")` and ensure compliance with 300 LOC limits."
+        "-> NEXT STEP: Inspect changes with `project_context(operation=\"read\")` and review domain cohesion, function complexity, and static linter output."
     } else {
         "-> NEXT STEP: If codebase inspection is needed, use `project_context(operation=\"search\" | \"read\")`. Otherwise, proceed with task planning."
     };
@@ -171,7 +189,7 @@ pub(crate) fn handle(
 
     state.record_call(800, 300);
     Ok(format!(
-        "# Task Pipeline Activated\n\nTask: {}\nActive Phase: {}\nProject: {} ({} files scanned{}){}{}\n\n## Architecture Guidance\n- Active Pattern: {}\n- Enforce: Create thin dispatcher main + sub-module files from line 1 (Upfront Architecture, 300 LOC Cap)\n\n{}{}\n\nPriority Gate: PASSED\nStatus: Ready for execution.\n\n{}",
+        "# Task Pipeline Activated\n\nTask: {}\nActive Phase: {}\nProject: {} ({} files scanned{}){}{}\n\n## Architecture Guidance\n- Active Pattern: {}\n- Enforce: Organize modules by domain/feature, keep functions focused (<= 60 LOC), and treat 300 LOC as a soft cohesion threshold\n\n{}{}\n\nPriority Gate: PASSED\nStatus: Ready for execution.\n\n{}",
         task,
         display_phase,
         proj_path.display(),

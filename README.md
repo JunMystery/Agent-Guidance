@@ -6,7 +6,7 @@
 ![Agent Guidance Hero Banner](docs/images/hero-banner.png)
 
 > **The Architectural Conductor for AI Coding Agents.**
-> Stop spaghetti code, cut context bloat by 80%, and supercharge agent reasoning. Agent Guidance supervises AI Coding Agents (Claude Code, Cursor, Windsurf, Gemini, Codex) by enforcing architectural patterns, preventing monolithic slop with a 300 LOC cap, and delivering sub-millisecond **Hierarchical GraphRAG** with neural skill retrieval.
+> Stop spaghetti code, cut context bloat by 80%, and supercharge agent reasoning. Agent Guidance supervises AI Coding Agents (Claude Code, Cursor, Windsurf, Gemini, Codex) by guiding domain cohesion and function complexity with a 300 LOC soft limit and built-in AST metrics, and delivering sub-millisecond **Hierarchical GraphRAG** with neural skill retrieval.
 
 ---
 
@@ -58,13 +58,13 @@ cargo build --release
 
 | Challenge | Without Agent Guidance (AI Slop) | With Agent Guidance (Disciplined Architect) |
 | :--- | :--- | :--- |
-| **Code Structure & Modularity** | AI writes sprawling 800–1,500 LOC monolithic files, mixing database queries directly into UI components. | **Enforced 300 LOC Hard Cap** & upfront blueprints (**Clean Architecture**, **Layered**, **Package-by-Feature**). Files decomposed from line 1. |
-| **Container & File Naming** | Creates messy junk-drawer files (`utils.ts`, `services.py`, `helpers.go`). | **40 Compound Plural Suffixes Blocked** (`COMPOUND_FILE_NAME_PROHIBITED`). Every file strictly observes Single Responsibility. |
-| **Context Window & Tokens** | Dumps full files and 500-line markdown skills into prompt, exhausting context windows. | **Surgical Section-Level RAG Slicing & AST Skeletonizer**: Delivers only top relevant sections (~350–800 tokens, **~80% token savings**) and collapses >300 LOC files into clean AST signatures. |
+| **Code Structure & Modularity** | AI writes sprawling 800–1,500 LOC monolithic files, mixing database queries directly into UI components. | **300 LOC Soft Cohesion Limit & AST Complexity Analyzer** (target functions 15-40 LOC, warn > 60 LOC, cyclomatic <= 10, cognitive <= 15, nesting <= 4) + domain/feature blueprints (**Clean Architecture**, **Layered**, **Package-by-Feature**). |
+| **Container & File Naming** | Creates messy junk-drawer files (`utils.ts`, `services.py`, `helpers.go`). | **Domain Cohesion Advisories** (`DOMAIN_COHESION_ADVISORY`) warn on cross-domain plural container bags (`*utils`, `*helpers`, `*services`) and guide feature/domain colocation. |
+| **Context Window & Tokens** | Dumps full files and 500-line markdown skills into prompt, exhausting context windows. | **Surgical Section-Level RAG Slicing & AST Skeletonizer**: Delivers only top relevant sections (~350–800 tokens, **~80% token savings**) and folds >300 LOC reads into clean AST signatures to protect token budgets. |
 | **Codebase Onboarding** | AI reads files sequentially, taking dozens of turns to guess relationships and dependencies. | **10-Second Hierarchical GraphRAG**: Instant macro community outline (Level 0/1/2) and 1-hop caller/callee bundling under 250 LOC. |
 | **Test & Fix Cycles** | Enters infinite repair loops, repeatedly making blind edits that break adjacent modules. | **Fix Circuit Breaker**: Trips automatically after 3 consecutive failed attempts, rolling back snapshots and requesting human intervention. |
 | **Deployment Topology** | Heavy local Python/ML dependencies consume 1GB+ RAM, slowing down developer laptops. | **Dual-Role Topology**: Lightweight Client runs in **~15MB RAM**, delegating heavy neural vector workloads to a dedicated Remote ML Worker. |
-| **MCP Tool Turn Overhead** | Agent consumes 10–15 sequential tool turns reading files and requesting edit permissions one-by-one. | **v2.0.0 Reduction Engine (60–80% Turn Savings)**: Clustered reads (`relative_paths`), Server-Side Auto-Auth from plan artifacts, unified read-and-authorize (`authorize=true`), and Session-Bounded AST Response Caching (30s TTL). |
+| **MCP Tool Turn Overhead** | Agent consumes 10–15 sequential tool turns reading files and requesting edit permissions one-by-one. | **v2.0.x Reduction Engine (60–80% Turn Savings)**: Clustered reads (`relative_paths`), Server-Side Auto-Auth from plan artifacts, unified read-and-authorize (`authorize=true`), and Session-Bounded AST Response Caching (30s TTL). |
 
 ---
 
@@ -116,7 +116,7 @@ Agent Guidance forces autonomous agents to follow an enterprise engineering life
          │
          ▼
 ┌─────────────────┐
-│   Plan Stage    │ ──► 300 LOC Upfront Decomposition Blueprint
+│   Plan Stage    │ ──► Domain Blueprint & Complexity Targets
 └────────┬────────┘
          │
          ▼
@@ -127,7 +127,7 @@ Agent Guidance forces autonomous agents to follow an enterprise engineering life
          ▼                          ┌───────────────┐
 ┌─────────────────┐                 │ Ask / Revise  │
 │   Build Stage   │                 └───────▲───────┘
-│  workflow_gate  │ ──► 300 LOC Ceiling     │
+│  workflow_gate  │ ──► AST Quality Advisory│
 └────────┬────────┘     Rollback Snapshot   │
          │                                  │
          ▼                                  │
@@ -142,10 +142,10 @@ Agent Guidance forces autonomous agents to follow an enterprise engineering life
          └────── Fail (> 3 attempts) ───────┘ (Circuit Breaker Trips)
 ```
 
-1. **Priority & Architecture Gate (`task_pipeline`)**: Detects project architecture, flags monolithic files ($\ge 200$ LOC), and generates modular blueprints.
+1. **Priority & Architecture Gate (`task_pipeline`)**: Detects project architecture, highlights `> 300 LOC` review candidates, and generates domain/feature blueprints.
 2. **Human-in-the-Loop Plan Approval**: Code modification remains strictly locked until user approves the plan.
-3. **Write-Through Authorization (`workflow_gate`)**: Creates pre-edit rollback snapshots, blocks compound plural containers, blocks single-file edits on $\ge 300$ LOC files (requiring paired batch decomposition with new sub-modules), and enforces the 300 LOC ceiling.
-4. **Post-Edit Verification Trap & Fix Circuit Breaker**: Blocks `guidance(operation="verify")` if any modified code file remains $\ge 300$ LOC, and trips the circuit breaker after 3 consecutive failed test attempts.
+3. **Write-Through Authorization (`workflow_gate`)**: Creates pre-edit rollback snapshots and attaches non-blocking AST complexity and `DOMAIN_COHESION_ADVISORY` warnings (plus cross-directory co-change hints), keeping cohesive domain files intact.
+4. **Post-Edit Quality, Test-Safety & Fix Circuit Breaker**: Emits non-blocking post-edit quality/complexity advisories and static linter reminders (`cargo clippy`, `eslint`, `ruff`, `golangci-lint`) on `guidance(operation="verify")` and `workflow_gate(action="advance")`, blocks test-safety violations (`TEST_SAFETY_VIOLATION` for mock namespace mismatches or prod-targeting commands) alongside unsandboxed real-state advisories, and trips the circuit breaker after 3 consecutive failed test attempts.
 
 ---
 
@@ -153,10 +153,10 @@ Agent Guidance forces autonomous agents to follow an enterprise engineering life
 
 | Tool Name | Role | Primary Developer Capabilities |
 | :--- | :--- | :--- |
-| **`task_pipeline`** | **Entrypoint Orchestrator** | CALL FIRST. Unlocks priority gate, detects architecture, auto-bundles Turn 1 skill discovery, injects memorized learnings, and synthesizes upfront modular blueprints (<300 LOC mandate). |
+| **`task_pipeline`** | **Entrypoint Orchestrator** | CALL FIRST. Unlocks priority gate, detects architecture, auto-bundles Turn 1 skill discovery, injects memorized learnings, and synthesizes domain/feature blueprints & 300 LOC soft-limit review candidates. |
 | **`project_context`** | **GraphRAG & Bounded Reader** | Hierarchical Leiden GraphRAG (`drift`, `global`, `local`), Subgraph Bundling (<250 LOC definition + 1-hop callers/callees), AST skeletonization, and 6-phase instant search cascade (<100ms). |
-| **`workflow_gate`** | **Stage & Edit Guard** | Enforces 300 LOC hard ceiling, blocks compound plural containers (`*utils`, `*services`), creates rollback snapshots, and manages fix circuit breakers. |
-| **`guidance`** | **Standards & Skill Catalog** | 2-stage Candle BERT vector search + Cross-Encoder reranking over embedded domain skills, pre-code architecture checklists, and empirical verification contracts. |
+| **`workflow_gate`** | **Stage & Edit Guard** | Runs Tree-Sitter AST complexity, soft 300 LOC cohesion, and test-safety advisories, warns on cross-domain container bags (`DOMAIN_COHESION_ADVISORY`), blocks `TEST_SAFETY_VIOLATION` on `advance`, creates rollback snapshots, and manages fix circuit breakers. |
+| **`guidance`** | **Standards & Skill Catalog** | 2-stage Candle BERT vector search + Cross-Encoder reranking over embedded domain skills, pre-code checklists, test-safety & production-data boundary verification (`TEST_SAFETY_VIOLATION`), and empirical verification contracts. |
 | **`select_skills`** | **Semantic Skill Loader** | Delivers full instructions for standard skills ($\le 250$ LOC) and vector-ranked section slices for large reference skills (~80% token savings). |
 | **`session_continuity`** | **Memory & Handoff** | Persists session memory, tracks pairwise co-changes into evolutionary git graphs, stores project learnings, and generates cross-agent handoff briefs. |
 

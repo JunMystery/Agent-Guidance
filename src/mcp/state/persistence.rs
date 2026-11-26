@@ -40,7 +40,21 @@ impl ServerState {
         }
     }
 
+    /// Validates a session/conversation identifier against path traversal and unsafe filename characters.
+    pub fn is_valid_session_id(id: &str) -> bool {
+        !id.is_empty()
+            && id.len() <= 128
+            && !id.starts_with('.')
+            && !id.contains("..")
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    }
+
     pub fn save_to_dir(&self, proj_path: &Path) -> Result<(), String> {
+        if !Self::is_valid_session_id(&self.session_id) {
+            return Err(format!("Invalid session_id '{}'", self.session_id));
+        }
         crate::mcp::impact::ensure_agent_context_gitignored(proj_path);
         let dir = proj_path.join(".agent-context").join("sessions");
         if let Err(e) = fs::create_dir_all(&dir) {
@@ -142,6 +156,9 @@ impl ServerState {
 
     /// Loads a specific session by its session_id.
     pub fn load_session_by_id(proj_path: &Path, target_id: &str) -> Result<Self, String> {
+        if !Self::is_valid_session_id(target_id) {
+            return Err(format!("Invalid session_id '{}'", target_id));
+        }
         let dir = proj_path.join(".agent-context").join("sessions");
         let file_path = dir.join(format!("{}.json", target_id));
         if !file_path.exists() {
@@ -189,6 +206,13 @@ impl ServerState {
         }
         if !self.workspace_roots.is_empty() && !self.is_path_inside_workspace(path) {
             return;
+        }
+        if let Some(ref prev) = self.project_path {
+            let can_prev = Path::new(prev).canonicalize().unwrap_or_else(|_| Path::new(prev).to_path_buf());
+            let can_new = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            if can_prev != can_new {
+                self.reset_for_context_switch();
+            }
         }
         self.project_path = Some(path_str.clone());
 

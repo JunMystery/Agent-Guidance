@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 const DEFAULT_CACHE_TTL_SECS: u64 = 30;
@@ -25,7 +26,7 @@ pub struct AstCacheEntry {
 
 #[derive(Clone, Debug)]
 pub struct AstResponseCache {
-    entries: HashMap<AstCacheKey, AstCacheEntry>,
+    entries: Arc<Mutex<HashMap<AstCacheKey, AstCacheEntry>>>,
     capacity: usize,
 }
 
@@ -38,13 +39,14 @@ impl Default for AstResponseCache {
 impl AstResponseCache {
     pub fn new(capacity: usize) -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: Arc::new(Mutex::new(HashMap::new())),
             capacity: capacity.max(10),
         }
     }
 
     pub fn get(&self, key: &AstCacheKey, full_path: &Path) -> Option<(String, u64, u64)> {
-        let entry = self.entries.get(key)?;
+        let guard = self.entries.lock().ok()?;
+        let entry = guard.get(key)?;
         let elapsed = entry.cached_at.elapsed();
         if elapsed > Duration::from_secs(DEFAULT_CACHE_TTL_SECS) {
             return None;
@@ -74,14 +76,18 @@ impl AstResponseCache {
             None => return,
         };
 
-        if self.entries.len() >= self.capacity {
-            self.entries.retain(|_, v| v.cached_at.elapsed() < Duration::from_secs(DEFAULT_CACHE_TTL_SECS));
-            if self.entries.len() >= self.capacity {
-                self.entries.clear();
+        let Ok(mut guard) = self.entries.lock() else {
+            return;
+        };
+
+        if guard.len() >= self.capacity {
+            guard.retain(|_, v| v.cached_at.elapsed() < Duration::from_secs(DEFAULT_CACHE_TTL_SECS));
+            if guard.len() >= self.capacity {
+                guard.clear();
             }
         }
 
-        self.entries.insert(
+        guard.insert(
             key,
             AstCacheEntry {
                 rendered_body,
@@ -97,21 +103,25 @@ impl AstResponseCache {
         if norm.is_empty() {
             return;
         }
-        self.entries.retain(|k, _| k.path != norm && !k.path.ends_with(&norm));
+        if let Ok(mut guard) = self.entries.lock() {
+            guard.retain(|k, _| k.path != norm && !k.path.ends_with(&norm));
+        }
     }
 
     #[allow(dead_code)]
     pub fn clear(&mut self) {
-        self.entries.clear();
+        if let Ok(mut guard) = self.entries.lock() {
+            guard.clear();
+        }
     }
 
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.lock().map(|g| g.len()).unwrap_or(0)
     }
 
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.lock().map(|g| g.is_empty()).unwrap_or(true)
     }
 }

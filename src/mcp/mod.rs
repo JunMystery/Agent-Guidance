@@ -37,3 +37,5 @@ mod tools_read_auth_tests;
 mod tools_cache_tests;
 #[cfg(test)]
 mod tools_path_boundary_tests;
+#[cfg(test)]
+mod tools_test_safety_tests;

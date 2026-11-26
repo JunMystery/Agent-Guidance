@@ -133,11 +133,10 @@ fn test_workflow_gate_zero_turn_advance_and_impact_guard() {
 }
 
 #[test]
-fn test_workflow_gate_hardblocks_300_loc_files() {
-    let temp_dir = std::env::temp_dir().join(format!("loc300_block_test_{}", std::process::id()));
+fn test_workflow_gate_soft_warns_300_loc_and_complex_functions() {
+    let temp_dir = std::env::temp_dir().join(format!("loc300_soft_test_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&temp_dir);
 
-    // Create a 350-line file
     let target_file = temp_dir.join("LargeService.kt");
     let lines: Vec<String> = (1..=350).map(|i| format!("// Line {}", i)).collect();
     std::fs::write(&target_file, lines.join("\n")).unwrap();
@@ -146,7 +145,6 @@ fn test_workflow_gate_hardblocks_300_loc_files() {
     state.plan_approved = true;
     state.set_stage("Build").unwrap();
 
-    // 1. General edit without refactoring justification is strictly BLOCKED
     let res = handle_tool_call(
         "workflow_gate",
         json!({
@@ -160,65 +158,52 @@ fn test_workflow_gate_hardblocks_300_loc_files() {
     );
     assert!(res.is_ok());
     let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
-    assert!(text.contains("BLOCKED (300_LOC_CAP_EXCEEDED)"));
-    assert!(text.contains("350 lines"));
-    assert!(text.contains("Clean_Architecture"));
-    assert!(text.contains("domain/"));
-    assert!(text.contains("usecase/"));
+    assert!(text.contains("Status: PASSED"));
+    assert!(!text.contains("BLOCKED"));
+    assert!(text.contains("Soft File LOC Notice"));
+    assert!(text.contains("unrelated responsibilities"));
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
-fn test_workflow_gate_allows_300_loc_refactoring() {
-    let temp_dir = std::env::temp_dir().join(format!("loc300_refactor_test_{}", std::process::id()));
+fn test_workflow_gate_and_verify_surface_ast_function_complexity() {
+    let temp_dir = std::env::temp_dir().join(format!("ast_complex_test_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&temp_dir);
 
-    // Create a 320-line file
-    let target_file = temp_dir.join("MainController.rs");
-    let lines: Vec<String> = (1..=320).map(|i| format!("// Line {}", i)).collect();
+    let target_file = temp_dir.join("ComplexHandler.rs");
+    let mut lines = vec![
+        "pub fn deeply_nested(a: i32, b: i32, c: i32, d: i32, e: i32) -> i32 {".to_string(),
+        "    if a > 0 { for i in 0..b { if i > c { while d > 0 { if e > 1 { return 1; } } } } }".to_string(),
+    ];
+    for i in 1..=62 {
+        lines.push(format!("    let step_{} = {};", i, i));
+    }
+    lines.push("    0\n}".to_string());
     std::fs::write(&target_file, lines.join("\n")).unwrap();
 
     let mut state = ServerState::new();
     state.plan_approved = true;
     state.set_stage("Build").unwrap();
 
-    // 1. Single-file edit even with refactoring justification is now strictly BLOCKED
-    let single_res = handle_tool_call(
+    let auth_res = handle_tool_call(
         "workflow_gate",
         json!({
             "action": "authorize_edit",
-            "relative_path": "MainController.rs",
-            "justification": "Refactor and decompose handler logic into sub-modules",
+            "relative_path": "ComplexHandler.rs",
+            "justification": "Inspect complexity advisory on existing handler",
             "architecture_pattern": "CLI_Pipeline",
             "project_path": temp_dir.to_str().unwrap()
         }),
         &mut state,
     );
-    assert!(single_res.is_ok());
-    let single_text = single_res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
-    assert!(single_text.contains("BLOCKED (300_LOC_CAP_EXCEEDED)"));
-    assert!(single_text.contains("Single-file edit authorization on files >= 300 LOC is strictly blocked"));
+    assert!(auth_res.is_ok());
+    let auth_text = auth_res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(auth_text.contains("Status: PASSED"));
+    assert!(auth_text.contains("Function `deeply_nested`"));
+    assert!(auth_text.contains("cyclomatic="));
+    assert!(auth_text.contains("nesting="));
 
-    // 2. Batch edit with a new sub-module file and refactoring justification is PASSED
-    let batch_res = handle_tool_call(
-        "workflow_gate",
-        json!({
-            "action": "authorize_edit",
-            "relative_paths": ["MainController.rs", "MainSubHandler.rs"],
-            "justification": "Refactor and decompose handler logic into sub-modules",
-            "architecture_pattern": "CLI_Pipeline",
-            "project_path": temp_dir.to_str().unwrap()
-        }),
-        &mut state,
-    );
-    assert!(batch_res.is_ok());
-    let text = batch_res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
-    assert!(text.contains("PASSED (2/2 authorized)"));
-    assert!(text.contains("`MainController.rs`"));
-    assert!(text.contains("`MainSubHandler.rs`"));
-
-    // 3. Post-edit verification trap blocks verification if MainController.rs still has 320 lines
     let verify_res = handle_tool_call(
         "guidance",
         json!({
@@ -231,8 +216,9 @@ fn test_workflow_gate_allows_300_loc_refactoring() {
     );
     assert!(verify_res.is_ok());
     let verify_text = verify_res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
-    assert!(verify_text.contains("BLOCKED (300_LOC_CAP_EXCEEDED)"));
-    assert!(verify_text.contains("MainController.rs"));
+    assert!(verify_text.contains("Empirical Verification Contract Registered"));
+    assert!(verify_text.contains("Post-Edit Quality & Complexity Advisory"));
+    assert!(verify_text.contains("deeply_nested"));
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
@@ -257,7 +243,7 @@ fn test_workflow_gate_blocks_missing_relative_path() {
     let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
     assert!(text.contains("BLOCKED (RELATIVE_PATH_REQUIRED)"));
     assert!(text.contains("RELATIVE_PATH_REQUIRED"));
-    assert!(text.contains("< 300 LOC Cap"));
+    assert!(text.contains("300 LOC"));
 }
 
 #[test]
@@ -285,8 +271,87 @@ fn test_workflow_gate_new_file_modular_architecture_mandate() {
     let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
     assert!(text.contains("Status: PASSED"));
     assert!(text.contains("[NEW FILE]"));
-    assert!(text.contains("< 300 LOC"));
+    assert!(text.contains("300 LOC soft limit"));
     assert!(text.contains("Layered_Architecture Architecture"));
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_pass_verification_sets_flag_and_enforces_exit_gate() {
+    let temp_dir = std::env::temp_dir().join(format!("ag_verify_gate_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let mut state = ServerState::new();
+    state.plan_approved = true;
+    state.set_stage("Build").unwrap();
+
+    handle_tool_call(
+        "guidance",
+        json!({
+            "operation": "verify",
+            "project_path": temp_dir.to_str().unwrap(),
+            "verification_command": "npm test",
+            "expected_output_keyword": "VERIFY_OK"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    assert!(!state.verification_passed);
+
+    // Lowercase "proposal" via set_stage must be blocked before pass_verification
+    let blocked = handle_tool_call(
+        "workflow_gate",
+        json!({
+            "action": "set_stage",
+            "target_stage": "proposal",
+            "project_path": temp_dir.to_str().unwrap()
+        }),
+        &mut state,
+    )
+    .unwrap();
+    assert!(blocked["content"][0]["text"].as_str().unwrap().contains("VERIFICATION_NOT_PASSED"));
+
+    // Mismatched output stays blocked
+    let bad_pass = handle_tool_call(
+        "workflow_gate",
+        json!({
+            "action": "pass_verification",
+            "verification_output": "FAIL: 1 failed",
+            "project_path": temp_dir.to_str().unwrap()
+        }),
+        &mut state,
+    )
+    .unwrap();
+    assert!(bad_pass["content"][0]["text"].as_str().unwrap().contains("VERIFICATION_KEYWORD_MISSING"));
+    assert!(!state.verification_passed);
+
+    // Matching output marks verification_passed=true and unlocks Proposal
+    let good_pass = handle_tool_call(
+        "workflow_gate",
+        json!({
+            "action": "pass_verification",
+            "verification_output": "All ok\nVERIFY_OK",
+            "project_path": temp_dir.to_str().unwrap()
+        }),
+        &mut state,
+    )
+    .unwrap();
+    assert!(good_pass["content"][0]["text"].as_str().unwrap().contains("Status: PASSED"));
+    assert!(state.verification_passed);
+
+    let adv = handle_tool_call(
+        "workflow_gate",
+        json!({
+            "action": "advance",
+            "target_stage": "proposal",
+            "project_path": temp_dir.to_str().unwrap()
+        }),
+        &mut state,
+    )
+    .unwrap();
+    assert_eq!(state.workflow_stage, "Proposal");
+    assert!(!adv["content"][0]["text"].as_str().unwrap().contains("BLOCKED"));
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }

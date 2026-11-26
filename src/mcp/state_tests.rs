@@ -286,3 +286,89 @@
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_approval_message_word_boundary_prevents_substring_bypass() {
+        let mut state = ServerState::new();
+        assert!(!state.process_user_message("Fix auth token refresh and hook startup"));
+        assert!(!state.plan_approved);
+
+        assert!(!state.process_user_message("Execute migration script in test sandbox"));
+        assert!(!state.plan_approved);
+
+        assert!(!state.process_user_message("No, cancel and reject this plan"));
+        assert!(!state.plan_approved);
+
+        assert!(state.process_user_message("OK, go ahead"));
+        assert!(state.plan_approved);
+    }
+
+    #[test]
+    fn test_with_client_name_generates_unique_session_ids() {
+        let s1 = ServerState::with_client_name(Some("antigravity".to_string()));
+        let s2 = ServerState::with_client_name(Some("antigravity".to_string()));
+        assert_ne!(s1.session_id, s2.session_id);
+    }
+
+    #[test]
+    fn test_update_project_path_resets_cross_workspace_state() {
+        let base = std::env::temp_dir().join(format!("ws_reset_test_{}", std::process::id()));
+        let repo_a = base.join("repo_a");
+        let repo_b = base.join("repo_b");
+        let _ = std::fs::create_dir_all(&repo_a);
+        let _ = std::fs::create_dir_all(&repo_b);
+
+        let mut state = ServerState::new();
+        state.update_project_path(&repo_a);
+        state.plan_approved = true;
+        state.edit_authorized = true;
+        state.workflow_stage = "Build".to_string();
+        state.record_modified_file("src/a.rs");
+        state.push_recent_task("Task in repo A");
+
+        state.update_project_path(&repo_b);
+        assert!(!state.plan_approved);
+        assert!(!state.edit_authorized);
+        assert_eq!(state.workflow_stage, "Context");
+        assert!(state.modified_files.is_empty());
+        assert!(state.recent_tasks.is_empty());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_priority_gate_rejects_expired_and_cross_project_sentinel() {
+        let path = ServerState::priority_gate_path();
+        let _ = fs::remove_file(&path);
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Expired sentinel should be rejected
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let expired = serde_json::json!({
+            "status": "PASSED",
+            "timestamp": now.saturating_sub(super::types::SESSION_STALE_TIMEOUT_SECS + 60),
+            "project_path": "d:/repo_a"
+        });
+        fs::write(&path, expired.to_string()).unwrap();
+        let mut s1 = ServerState::new();
+        assert!(s1.priority_gate_check().is_err());
+
+        // Fresh sentinel from different project should be rejected
+        let cross_proj = serde_json::json!({
+            "status": "PASSED",
+            "timestamp": now,
+            "project_path": "d:/repo_a"
+        });
+        fs::write(&path, cross_proj.to_string()).unwrap();
+        let mut s2 = ServerState::new();
+        s2.project_path = Some("d:/repo_b".to_string());
+        assert!(s2.priority_gate_check().is_err());
+
+        let _ = fs::remove_file(&path);
+    }

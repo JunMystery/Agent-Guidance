@@ -98,7 +98,7 @@ In order to avoid the above mentioned threat, creating a **random string** as a 
 - Implement a maximum length
 - Restrict characters to an allowed subset specifically, such as alphanumeric characters, hyphen, spaces, and periods
     - Consider telling the user what an acceptable filename is.
-    - Restrict use of leading periods (hidden files) and sequential periods (directory traversal).
+    - Restrict use of leading periods (hidden files) and sequential periods (directory traversal). Character rules alone don't prevent traversal, so also check the final path as described in the [Path Traversal Prevention Cheat Sheet](Path_Traversal_Prevention_Cheat_Sheet.md).
     - Restrict the use of a leading hyphen or spaces to make it safer to use shell scripts to process files.
     - If this is not possible, block-list dangerous characters that could endanger the framework and system that is storing and using the files.
 
@@ -110,7 +110,7 @@ As mentioned in the [Public File Retrieval](#public-file-retrieval) section, fil
 
 Based on the expected type, special file content validation can be applied:
 
-- For **images**, decode and re-encode to an allowed image format, explicitly [removing unnecessary metadata](https://imagemagick.org/command-line-options/#strip). Rewriting does not guarantee that all malicious content is removed, and the image processor itself handles untrusted input. Use an up-to-date library with [restricted formats, resource limits, and sandboxing](https://imagemagick.org/security-policy/#other).
+- For **images**, decode and re-encode to an allowed image format, explicitly [removing unnecessary metadata](https://imagemagick.org/command-line-options/#strip). Rewriting does not guarantee that all malicious content is removed, and the image processor itself handles untrusted input. Use an up-to-date library with [restricted formats, resource limits, and sandboxing](https://imagemagick.org/security-policy/#other). The [Server-Side Document and Media Rendering Cheat Sheet](Server_Side_Document_and_Media_Rendering_Cheat_Sheet.md) covers hardening ImageMagick and other converters.
 - For **Microsoft documents**, the usage of [Apache POI](https://poi.apache.org/) helps validating the uploaded documents.
 - **ZIP files** are not recommended since they can contain all types of files, and the attack vectors pertaining to them are numerous.
 

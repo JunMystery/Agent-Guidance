@@ -2,6 +2,55 @@
 
 All notable changes to Agent Guidance Rust MCP Server will be documented in this file.
 
+## [2.0.2] - 2026-11-26
+
+### 300 LOC Soft Cohesion Limit & AST Complexity Analyzer (`src/context/ast/metrics.rs`, `metrics_walker.rs`, `metrics_heuristic.rs`, `metrics_tests.rs`, `src/context/ast/mod.rs`)
+- **Soft File-Size Guideline (`SOFT_FILE_LOC_LIMIT = 300`)**:
+  - Replaced the hard `300_LOC_CAP_EXCEEDED` block with a non-blocking review notice asking whether the file mixes unrelated responsibilities, allowing cohesive domain files to remain intact.
+- **Built-In Polyglot Complexity Metrics (`FunctionMetrics`, `FileQualityReport`)**:
+  - Added Tier 1 Tree-Sitter AST traversal (Rust, TypeScript/JavaScript, Python, Go) and Tier 2 polyglot heuristics measuring function length (`MAX_FUNCTION_LOC = 60`, target 15-40 LOC), cyclomatic complexity (`MAX_CYCLOMATIC = 10`, flat `match`/`switch` arms counted as `+1`), cognitive complexity (`MAX_COGNITIVE = 15`, flat `else if` chains and `condition` nodes kept at parent nesting depth), and nesting depth (`MAX_NESTING_DEPTH = 4`).
+- **Exemptions (`gate_exemptions.rs`, `is_test_file_path`)**:
+  - Excluded dedicated test file paths, `#[cfg(test)] mod`, `#[test]` functions, docs, configs, data, assets, and `.mdc` rule files from function/file quality advisories.
+
+### Non-Blocking Runtime Gates, Domain Cohesion & Co-Change Hints (`src/mcp/tools/`)
+- **AST Quality Advisories (`gate_edit_single.rs`, `gate_edit.rs`, `gate_edit_batch.rs`, `helpers_auth.rs`, `gate_stage.rs`, `guidance_verify.rs`)**:
+  - Replaced hard 300 LOC edit, advance, and verify blocks with non-blocking `quality_advisory` and `Post-Edit Quality & Complexity Advisory (Soft Limit)` reports.
+  - Added cross-directory co-change domain grouping hints during edit authorization and per-language static linter reminders (`cargo clippy`, `eslint`, `ruff`, `golangci-lint`) in `guidance(operation="precode")` and post-edit advisories.
+- **Domain Cohesion Advisory (`gate_edit_modularity.rs`)**:
+  - Converted new-file plural container and multi-component checks into non-blocking `DOMAIN_COHESION_ADVISORY` warnings encouraging domain/feature grouping over cross-domain utility bags.
+- **Token Read Budget (`context_read.rs`, `context_read_cluster.rs`)**:
+  - Preserved the 300-line read cap and AST skeletonizer strictly as a token-budget guardrail while updating read footers to reference the 300 LOC soft cohesion limit.
+
+### Legacy Micro-Rule Auto-Migration & Compacted Agent Rules
+- **Auto-Upgrade (`src/config/schema.rs`, `micro_rules.rs`, `src/dashboard/rules_api.rs`, `src/catalog/`)**:
+  - Added `upgrade_legacy_rule` to automatically migrate legacy hard-300-LOC default micro-rules in existing user configs and dashboard responses to the soft-limit + AST complexity rule text.
+  - Updated `src/catalog/rules.rs`, `src/catalog/blueprint.rs`, `pipeline.rs`, and `pipeline_fast_path.rs` to focus on domain/feature cohesion and `> 300 LOC` review candidates.
+- **Compacted Instruction Files**:
+  - Streamlined `AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, `.cursor/rules/agent-guidance.mdc`, `.github/copilot-instructions.md`, `.agents/skills/agent-guidance/SKILL.md`, and `.claude/skills/agent-guidance/SKILL.md` to concise, zero-emoji protocol mandates.
+
+### Test-Safety & Production-Data Boundary Guard (`src/context/ast/test_safety.rs`, `test_safety_checks.rs`, `test_safety_tests.rs`, `src/mcp/tools/`)
+- **Static Test & Persistence Safety Analyzer**:
+  - **Hard Blockers (`TEST_SAFETY_VIOLATION`)**: Detects Python/JS/TS mock namespace mismatches (`TEST_MOCK_NAMESPACE_MISMATCH`, e.g., `from pkg.mod import ...` paired with bare `patch("mod.fn")`) and verification commands targeting production/destructive environments (`VERIFY_COMMAND_PROD_TARGET`, with explicit `test-safety-allow: <rule>` opt-out).
+  - **High-Severity Advisories**: Surfaces `TEST_UNSANDBOXED_REAL_STATE`, `TEST_UNSANDBOXED_APP_INIT`, `TEST_UNVERIFIED_SIDE_EFFECT_MOCK` (mocks without `assert_called*`/`toHaveBeenCalled*`), and `PERSISTENCE_OVERWRITE_SAFETY` (direct config/`.bak` writes lacking atomic temp+rename or empty guards).
+- **Gate, Rule & Checklist Enforcement**:
+  - `workflow_gate(authorize_edit)` surfaces test-safety advisories non-blockingly so broken tests can still be edited, while `guidance(operation="verify")` and `workflow_gate(action="advance")` hard-block on `TEST_SAFETY_VIOLATION` and remind agents to verify live-data immutability.
+  - Updated `src/catalog/rules.rs`, `guidance_precode.rs`, `src/config/schema.rs` (`default_rules` + `upgrade_legacy_rule`), all 7 repo rule/skill files, and global `GEMINI.md` with Test Isolation & Data-Boundary Safety rules.
+
+### MCP Workflow & Security Hardening
+- **Atomic Gate Transitions & Approval Safety (`gate.rs`, `gate_approval.rs`, `gate_stage.rs`, `gates.rs`, `pipeline.rs`)**:
+  - Validated exit gates, cross-workspace boundaries, and Fast-Path limits before mutating `plan_approved` or `workflow_stage`; `approve_plan()` now clears `is_fast_path`.
+  - Prevented Turn-1 fresh sessions from falsely auto-approving on short prompt words and removed blanket `edit_authorized = true` on non-fast-path transitions.
+  - Required explicit `verification_output`/`command_output` matching `expected_output_keyword` in `pass_verification` and invalidated `verification_passed` on subsequent `authorize_edit` or `rollback`.
+- **Cross-Workspace, Snapshot & Input Path Isolation (`context_read.rs`, `context_read_cluster.rs`, `gate_edit_single.rs`, `snapshots.rs`, `context_lsp.rs`, `guidance_docs.rs`)**:
+  - Defaulted `allow_cross_workspace` to `false` on reads and propagated it into single/batch `authorize_edit`.
+  - Hardened snapshot creation and rollback restoration against `..` traversal and external absolute paths; added LSP `validate_path` checks and markdown-only workspace fallback for `guidance(get)`.
+- **Session, Router & Persistence Hardening (`router/mod.rs`, `resources.rs`, `permissions.rs`, `helpers_auth.rs`, `continuity_sessions.rs`, `mcp/db/mod.rs`, `state/uri.rs`, `compressor.rs`)**:
+  - Enforced `ServerState::is_valid_session_id` (JSON-RPC `-32602` on traversal IDs), atomic `session_continuity(switch)` preserving the active session on failed lookups, and full Zero-Trust flag resets across `load`/`switch`.
+  - Required `workflow_stage == "Build"` and valid `architecture_pattern` in `helpers_auth`, blocked `set_stage` while `pending_skill_proposals` is non-empty, blocked `authorize=true` in `Proposal`, aligned `status` and `agent-guidance://system/edit-allowed` with `edit_authorized`, marked `architecture` and `pre_authorize` non-read-only, enabled SQLite WAL + `busy_timeout` on `usage.db`, decoded `%3A` in Windows `file://` URIs, and preserved fenced code blocks and HTML comments in `compress_markdown` while skipping compression on source reads.
+
+### Embedded Skill Catalog Sync (604 Skills)
+- Synced and structured ECC, OWASP, and humanizer skills under `skills/` (604 skills total) for build-time catalog embedding.
+
 ## [2.0.1] - 2026-11-17
 
 ### 🛡️ Generic Repository Container Boundary Enforcement (`src/dashboard/projects_container.rs`, `projects_path.rs`, `src/mcp/tools/helpers_path.rs`)

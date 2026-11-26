@@ -18,6 +18,28 @@ impl ServerState {
         }
     }
 
+    pub fn reset_for_context_switch(&mut self) {
+        self.workflow_stage = "Context".to_string();
+        self.plan_approved = false;
+        self.edit_authorized = false;
+        self.fix_attempts = 0;
+        self.verification_command = None;
+        self.expected_output_keyword = None;
+        self.verification_passed = false;
+        self.last_risk_level = None;
+        self.active_phase = None;
+        self.active_task = None;
+        self.user_intent_summary = None;
+        self.recent_tasks.clear();
+        self.modified_files.clear();
+        self.dirty_files.clear();
+        self.clear_deferred_authorized_paths();
+        self.clear_fast_path();
+        self.pending_skill_proposals.clear();
+        self.active_architecture_pattern = None;
+        self.ast_cache.clear();
+    }
+
     pub fn priority_gate_pass(&mut self) {
         self.priority_gate_passed = true;
         self.last_session_start = Some(
@@ -32,7 +54,8 @@ impl ServerState {
         }
         let sentinel = serde_json::json!({
             "status": "PASSED",
-            "timestamp": self.last_session_start
+            "timestamp": self.last_session_start,
+            "project_path": self.project_path
         });
         let _ = fs::write(&path, serde_json::to_string(&sentinel).unwrap_or_default());
     }
@@ -57,13 +80,36 @@ impl ServerState {
 
         let path = Self::priority_gate_path();
         if path.exists() {
-            self.priority_gate_passed = true;
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Ok(sentinel) = serde_json::from_str::<serde_json::Value>(&content) {
-                    self.last_session_start = sentinel.get("timestamp").and_then(|t| t.as_u64());
+                    if let Some(ts) = sentinel.get("timestamp").and_then(|t| t.as_u64()) {
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        let fresh = now.saturating_sub(ts) <= SESSION_STALE_TIMEOUT_SECS;
+                        let active_proj = self
+                            .project_path
+                            .as_deref()
+                            .or_else(|| self.workspace_roots.first().map(|s| s.as_str()));
+                        let sentinel_proj = sentinel.get("project_path").and_then(|p| p.as_str());
+                        let same_project = match (active_proj, sentinel_proj) {
+                            (Some(cur), Some(sent)) => {
+                                let can_cur = Path::new(cur).canonicalize().unwrap_or_else(|_| Path::new(cur).to_path_buf());
+                                let can_sent = Path::new(sent).canonicalize().unwrap_or_else(|_| Path::new(sent).to_path_buf());
+                                can_cur == can_sent
+                            }
+                            (_, None) => true,
+                            (None, Some(_)) => false,
+                        };
+                        if fresh && same_project {
+                            self.priority_gate_passed = true;
+                            self.last_session_start = Some(ts);
+                            return Ok(());
+                        }
+                    }
                 }
             }
-            return Ok(());
         }
 
         Err("PRIORITY_REQUIRED: Priority gate locked. Call task_pipeline first to unlock gated tools.".to_string())
@@ -88,6 +134,7 @@ impl ServerState {
 
     pub fn approve_plan(&mut self) {
         self.plan_approved = true;
+        self.clear_fast_path();
     }
 
     pub fn load_persisted_architecture(proj_path: &Path) -> Option<String> {
@@ -173,55 +220,5 @@ impl ServerState {
 
         self.workflow_stage = normalized.to_string();
         Ok(self.workflow_stage.clone())
-    }
-
-    pub fn process_user_message(&mut self, message: &str) -> bool {
-        let msg = message.trim().to_lowercase();
-        if msg.is_empty() {
-            return false;
-        }
-
-        let approval_keywords = [
-            "ok",
-            "proceed",
-            "approved",
-            "approve",
-            "the user has approved this document",
-            "proceeded with implementation plan",
-            "comments on artifact uri",
-            "proceed with implementation plan",
-            "approve plan",
-            "proceed with",
-            "start",
-            "go ahead",
-            "do it",
-            "làm đi",
-            "đồng ý",
-            "chấp nhận",
-            "yes",
-            "yep",
-            "lgtm",
-            "looks good",
-            "agree",
-            "let's do it",
-            "make the change",
-            "exec",
-            "triển khai",
-            "tiến hành",
-            "duyệt",
-            "thực thi",
-            "chốt",
-            "ok bro",
-            "được đấy",
-        ];
-
-        for kw in approval_keywords {
-            if msg.contains(kw) {
-                self.plan_approved = true;
-                return true;
-            }
-        }
-
-        false
     }
 }

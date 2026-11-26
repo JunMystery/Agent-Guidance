@@ -5,7 +5,7 @@ use crate::mcp::state::ServerState;
 use super::gate_edit::is_exempt_from_loc_limit;
 use super::gate_edit_modularity::validate_new_file_modularity;
 use super::gate_stage::count_file_lines;
-use super::helpers::validate_path;
+use super::helpers::validate_path_scoped;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SingleFileAuthOutcome {
@@ -18,28 +18,16 @@ pub(crate) struct SingleFileAuthOutcome {
     pub error_msg: Option<String>,
     pub warning: Option<String>,
     pub co_change_tip: Option<String>,
-}
-
-pub(crate) fn is_refactor_intent(justification: &str) -> bool {
-    let j_lower = justification.to_lowercase();
-    j_lower.contains("refactor")
-        || j_lower.contains("decompose")
-        || j_lower.contains("decomposition")
-        || j_lower.contains("extract")
-        || j_lower.contains("split")
-        || j_lower.contains("thin dispatcher")
-        || j_lower.contains("reduce loc")
-        || j_lower.contains("tách file")
-        || j_lower.contains("rút gọn")
+    pub quality_advisory: Option<String>,
 }
 
 pub(crate) fn evaluate_single_file_auth(
     proj_path: &Path,
     rel_path: &str,
     justification: &str,
-    arch_pattern: &str,
+    _arch_pattern: &str,
+    allow_cross: bool,
     state: &mut ServerState,
-    in_batch_with_new_file: bool,
 ) -> SingleFileAuthOutcome {
     let mut outcome = SingleFileAuthOutcome {
         rel_path: rel_path.to_string(),
@@ -51,19 +39,22 @@ pub(crate) fn evaluate_single_file_auth(
         error_msg: None,
         warning: None,
         co_change_tip: None,
+        quality_advisory: None,
     };
 
-    if let Err(err_msg) = validate_path(proj_path, rel_path) {
-        outcome.error_msg = Some(format!("PATH_TRAVERSAL_PROHIBITED: {}", err_msg));
-        return outcome;
-    }
+    let full_target_path = match validate_path_scoped(proj_path, rel_path, allow_cross) {
+        Ok(p) => p,
+        Err(err_msg) => {
+            outcome.error_msg = Some(format!("PATH_TRAVERSAL_PROHIBITED: {}", err_msg));
+            return outcome;
+        }
+    };
 
     let impact = assess_file_risk(proj_path, rel_path);
     outcome.risk_level = impact.risk_level.clone();
     outcome.dependent_count = impact.dependent_count;
     outcome.warning = impact.warning;
 
-    let full_target_path = proj_path.join(rel_path);
     outcome.is_new = !full_target_path.exists();
     outcome.target_loc = if full_target_path.exists() && full_target_path.is_file() {
         count_file_lines(&full_target_path)
@@ -72,41 +63,19 @@ pub(crate) fn evaluate_single_file_auth(
     };
 
     let is_exempt = is_exempt_from_loc_limit(rel_path);
-    let refactor_intent = is_refactor_intent(justification);
-
     if outcome.is_new && !is_exempt {
-        if let Err(err_msg) = validate_new_file_modularity(rel_path, justification) {
-            outcome.error_msg = Some(err_msg);
-            return outcome;
-        }
-    }
-
-    if outcome.target_loc >= 300 && !is_exempt {
-        if !in_batch_with_new_file {
-            let guidance = crate::catalog::blueprint::format_decomposition_guidance(
-                rel_path,
-                outcome.target_loc,
-                arch_pattern,
-            );
-            let msg = format!(
-                "{}\n\n**Single-File Prohibition**: Single-file edit authorization on files >= 300 LOC is strictly blocked to prevent monolithic degradation.\n\
-                You MUST authorize via BATCH (`relative_paths`) containing `{}` alongside at least one NEW sub-module file (< 150 LOC) to receive extracted logic:\n\
-                `workflow_gate(action=\"authorize_edit\", project_path=\"{}\", relative_paths=[\"{}\", \"<path_to_new_submodule>\"], justification=\"Refactor/Decompose: [explanation]\")`",
-                guidance, rel_path, proj_path.display(), rel_path
-            );
-            outcome.error_msg = Some(msg);
-            return outcome;
-        }
-
-        if !refactor_intent {
-            let msg = crate::catalog::blueprint::format_decomposition_guidance(
-                rel_path,
-                outcome.target_loc,
-                arch_pattern,
-            );
-            outcome.error_msg = Some(msg);
-            return outcome;
-        }
+        outcome.quality_advisory = validate_new_file_modularity(rel_path, justification);
+    } else if !outcome.is_new && !is_exempt {
+        let ast_adv = crate::context::ast::analyze_file_path(&full_target_path, rel_path)
+            .and_then(|report| report.format_advisory(rel_path));
+        let safety_adv = crate::context::ast::analyze_safety_path(&full_target_path, rel_path)
+            .and_then(|report| report.format_all(rel_path));
+        outcome.quality_advisory = match (ast_adv, safety_adv) {
+            (Some(a), Some(b)) => Some(format!("{}\n{}", a, b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
     }
 
     if impact.risk_level == RiskLevel::High
@@ -119,8 +88,9 @@ pub(crate) fn evaluate_single_file_auth(
         return outcome;
     }
 
-    // Success path: Record modified file, take snapshot, and check coupling
+    // Success path: Record modified file, invalidate prior verification, take snapshot, and check coupling
     state.record_modified_file(rel_path);
+    state.verification_passed = false;
     let _ = create_file_snapshot(proj_path, rel_path, &state.session_id);
     outcome.is_passed = true;
 
@@ -132,9 +102,15 @@ pub(crate) fn evaluate_single_file_auth(
             0.6,
         ) {
             if let Some(top) = coupled.first() {
+                let cross_dir = Path::new(&top.coupled_with).parent() != Path::new(&top.file).parent();
+                let domain_hint = if cross_dir {
+                    " Cross-directory co-change detected: consider colocating files serving the same domain/use case to narrow change blast radius."
+                } else {
+                    ""
+                };
                 outcome.co_change_tip = Some(format!(
-                    "Historically `{}` is modified together with `{}` ({} co-changes, {:.0}% confidence).",
-                    top.coupled_with, top.file, top.co_change_count, top.confidence * 100.0
+                    "Historically `{}` is modified together with `{}` ({} co-changes, {:.0}% confidence).{}",
+                    top.coupled_with, top.file, top.co_change_count, top.confidence * 100.0, domain_hint
                 ));
             }
         }

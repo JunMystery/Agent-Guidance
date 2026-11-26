@@ -4,23 +4,10 @@ description: Core system standards check and token-optimized codebase context re
 ---
 
 ## When to use me
-- Run this skill at the beginning of EVERY task, repository lookup, or codebase refactoring.
-- Run this skill to check project conventions and avoid raw file reading/search operations.
-- Re-run this skill at EACH phase transition (plan → implement → test → review).
+- At the start of every task, repository lookup, or phase transition (`plan -> build -> test -> review`).
 
-## How to use me
-You must invoke the 6 core `agent-guidance` MCP tools in this priority order:
-1. Call `task_pipeline(task="...", project_path="<path>", phase="plan")` at the start of any task or phase to initialize workspace context, tree metrics, and architecture patterns.
-2. Immediately call `guidance(operation="search", query="<user request>")` to discover and propose required domain skills. When skills are proposed, ask user via `ask_question(questions=[{question: "...", options: [...], is_multi_select: true}])` (format options as `"{name} - {short_desc}"` with short `{short_desc}` <= 38 chars) before loading them via `select_skills(skills=[...], user_confirmed=true)`. Do NOT inspect codebase files or start planning before completing skill discovery.
-3. Call `project_context(operation="read", relative_paths=[...])` (or `relative_path="..."`, `target_symbol="..."`) for reading files (capped at 300 lines). Clustered read allows inspecting multiple related files in 1 turn. NEVER use native IDE file reading (VS Code `readFile`, Cursor `read_file`, Antigravity `view_file`) or shell commands (`Get-Content`, `cat`, `type`, python file reads).
-4. Call `project_context(operation="search", query="...")` for searching codebase. NEVER use native IDE searching (VS Code `textSearch`/`findFiles`, Cursor `codebase_search`/`grep`, Antigravity `grep_search`/`find_by_name`) or shell search commands.
-5. Call `workflow_gate(action="authorize_edit", project_path="...", relative_paths=[...], risk_level="LOW", justification="...")` in a single batch call (or directly via `workflow_gate(action="approve_plan", user_confirmed=true, relative_paths=[...])`). Calling `authorize_edit` file-by-file across multiple turns is prohibited. Individual `relative_path="..."` is reserved for ad-hoc discovered files.
-6. Call `guidance(operation="search", query="...")` for coding standards or `guidance(operation="ui_ux", query="...")` for UI/UX design rules.
-7. Call `guidance(operation="verify", verification_command="...", expected_output_keyword="...")` for empirical post-code testing.
-
-## Critical Behavioral Rules
-- When unsure about anything, trigger the IDE/CLI `ask_question` tool! DO NOT GUESS.
-- Propose an implementation plan before making any big or complex changes.
-- DRY & Reusable Code Mandate: Always reuse existing shared/common utilities, formatters, and UI components instead of creating duplicate logic.
-- Every created or modified file MUST be < 300 LOC (aim for < 150 LOC per sub-module/component).
-- For each new work phase, re-call `task_pipeline` with that phase's goal and request user confirmation for stage transitions.
+## Execution Protocol (`agent-guidance` MCP)
+1. **Init & Skills**: Call `task_pipeline(task, project_path, phase="plan")` FIRST (bundles skill discovery; skip redundant `guidance(search)`). When skills are proposed, confirm via `ask_question(..., is_multi_select=true)` in user's language before `select_skills(..., user_confirmed=true)`.
+2. **Search & Bounded Read**: Use `project_context(operation="search" | "graph_rag" | "read" | "symbols")` exclusively (300-line read cap for token budget). Batch files via `relative_paths=[...]` and pass `authorize=true` when reading to edit. Never use native IDE or shell read/search tools.
+3. **Edit Gate & Code Quality**: Batch-authorize via `workflow_gate(action="authorize_edit", relative_paths=[...])` or `approve_plan(user_confirmed=true)`. Treat 300 LOC as a soft cohesion warning, not a hard limit—keep cohesive files intact, prioritize small functions (15-40 LOC; warn > 60 LOC, cyclomatic > 10, cognitive > 15, nesting > 4), and organize by domain/feature.
+4. **Verify & Test Isolation**: Reuse shared utilities (DRY); isolate tests from live user/prod data (temp dir / in-memory DB), prefer `patch.object`/DI with call assertions, guard production storage/backup writes, and verify via `guidance(operation="verify", ...)` plus static linters (`clippy`, `eslint`, `ruff`, `golangci-lint`).

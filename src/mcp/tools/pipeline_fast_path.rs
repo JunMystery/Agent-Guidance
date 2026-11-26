@@ -132,14 +132,14 @@ pub fn is_minor_task(task: &str, arguments: &Value) -> bool {
 /// Generates the concise, actionable fast-path activation response.
 pub fn build_fast_path_response(task: &str, proj_path: &Path) -> String {
     format!(
-        "# Task Pipeline Activated [⚡ Minor Task Fast-Path Exemption]\n\n\
+        "# Task Pipeline Activated [Minor Task Fast-Path Exemption]\n\n\
         - **Task**: {}\n\
         - **Workspace**: `{}`\n\
         - **Stage**: `Build` (plan_approved: true, is_fast_path: true)\n\n\
-        ## ⚡ Fast-Path Execution Protocol\n\
+        ## Fast-Path Execution Protocol\n\
         1. **Ceremonies Bypassed**: Skill proposal modal (`ask_question`) and formal `implementation_plan.md` bypassed.\n\
         2. **Immediate Action**: You may inspect and authorize target file edits directly in 1 turn via `project_context(read, authorize=true)` or `workflow_gate(action=\"authorize_edit\")`.\n\
-        3. **Strict Boundary Guard**: Maximum 1 code file (or 3 doc/config files) permitted under Fast-Path. Files >= 300 LOC require full paired decomposition.\n\
+        3. **Boundary Guard**: Maximum 1 code file (or 3 doc/config files) permitted under Fast-Path; 300 LOC is a soft cohesion review limit.\n\
         4. **Verification**: Automated tests/verification required for code edits; pure markdown/doc edits exempt from `guidance(verify)`.\n",
         task,
         proj_path.display()

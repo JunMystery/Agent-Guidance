@@ -39,6 +39,52 @@ pub(crate) fn extract_target_paths(arguments: &Value) -> Vec<String> {
     Vec::new()
 }
 
+pub(crate) fn enforce_edit_boundaries(
+    proj_path: &std::path::Path,
+    paths: &[String],
+    allow_cross: bool,
+    state: &mut ServerState,
+) -> Option<String> {
+    if let Some(blocked_msg) = super::helpers_path::check_cross_workspace_guard(
+        proj_path,
+        paths,
+        state,
+        allow_cross,
+    ) {
+        return Some(blocked_msg);
+    }
+
+    if state.is_fast_path {
+        for p in paths {
+            state.record_fast_path_file(p);
+        }
+        let mut code_count = 0;
+        let mut doc_count = 0;
+        for f in &state.fast_path_files {
+            if is_exempt_from_loc_limit(f) {
+                doc_count += 1;
+            } else {
+                code_count += 1;
+            }
+        }
+        if code_count > 1 || doc_count > 3 {
+            state.clear_fast_path();
+            state.workflow_stage = "Plan".to_string();
+            state.plan_approved = false;
+            state.edit_authorized = false;
+            return Some(format!(
+                "# Edit Approval Gate: BLOCKED (FAST_PATH_BOUNDARY_EXCEEDED)\n\n\
+                - Status: BLOCKED\n\
+                - Reason: Fast-Path Exemption is strictly limited to at most 1 code file or 3 doc/config files (attempted {} code file(s), {} doc file(s)).\n\n\
+                **Action Required**: Fast-Path has been revoked and workflow reset to `Plan`. You must formulate a complete `implementation_plan.md` (`RequestFeedback: true`) and obtain explicit user approval before proceeding with multi-file modifications.",
+                code_count, doc_count
+            ));
+        }
+    }
+
+    None
+}
+
 pub(crate) fn handle_authorize_edit(
     arguments: &Value,
     state: &mut ServerState,
@@ -61,7 +107,7 @@ pub(crate) fn handle_authorize_edit(
 
     if paths.is_empty() {
         return format!(
-            "# Edit Approval Gate Authorization\n\n- Status: BLOCKED (RELATIVE_PATH_REQUIRED)\n- Project Path: {}\n- Declared Architecture: '{}'\n\n**Error: RELATIVE_PATH_REQUIRED**: `workflow_gate(action=\"authorize_edit\")` requires target `relative_path` or `relative_paths` (for batch authorization).\n\nBlanket or global edit authorizations without a target file are prohibited to enforce:\n1. **< 300 LOC Cap & Decomposition**: Preventing monolithic files from being created or expanded.\n2. **Code Graph Diff Impact Guard**: Evaluating module blast radius and incoming dependencies.\n3. **Pre-Edit Rollback Snapshot**: Creating safe checkpoints for rollback protection.\n4. **Scanned Architecture Alignment**: Guiding modular sub-module placement from line 1.\n\n**Action**: Call `workflow_gate(action=\"authorize_edit\", project_path=\"...\", relative_paths=[\"path1\", \"path2\"])` to authorize all planned files in a single turn.",
+            "# Edit Approval Gate Authorization\n\n- Status: BLOCKED (RELATIVE_PATH_REQUIRED)\n- Project Path: {}\n- Declared Architecture: '{}'\n\n**Error: RELATIVE_PATH_REQUIRED**: `workflow_gate(action=\"authorize_edit\")` requires target `relative_path` or `relative_paths` (for batch authorization).\n\nBlanket or global edit authorizations without a target file are prohibited to enforce:\n1. **Soft Complexity & Domain Cohesion Checks**: Surfacing function complexity and 300 LOC soft review advisories.\n2. **Code Graph Diff Impact Guard**: Evaluating module blast radius and incoming dependencies.\n3. **Pre-Edit Rollback Snapshot**: Creating safe checkpoints for rollback protection.\n4. **Domain/Feature Alignment**: Encouraging cohesive file organization.\n\n**Action**: Call `workflow_gate(action=\"authorize_edit\", project_path=\"...\", relative_paths=[\"path1\", \"path2\"])` to authorize all planned files in a single turn.",
             proj_path.display(),
             if arch_pattern.is_empty() { "Auto" } else { &arch_pattern }
         );
@@ -72,13 +118,7 @@ pub(crate) fn handle_authorize_edit(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    // Cross-Workspace Boundary Guard: Protect against cross-workspace bleed unless explicit
-    if let Some(blocked_msg) = super::helpers_path::check_cross_workspace_guard(
-        &proj_path,
-        &paths,
-        state,
-        allow_cross,
-    ) {
+    if let Some(blocked_msg) = enforce_edit_boundaries(&proj_path, &paths, allow_cross, state) {
         return blocked_msg;
     }
 
@@ -87,35 +127,6 @@ pub(crate) fn handle_authorize_edit(
     // Zero-Turn Predictive Transition: if plan approved and in Plan stage, auto-advance to Build
     if state.plan_approved && state.workflow_stage == "Plan" {
         let _ = state.set_stage("Build");
-    }
-
-    // Fast-Path Strict Boundary Guard: Limit to max 1 code file or 3 doc/config files
-    if state.is_fast_path {
-        for p in &paths {
-            state.record_fast_path_file(p);
-        }
-        let mut code_count = 0;
-        let mut doc_count = 0;
-        for f in &state.fast_path_files {
-            if is_exempt_from_loc_limit(f) {
-                doc_count += 1;
-            } else {
-                code_count += 1;
-            }
-        }
-        if code_count > 1 || doc_count > 3 {
-            state.clear_fast_path();
-            state.workflow_stage = "Plan".to_string();
-            state.plan_approved = false;
-            state.edit_authorized = false;
-            return format!(
-                "# Edit Approval Gate: BLOCKED (FAST_PATH_BOUNDARY_EXCEEDED)\n\n\
-                - Status: BLOCKED\n\
-                - Reason: Fast-Path Exemption is strictly limited to at most 1 code file or 3 doc/config files (attempted {} code file(s), {} doc file(s)).\n\n\
-                **Action Required**: Fast-Path has been revoked and workflow reset to `Plan`. You must formulate a complete `implementation_plan.md` (`RequestFeedback: true`) and obtain explicit user approval before proceeding with multi-file modifications.",
-                code_count, doc_count
-            );
-        }
     }
 
     if !matches!(
@@ -148,7 +159,7 @@ pub(crate) fn handle_authorize_edit(
         || paths.len() > 1;
 
     if is_batch {
-        return handle_batch_authorize(&proj_path, &paths, justification, &arch_pattern, state);
+        return handle_batch_authorize(&proj_path, &paths, justification, &arch_pattern, allow_cross, state);
     }
 
     // Single file authorization flow
@@ -158,8 +169,8 @@ pub(crate) fn handle_authorize_edit(
         rel_path,
         justification,
         &arch_pattern,
+        allow_cross,
         state,
-        false,
     );
 
     if !outcome.is_passed {
@@ -177,8 +188,7 @@ pub(crate) fn handle_authorize_edit(
 
     let is_exempt = is_exempt_from_loc_limit(rel_path);
     let mut resp = format!(
-        "# Edit Approval Gate Authorization\n\n- Status: PASSED{}\n- Project Path: {}\n- Target File: `{}`{}\n- Assessed Risk Level: {:?} (Dependencies: {})\n- Architecture Pattern: {}\n- Justification: {}\n- Active Stage: {}\n- Plan Approved: true\n\nFile edits are fully authorized under {} Architecture.",
-        if outcome.target_loc >= 300 && !is_exempt { " (DECOMPOSITION / REFACTOR MODE)" } else { "" },
+        "# Edit Approval Gate Authorization\n\n- Status: PASSED\n- Project Path: {}\n- Target File: `{}`{}\n- Assessed Risk Level: {:?} (Dependencies: {})\n- Architecture Pattern: {}\n- Justification: {}\n- Active Stage: {}\n- Plan Approved: true\n\nFile edits are fully authorized under {} Architecture.",
         proj_path.display(),
         rel_path,
         if outcome.is_new { " [NEW FILE]" } else { "" },
@@ -191,12 +201,11 @@ pub(crate) fn handle_authorize_edit(
     );
 
     if outcome.is_new && !is_exempt {
-        resp.push_str("\n\n[LOC Limit: strictly < 300 LOC (target < 150 LOC)]");
-    } else if outcome.target_loc >= 300 && !is_exempt {
-        resp.push_str(&format!(
-            "\n\n**300 LOC Modular Refactoring Mandate**: {} lines (>= 300 LOC limit). Refactoring/decomposition only.",
-            outcome.target_loc
-        ));
+        resp.push_str("\n\n[Quality Target: 300 LOC soft limit | functions 15-40 LOC (warn >60), cyclomatic <=10, cognitive <=15, nesting <=4 | group by domain/feature]");
+    }
+
+    if let Some(adv) = outcome.quality_advisory {
+        resp.push_str(&format!("\n\n### Code Quality & Cohesion Advisory (Soft Limit)\n{}", adv));
     }
 
     if let Some(warn) = outcome.warning {

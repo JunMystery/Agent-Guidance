@@ -20,6 +20,22 @@ pub(crate) fn handle_save(state: &ServerState, proj_path: &Path) -> String {
     }
 }
 
+fn apply_zero_trust_reset(state: &mut ServerState, reset_session_scope: bool) {
+    state.plan_approved = false;
+    state.edit_authorized = false;
+    state.verification_passed = false;
+    state.verification_command = None;
+    state.expected_output_keyword = None;
+    state.fix_attempts = 0;
+    state.clear_fast_path();
+    state.clear_deferred_authorized_paths();
+    state.pending_skill_proposals.clear();
+    if reset_session_scope {
+        state.active_architecture_pattern = None;
+        state.priority_gate_passed = false;
+    }
+}
+
 pub(crate) fn handle_load(state: &mut ServerState, proj_path: &Path) -> String {
     let result = if !state.session_id.is_empty() {
         ServerState::load_session_by_id(proj_path, &state.session_id)
@@ -31,14 +47,7 @@ pub(crate) fn handle_load(state: &mut ServerState, proj_path: &Path) -> String {
     match result {
         Ok(loaded) => {
             *state = loaded;
-            // Zero-Trust Security: Reset permission flags when loading session
-            state.plan_approved = false;
-            state.edit_authorized = false;
-            state.active_architecture_pattern = None;
-            state.verification_passed = false;
-            state.verification_command = None;
-            state.expected_output_keyword = None;
-            state.fix_attempts = 0;
+            apply_zero_trust_reset(state, true);
             format!(
                 "# Session Continuity\n\nLoaded state for session '{}'. Permission flags reset (plan_approved=false). Total Calls: {}",
                 state.session_id, state.tool_calls
@@ -102,10 +111,7 @@ pub(crate) fn handle_switch(
     } else {
         match ServerState::load_session_by_id(proj_path, target_id.trim()) {
             Ok(mut loaded) => {
-                // Zero-Trust Security policy: Inherit context/stage/architecture/files, but reset edit permissions
-                loaded.plan_approved = false;
-                loaded.edit_authorized = false;
-                loaded.fix_attempts = 0;
+                apply_zero_trust_reset(&mut loaded, false);
                 let prev_id = state.session_id.clone();
                 *state = loaded;
 

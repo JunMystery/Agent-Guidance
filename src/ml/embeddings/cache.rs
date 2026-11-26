@@ -7,7 +7,10 @@ use crate::catalog::store::{SkillItem, SkillSource, get_embedded_skill, list_emb
 use crate::ml::inference_pool;
 use super::gpu::GpuSkillMatrix;
 use super::model::EmbeddingModel;
-use super::precomputed::{catalog_fingerprint, load_passage_cache, load_precomputed_cache, save_passage_cache};
+use super::precomputed::{
+    catalog_fingerprint, load_passage_cache, load_precomputed_cache, load_precomputed_map,
+    save_passage_cache,
+};
 
 #[derive(Clone)]
 pub struct PassageCache {
@@ -219,45 +222,77 @@ pub fn embed_skills_cache(candidates: &[SkillItem], model: &EmbeddingModel) -> A
         }
     }
 
-    if candidates.len() > 64 {
+    // Reuse precomputed vectors for known skills and embed only missing skills synchronously if <= 64
+    let precomputed_map = load_precomputed_map().map(|(_, m)| m);
+    let missing_indices: Vec<usize> = candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, cand)| {
+            let found = precomputed_map
+                .as_ref()
+                .and_then(|m| m.get(&cand.name.to_lowercase()))
+                .is_some();
+            if found { None } else { Some(idx) }
+        })
+        .collect();
+
+    if missing_indices.len() > 64 {
         info!(
             "[ML Pipeline] Deferring on-the-fly embedding of {} skills to background to avoid timeout; using fast semantic fallback.",
-            candidates.len()
+            missing_indices.len()
         );
         let cand_owned = candidates.to_vec();
         let _ = std::thread::Builder::new()
             .name("ag-passage-bg".to_string())
             .spawn(move || {
                 if let Ok(model_guard) = cached_model() {
-                    let vecs: Vec<Vec<f32>> = inference_pool().install(|| {
-                        cand_owned
-                            .par_iter()
-                            .filter_map(|cand| {
-                                let text = cand.to_search_passage();
-                                model_guard.embed_text(&text, Some("passage")).ok()
-                            })
-                            .collect()
-                    });
-                    save_passage_cache(&vecs, &cand_owned);
-                    store_passage_cache(vecs, &cand_owned);
+                    let pre_map = load_precomputed_map().map(|(_, m)| m);
+                    let mut vecs = Vec::with_capacity(cand_owned.len());
+                    for cand in &cand_owned {
+                        if let Some(v) = pre_map.as_ref().and_then(|m| m.get(&cand.name.to_lowercase())) {
+                            vecs.push(v.clone());
+                        } else if let Ok(v) = model_guard.embed_text(&cand.to_search_passage(), Some("passage")) {
+                            vecs.push(v);
+                        }
+                    }
+                    if vecs.len() == cand_owned.len() {
+                        save_passage_cache(&vecs, &cand_owned);
+                        store_passage_cache(vecs, &cand_owned);
+                    }
                 }
             });
         return Arc::new(Vec::new());
     }
 
     info!(
-        "[ML Pipeline] Computing passage embeddings for {} skills on-the-fly...",
+        "[ML Pipeline] Computing passage embeddings for {} missing skill(s) on-the-fly (of {} total)...",
+        missing_indices.len(),
         candidates.len()
     );
-    let vecs: Vec<Vec<f32>> = inference_pool().install(|| {
-        candidates
+    let missing_vecs: Vec<(usize, Option<Vec<f32>>)> = inference_pool().install(|| {
+        missing_indices
             .par_iter()
-            .filter_map(|cand| {
-                let text = cand.to_search_passage();
-                model.embed_text(&text, Some("passage")).ok()
+            .map(|&idx| {
+                let text = candidates[idx].to_search_passage();
+                (idx, model.embed_text(&text, Some("passage")).ok())
             })
             .collect()
     });
+    let mut vecs: Vec<Option<Vec<f32>>> = candidates
+        .iter()
+        .map(|cand| {
+            precomputed_map
+                .as_ref()
+                .and_then(|m| m.get(&cand.name.to_lowercase()).cloned())
+        })
+        .collect();
+    for (idx, maybe_vec) in missing_vecs {
+        vecs[idx] = maybe_vec;
+    }
+    let vecs: Vec<Vec<f32>> = vecs.into_iter().flatten().collect();
+    if vecs.len() != candidates.len() {
+        return Arc::new(Vec::new());
+    }
     store_passage_cache(vecs, candidates);
     cache
         .read()

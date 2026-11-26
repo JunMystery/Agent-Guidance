@@ -25,6 +25,12 @@ pub(crate) fn find_plan_artifact(
         }
     }
 
+    if let Some(sid) = session_id.filter(|s| !s.is_empty() && !s.starts_with("session_")) {
+        if let Some(brain_plan) = find_in_brain_dir(Some(sid)) {
+            return Some(brain_plan);
+        }
+    }
+
     for cand in &[proj_path.join("implementation_plan.md"), proj_path.join(".agent-context/implementation_plan.md")] {
         if cand.exists() {
             return Some(cand.clone());
@@ -36,8 +42,8 @@ pub(crate) fn find_plan_artifact(
 
 fn find_in_brain_dir(session_id: Option<&str>) -> Option<PathBuf> {
     let brain = match std::env::var("AGY_BRAIN_DIR") {
-        Ok(custom) => PathBuf::from(custom),
-        Err(_) => PathBuf::from(std::env::var("HOME").ok()?).join(".gemini/antigravity/brain"),
+        Ok(custom) if !custom.trim().is_empty() => PathBuf::from(custom),
+        _ => dirs::home_dir()?.join(".gemini").join("antigravity").join("brain"),
     };
     if !brain.is_dir() {
         return None;
@@ -97,15 +103,24 @@ fn extract_candidates_from_line(line: &str, proj_path: &Path, res: &mut Vec<Stri
 }
 
 fn sanitize_and_push(raw: &str, proj_path: &Path, results: &mut Vec<String>) {
-    let cleaned = raw.trim()
+    let mut cleaned = raw.trim()
         .trim_start_matches("file://")
         .trim_matches(|c| matches!(c, '\'' | '"' | '(' | ')' | '[' | ']'));
+    if let Some(pos) = cleaned.find(['#', '?']) {
+        cleaned = &cleaned[..pos];
+    }
+    if cleaned.starts_with('/') && cleaned.as_bytes().get(2) == Some(&b':') {
+        cleaned = cleaned.trim_start_matches('/');
+    }
     if cleaned.is_empty() || cleaned.contains(' ') || cleaned.contains('\n') || cleaned.contains('*') {
         return;
     }
     let norm = cleaned.replace('\\', "/");
-    let candidate = if let Some(s) = norm.strip_prefix(&proj_path.to_string_lossy().replace('\\', "/")) {
+    let proj_norm = proj_path.to_string_lossy().replace('\\', "/");
+    let candidate = if let Some(s) = norm.strip_prefix(&proj_norm) {
         s.trim_start_matches('/').to_string()
+    } else if norm.len() >= proj_norm.len() && norm[..proj_norm.len()].eq_ignore_ascii_case(&proj_norm) {
+        norm[proj_norm.len()..].trim_start_matches('/').to_string()
     } else {
         norm
     };

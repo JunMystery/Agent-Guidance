@@ -51,7 +51,7 @@ The web dashboard is organized into 4 primary views accessible via the responsiv
 - **Executive Metric Cards & KPI Header**:
   - Total Operations / Tool Invocations executed across sessions.
   - Context Shielded (Avoided tokens vs. baseline density multiplier, strictly clamped $\ge 0$).
-  - Graph Precision (% AST noise filtered against the 300 LOC target cap, strictly clamped $\ge 0\%$).
+  - Graph Precision (% AST noise filtered against the 300-line token read budget, strictly clamped $\ge 0\%$).
   - Average execution latency (ms).
   - Context reduction percentage (typically 30–50% savings).
   - Active IDE client sessions.

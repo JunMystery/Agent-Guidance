@@ -32,7 +32,23 @@ pub(crate) fn handle(
         .unwrap_or(".");
     let target_paths = super::gate_edit::extract_target_paths(&arguments);
     let proj_path = detect_project_path_with_targets(proj_path_arg, &target_paths, state);
-    state.update_project_path(&proj_path);
+    let is_stateful_op = matches!(
+        op,
+        "architecture"
+            | "reindex"
+            | "learn_alias"
+            | "enrich_graph"
+            | "enrich"
+            | "read_and_authorize"
+            | "read_auth"
+    ) || arguments
+        .get("authorize")
+        .or_else(|| arguments.get("pre_authorize"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if state.project_path.is_none() || is_stateful_op {
+        state.update_project_path(&proj_path);
+    }
     let query = arguments
         .get("query")
         .and_then(|q| q.as_str())

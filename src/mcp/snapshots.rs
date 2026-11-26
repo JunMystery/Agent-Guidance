@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 use tracing::info;
 
@@ -12,21 +12,52 @@ pub fn get_session_snapshot_dir(proj_path: &Path, session_id: &str) -> PathBuf {
     proj_path.join(".agent-context").join("snapshots").join(clean_session)
 }
 
+fn normalize_workspace_rel_path(proj_path: &Path, rel_path: &str) -> Option<PathBuf> {
+    let trimmed = rel_path.trim();
+    if trimmed.is_empty() || trimmed.contains("..") {
+        return None;
+    }
+    let candidate = Path::new(trimmed);
+    let stripped = if candidate.is_absolute() {
+        let can_proj = proj_path.canonicalize().ok();
+        if let Some(rel) = candidate
+            .strip_prefix(proj_path)
+            .ok()
+            .or_else(|| can_proj.as_ref().and_then(|cp| candidate.strip_prefix(cp).ok()))
+        {
+            rel.to_path_buf()
+        } else if let (Ok(can_cand), Some(ref cp)) = (candidate.canonicalize(), can_proj) {
+            can_cand.strip_prefix(cp).ok()?.to_path_buf()
+        } else {
+            return None;
+        }
+    } else {
+        candidate.to_path_buf()
+    };
+
+    if stripped.as_os_str().is_empty()
+        || !stripped.components().all(|c| matches!(c, Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(stripped)
+}
+
 /// Creates a local snapshot of a file prior to first edit in the active session.
 pub fn create_file_snapshot(proj_path: &Path, rel_path: &str, session_id: &str) -> Result<bool> {
-    if rel_path.is_empty() {
+    let Some(safe_rel) = normalize_workspace_rel_path(proj_path, rel_path) else {
         return Ok(false);
-    }
+    };
     // Lazy cleanup on edit creation
     let _ = cleanup_stale_snapshots(proj_path, 7, 20);
 
-    let source_path = proj_path.join(rel_path);
+    let source_path = proj_path.join(&safe_rel);
     if !source_path.exists() || !source_path.is_file() {
         return Ok(false);
     }
 
     let snapshot_dir = get_session_snapshot_dir(proj_path, session_id);
-    let target_snapshot = snapshot_dir.join(rel_path);
+    let target_snapshot = snapshot_dir.join(&safe_rel);
 
     if target_snapshot.exists() {
         return Ok(false);
@@ -37,7 +68,7 @@ pub fn create_file_snapshot(proj_path: &Path, rel_path: &str, session_id: &str) 
     }
 
     fs::copy(&source_path, &target_snapshot)?;
-    info!("Created local rollback snapshot for '{}' in session '{}'", rel_path, session_id);
+    info!("Created local rollback snapshot for '{}' in session '{}'", safe_rel.display(), session_id);
     Ok(true)
 }
 
@@ -48,17 +79,37 @@ pub fn restore_session_snapshots(proj_path: &Path, session_id: &str) -> Result<V
         return Ok(Vec::new());
     }
 
+    let canonical_proj = proj_path.canonicalize().ok();
     let mut restored = Vec::new();
-    fn visit_dirs(dir: &Path, base_dir: &Path, proj_path: &Path, restored: &mut Vec<String>) -> Result<()> {
+    fn visit_dirs(
+        dir: &Path,
+        base_dir: &Path,
+        proj_path: &Path,
+        canonical_proj: Option<&Path>,
+        restored: &mut Vec<String>,
+    ) -> Result<()> {
         if dir.is_dir() {
             for entry in fs::read_dir(dir)? {
                 let entry = entry?;
                 let path = entry.path();
                 if path.is_dir() {
-                    visit_dirs(&path, base_dir, proj_path, restored)?;
+                    visit_dirs(&path, base_dir, proj_path, canonical_proj, restored)?;
                 } else if path.is_file() {
                     if let Ok(rel) = path.strip_prefix(base_dir) {
+                        if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
+                            continue;
+                        }
                         let target_dest = proj_path.join(rel);
+                        if let Some(cp) = canonical_proj {
+                            if target_dest.exists()
+                                && !target_dest
+                                    .canonicalize()
+                                    .map(|c| c.starts_with(cp))
+                                    .unwrap_or(false)
+                            {
+                                continue;
+                            }
+                        }
                         if let Some(p) = target_dest.parent() {
                             let _ = fs::create_dir_all(p);
                         }
@@ -71,7 +122,7 @@ pub fn restore_session_snapshots(proj_path: &Path, session_id: &str) -> Result<V
         Ok(())
     }
 
-    visit_dirs(&snapshot_dir, &snapshot_dir, proj_path, &mut restored)?;
+    visit_dirs(&snapshot_dir, &snapshot_dir, proj_path, canonical_proj.as_deref(), &mut restored)?;
     info!("Restored {} files from session '{}' snapshot", restored.len(), session_id);
     Ok(restored)
 }
