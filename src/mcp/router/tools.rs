@@ -12,7 +12,7 @@ pub fn get_tools_list() -> Value {
                         "task": { "type": "string", "description": "The task description or goal" },
                         "project_path": { "type": "string", "description": "Absolute path of your active working repository (e.g. 'E:/Github/Device-Ping')" },
                         "conversation_id": { "type": "string", "description": "Optional native conversation or session UUID from host IDE/Agent to bind session state" },
-                        "phase": { "type": "string", "enum": ["plan", "build", "implement", "test", "debug", "review", "refactor"], "description": "Active development phase for per-phase context reset" },
+                        "phase": { "type": "string", "enum": ["plan", "build", "implement", "fix", "test", "debug", "review", "refactor"], "description": "Active development phase for per-phase context reset" },
                         "is_minor": { "type": "boolean", "description": "Explicitly request Minor Task Fast-Path Exemption (single-file typos/docs/trivial patches)" }
                     },
                     "required": ["task", "project_path", "phase"]
@@ -61,16 +61,15 @@ pub fn get_tools_list() -> Value {
                     "properties": {
                         "operation": {
                             "type": "string",
-                            "enum": ["search", "list", "get", "docs", "workflow", "ui_ux", "precode", "verify", "reindex"],
-                            "description": "Operation to perform: 'search' (hybrid candidate selection + LLM cross-encoder rerank), 'list' (list all skills), 'get' (fetch skill content), 'docs' (framework & library reference docs), 'workflow' (development workflow guides), 'ui_ux' (UI/UX design principles), 'precode' (pre-coding blueprint & contract check), 'verify' (anti-hallucination verification contract), or 'reindex' (regenerate local passage vector index)"
+                            "enum": ["search", "list", "get", "docs", "workflow", "ui_ux", "precode", "verify", "analytics", "reindex"],
+                            "description": "Operation to perform: 'search' (hybrid candidate selection + LLM cross-encoder rerank), 'list' (list all skills), 'get' (fetch skill content), 'docs' (framework & library reference docs), 'workflow' (development workflow guides), 'ui_ux' (UI/UX design principles), 'precode' (pre-coding blueprint & contract check), 'verify' (anti-hallucination verification contract), 'analytics' (project skill usage analytics), or 'reindex' (regenerate local passage vector index)"
                         },
                         "query": { "type": "string", "description": "Search query or keyword for 'search' operation" },
-                        "topic": { "type": "string", "description": "Topic or skill name for 'get', 'docs', or 'workflow' operation" },
-                        "framework": { "type": "string", "description": "Framework or technology for 'precode' operation" },
+                        "topic": { "type": "string", "description": "Topic, skill name, or optional filter for 'get', 'docs', 'workflow', or 'list' operation" },
+                        "limit": { "type": "integer", "description": "Maximum number of results to return for 'list' or 'search' operations" },
                         "files": { "type": "array", "items": { "type": "string" }, "description": "Files intended to modify for 'precode' check" },
                         "verification_command": { "type": "string", "description": "Command to run to verify the claim (e.g. 'cargo test', 'python -m pytest', 'git status')" },
                         "expected_output_keyword": { "type": "string", "description": "Keyword or substring that MUST appear in the command stdout/stderr to prove truth" },
-                        "max_results": { "type": "integer", "description": "Maximum number of results to return (default: 5)" },
                         "project_path": { "type": "string", "description": "Absolute path of active repository workspace" }
                     },
                     "required": ["operation"]
@@ -84,8 +83,8 @@ pub fn get_tools_list() -> Value {
                     "properties": {
                         "operation": {
                             "type": "string",
-                            "enum": ["search", "graph_rag", "read", "cluster_read", "symbols", "callers", "callees", "tree", "architecture", "learn_alias", "enrich_graph", "navigate", "subgraph_bundle", "data_flow"],
-                            "description": "Operation to perform: 'search' (lexical + symbol search), 'graph_rag' (knowledge-graph RAG), 'read' / 'cluster_read' (token-bounded file/multi-file reader), 'symbols' (outline of functions/classes), 'callers' (find references), 'callees' (find dependencies), 'tree' (directory structure), 'architecture' (detect codebase architecture pattern), 'learn_alias' (register natural language alias), 'enrich_graph' (inject semantic relations), 'navigate' (hierarchical code navigation), 'subgraph_bundle' (pack target function + 1-hop callers and callees into a single token-bounded multi-file context bundle), or 'data_flow' (bidirectional intra-procedural taint flow & dynamic dispatch trace)"
+                            "enum": ["search", "graph_rag", "read", "cluster_read", "read_and_authorize", "symbols", "references", "callers", "callees", "blast_radius", "definition", "type_definition", "tree", "architecture", "reindex", "reusable", "learn_alias", "enrich_graph", "semantic_query", "navigate", "subgraph_bundle", "data_flow"],
+                            "description": "Operation to perform: 'search' (lexical + symbol search), 'graph_rag' (knowledge-graph RAG), 'read' / 'cluster_read' / 'read_and_authorize' (token-bounded file/multi-file reader with optional edit authorization), 'symbols' (outline of functions/classes), 'references' (symbol reference sites), 'callers' (find incoming calls), 'callees' (find outgoing dependencies), 'blast_radius' (impact analysis), 'definition' / 'type_definition' (LSP-style symbol definitions), 'tree' (directory structure), 'architecture' (detect codebase architecture pattern), 'reindex' (full code graph rebuild), 'reusable' (detect duplicate/reusable helpers), 'learn_alias' (register natural language alias), 'enrich_graph' (inject semantic relations), 'semantic_query' (query semantic edges and domain summaries), 'navigate' (hierarchical code navigation), 'subgraph_bundle' (pack target function + 1-hop callers and callees into a single token-bounded multi-file context bundle), or 'data_flow' (bidirectional intra-procedural taint flow & dynamic dispatch trace)"
                         },
                         "mode": { "type": "string", "enum": ["global", "local", "drift", "basic"], "description": "Query mode for 'graph_rag' operation: 'global' (community summaries), 'local' (entity fan-out), 'drift' (dual-route), or 'basic'" },
                         "project_path": { "type": "string", "description": "Absolute path of your active working repository" },
@@ -95,17 +94,44 @@ pub fn get_tools_list() -> Value {
                         "relative_paths": { "type": "array", "items": { "type": "string" }, "description": "Batch clustered read: array of relative file paths to inspect together in a single turn" },
                         "target_symbol": { "type": "string", "description": "Specific function/class/struct/enum symbol to extract precisely" },
                         "loc_budget": { "type": "integer", "description": "Maximum LOC budget for subgraph_bundle (default: 250, clamped 50..500)" },
-                        "layer": { "type": "string", "enum": ["ui", "domain", "data", "infrastructure"], "description": "Architecture domain layer of the target file" },
                         "max_depth": { "type": "integer", "description": "Maximum directory depth to scan for 'tree' operation (default: 3, max: 5)" },
                         "start_line": { "type": "integer", "description": "Start line number for 'read' operation (1-indexed)" },
                         "end_line": { "type": "integer", "description": "End line number for 'read' operation (1-indexed)" },
                         "alias_term": { "type": "string", "description": "The natural language term to learn as alias (for learn_alias)" },
                         "resolved_symbol": { "type": "string", "description": "The symbol name resolved from grep (for learn_alias)" },
                         "resolved_line": { "type": "integer", "description": "Line number of resolved symbol (for learn_alias)" },
-                        "edges": { "type": "array", "items": { "type": "object" }, "description": "Array of semantic edges for enrich_graph: [{source, target, relation, description, confidence}]" },
-                        "summaries": { "type": "array", "items": { "type": "object" }, "description": "Array of domain summaries for enrich_graph: [{module_path, title, summary, tags}]" },
-                        "scope": { "type": "string", "enum": ["symbols", "files", "edges", "content"], "description": "Scope filter for navigate operation" },
-                        "view_mode": { "type": "string", "enum": ["full", "skeleton", "zoom", "slice"], "description": "View mode for 'read' operation: 'full' (capped 300 LOC), 'skeleton' (AST structural outline), 'zoom'/'slice' (focused implementation with folded siblings)" },
+                        "agent_id": { "type": "string", "description": "Identifier of the enriching agent (for enrich_graph, default: 'agent')" },
+                        "edges": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "source": { "type": "string" },
+                                    "target": { "type": "string" },
+                                    "relation": { "type": "string" },
+                                    "description": { "type": "string" },
+                                    "confidence": { "type": "number" }
+                                },
+                                "required": ["source", "target"]
+                            },
+                            "description": "Array of semantic edges for enrich_graph: [{source, target, relation, description, confidence}]"
+                        },
+                        "summaries": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "module_path": { "type": "string" },
+                                    "title": { "type": "string" },
+                                    "summary": { "type": "string" },
+                                    "tags": { "type": "string" }
+                                },
+                                "required": ["module_path", "title", "summary"]
+                            },
+                            "description": "Array of domain summaries for enrich_graph: [{module_path, title, summary, tags}]"
+                        },
+                        "scope": { "type": "string", "enum": ["all", "files", "symbols", "edges", "content", "linked"], "description": "Scope filter for navigate operation: 'all' (default), 'files', 'symbols', 'edges', 'content', or 'linked'" },
+                        "view_mode": { "type": "string", "enum": ["auto", "full", "skeleton", "zoom", "slice"], "description": "View mode for 'read' operation: 'auto' (default: skeleton >300 LOC, full <=300 LOC), 'full' (capped 300 LOC), 'skeleton' (AST structural outline), 'zoom'/'slice' (focused implementation with folded siblings)" },
                         "authorize": { "type": "boolean", "description": "Also request or queue edit authorization for the read target file(s)" },
                         "line_numbers": { "type": "boolean", "description": "Include L-prefixed line numbers in read output" },
                         "justification": { "type": "string", "description": "Reason and test mitigation plan when authorize=true" },
@@ -128,7 +154,7 @@ pub fn get_tools_list() -> Value {
                         "project_path": { "type": "string", "description": "Absolute path of working repository (for authorize_edit / advance / rollback)" },
                         "relative_path": { "type": "string", "description": "Specific file relative path to authorize edit on (triggers Code Graph Diff Impact Guard)" },
                         "relative_paths": { "type": "array", "items": { "type": "string" }, "description": "Batch authorization: array of relative file paths to authorize in a single turn (or pre-authorize at approve_plan)" },
-                        "risk_level": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"], "description": "Declared risk level (for authorize_edit / advance)" },
+                        "risk_level": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"], "description": "Declared risk level for 'advance' (also accepted as optional metadata on 'authorize_edit')" },
                         "justification": { "type": "string", "description": "Reason and test mitigation plan for edits (Mandatory for High Risk / Critical Hub files)" },
                         "architecture_pattern": { "type": "string", "enum": ["Auto", "Clean_Architecture", "Layered_Architecture", "Package_By_Feature", "Orchestrator", "CLI_Pipeline", "Flat_Library"], "description": "Declared architecture pattern (for authorize_edit / advance). Default is 'Auto' (auto-detects project architecture)." },
                         "allow_cross_workspace": { "type": "boolean", "description": "Explicitly permit modifying files outside the primary IDE workspace root" },
@@ -177,6 +203,10 @@ pub fn get_tools_list() -> Value {
                         "next_action": {
                             "type": "string",
                             "description": "Recommended next action for incoming agent taking over the project (for 'handoff' operation)"
+                        },
+                        "all": {
+                            "type": "boolean",
+                            "description": "Whether to clear all saved sessions and snapshots (for 'clear' operation, default: true)"
                         }
                     },
                     "required": ["operation"]

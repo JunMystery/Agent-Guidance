@@ -4,7 +4,24 @@ use std::path::{Path, PathBuf};
 
 use crate::mcp::templates::*;
 
-use super::clients::check_mcp_registration;
+use super::clients::check_mcp_registration_details;
+use super::setup_targets::get_client_targets;
+
+fn commands_match(configured: &str, expected: &Path) -> bool {
+    let cfg_path = Path::new(configured.trim());
+    match (cfg_path.canonicalize(), expected.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => {
+            let norm_a = configured.trim().replace('\\', "/");
+            let norm_b = expected.to_string_lossy().replace('\\', "/");
+            if cfg!(windows) {
+                norm_a.eq_ignore_ascii_case(&norm_b)
+            } else {
+                norm_a == norm_b
+            }
+        }
+    }
+}
 
 pub fn run_verify_setup(binary_path: &Path) -> Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home dir"))?;
@@ -21,141 +38,71 @@ pub fn run_verify_setup(binary_path: &Path) -> Result<()> {
         if exists { "found" } else { "NOT FOUND" }
     );
 
-    let code_user_mcp = if cfg!(target_os = "windows") {
-        let appdata = std::env::var("APPDATA").unwrap_or_default();
-        PathBuf::from(appdata).join("Code").join("User").join("mcp.json")
-    } else if cfg!(target_os = "macos") {
-        home.join("Library")
-            .join("Application Support")
-            .join("Code")
-            .join("User")
-            .join("mcp.json")
-    } else {
-        home.join(".config").join("Code").join("User").join("mcp.json")
-    };
-
-    let cursor_user_mcp = if cfg!(target_os = "windows") {
-        let appdata = std::env::var("APPDATA").unwrap_or_default();
-        PathBuf::from(appdata).join("Cursor").join("User").join("mcp.json")
-    } else if cfg!(target_os = "macos") {
-        home.join("Library")
-            .join("Application Support")
-            .join("Cursor")
-            .join("User")
-            .join("mcp.json")
-    } else {
-        home.join(".config").join("Cursor").join("User").join("mcp.json")
-    };
-
-    let cursor_target = if home.join(".cursor").join("mcp.json").exists() {
-        home.join(".cursor").join("mcp.json")
-    } else {
-        cursor_user_mcp
-    };
-
-    let claude_desktop_path = if cfg!(target_os = "windows") {
-        let appdata = std::env::var("APPDATA").unwrap_or_default();
-        PathBuf::from(appdata)
-            .join("Claude")
-            .join("claude_desktop_config.json")
-    } else if cfg!(target_os = "macos") {
-        home.join("Library")
-            .join("Application Support")
-            .join("Claude")
-            .join("claude_desktop_config.json")
-    } else {
-        home.join(".config")
-            .join("Claude")
-            .join("claude_desktop_config.json")
-    };
-
-    let claude_code_target = if home.join(".claude.json").exists() {
-        home.join(".claude.json")
-    } else {
-        home.join(".claude").join("mcp.json")
-    };
-
-    // 2. Check MCP configs
-    let mcp_targets: Vec<(&str, PathBuf, &str)> = vec![
-        (
-            "Claude Desktop",
-            claude_desktop_path,
-            "mcpServers",
-        ),
-        (
-            "Antigravity / Gemini Global",
-            home.join(".gemini").join("config").join("mcp_config.json"),
-            "mcpServers",
-        ),
-        (
-            "Antigravity Legacy",
-            home.join(".gemini")
-                .join("antigravity")
-                .join("mcp_config.json"),
-            "mcpServers",
-        ),
-        (
-            "Cursor",
-            cursor_target,
-            "mcpServers",
-        ),
-        (
-            "VS Code",
-            code_user_mcp,
-            "servers",
-        ),
-        (
-            "Continue.dev",
-            home.join(".continue")
-                .join("mcpServers")
-                .join("config.json"),
-            "mcpServers",
-        ),
-        (
-            "Devin/Cascade",
-            home.join(".config")
-                .join("Devin")
-                .join("Cascade")
-                .join("mcp_config.json"),
-            "mcpServers",
-        ),
-        (
-            "Claude Code",
-            claude_code_target,
-            "mcpServers",
-        ),
-        (
-            "Windsurf",
-            home.join(".codeium")
-                .join("windsurf")
-                .join("mcp_config.json"),
-            "mcpServers",
-        ),
-        (
-            "OpenCode",
-            home.join(".config").join("opencode").join("opencode.json"),
-            "mcp",
-        ),
-        (
-            "ChatGPT / Codex",
-            home.join(".codex").join("config.toml"),
-            "mcp_servers",
-        ),
-    ];
+    // 2. Check MCP configs driven directly from setup_targets + OpenCode + Codex
+    let (targets, extensions) = get_client_targets(&home);
+    let mut mcp_targets: Vec<(&str, PathBuf, &str)> = targets
+        .into_iter()
+        .map(|t| (t.name, t.path, t.key))
+        .collect();
+    mcp_targets.push((
+        "OpenCode",
+        home.join(".config").join("opencode").join("opencode.json"),
+        "mcp",
+    ));
+    mcp_targets.push((
+        "ChatGPT / Codex",
+        home.join(".codex").join("config.toml"),
+        "mcp_servers",
+    ));
 
     println!("\n--- MCP Client Registrations ---");
     for (name, path, key) in &mcp_targets {
-        let registered = check_mcp_registration(path, key);
-        println!(
-            "[{}] {}: {}",
-            if registered { "OK" } else { "  " },
-            name,
-            path.display()
-        );
+        let (registered, cmd_opt) = check_mcp_registration_details(path, key);
+        match (registered, cmd_opt) {
+            (true, Some(cmd)) if !commands_match(&cmd, binary_path) => {
+                println!(
+                    "[WARN] {}: {} (configured command '{}' != expected '{}')",
+                    name,
+                    path.display(),
+                    cmd,
+                    bin_str
+                );
+            }
+            (true, _) => {
+                println!("[OK] {}: {}", name, path.display());
+            }
+            (false, _) => {
+                println!("[  ] {}: {}", name, path.display());
+            }
+        }
     }
 
-    // 3. Check global rules
-    println!("\n--- Global Rules (AGENTS.md / CLAUDE.md) ---");
+    for ext in &extensions {
+        let has_host = ext
+            .path
+            .parent()
+            .and_then(|p| p.parent())
+            .is_some_and(|p| p.exists());
+        let (registered, cmd_opt) = check_mcp_registration_details(&ext.path, "mcpServers");
+        if has_host || registered {
+            match (registered, cmd_opt) {
+                (true, Some(cmd)) if !commands_match(&cmd, binary_path) => {
+                    println!(
+                        "[WARN] {}: {} (configured command '{}' != expected '{}')",
+                        ext.name,
+                        ext.path.display(),
+                        cmd,
+                        bin_str
+                    );
+                }
+                (true, _) => println!("[OK] {}: {}", ext.name, ext.path.display()),
+                (false, _) => println!("[  ] {}: {}", ext.name, ext.path.display()),
+            }
+        }
+    }
+
+    // 3. Check global rules (optional, not managed by --setup)
+    println!("\n--- Global Rules (AGENTS.md / CLAUDE.md) [OPT: optional, not managed by --setup] ---");
     let rule_targets: Vec<(&str, PathBuf)> = vec![
         (
             "Gemini/Antigravity",
@@ -178,7 +125,7 @@ pub fn run_verify_setup(binary_path: &Path) -> Result<()> {
             && fs::read_to_string(path)
                 .map(|c| c.contains(AGENT_GUIDANCE_TAG_START))
                 .unwrap_or(false);
-        println!("[{}] {}", if has_tag { "OK" } else { "  " }, name);
+        println!("[{}] {}", if has_tag { "OK" } else { "OPT" }, name);
     }
 
     println!("\n=== Verification Complete ===");

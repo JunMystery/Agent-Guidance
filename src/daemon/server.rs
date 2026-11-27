@@ -56,21 +56,35 @@ pub async fn daemon_main(port: u16, project_path: Option<String>) {
     crate::daemon::tray::spawn_system_tray(port);
     crate::dashboard::spawn_dashboard_background(port, project_path);
 
-    tokio::spawn(async move {
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let accept_handle = tokio::spawn(async move {
+        let mut backoff_ms = 50u64;
         loop {
-            match listener.accept().await {
-                Ok((stream, _)) => {
-                    client_connected();
-                    tokio::spawn(async move {
-                        let (reader, writer) = stream.into_split();
-                        handle_mcp_lines(reader, writer).await;
-                        client_disconnected();
-                        checkpoint_usage_db();
-                    });
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
                 }
-                Err(e) => {
-                    error!("Accept error: {}", e);
-                    break;
+                res = listener.accept() => {
+                    match res {
+                        Ok((stream, _)) => {
+                            backoff_ms = 50;
+                            client_connected();
+                            tokio::spawn(async move {
+                                let (reader, writer) = stream.into_split();
+                                handle_mcp_lines(reader, writer).await;
+                                client_disconnected();
+                                checkpoint_usage_db();
+                            });
+                        }
+                        Err(e) => {
+                            error!("Accept error (retrying in {}ms): {}", backoff_ms, e);
+                            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                            backoff_ms = (backoff_ms * 2).min(500);
+                            continue;
+                        }
+                    }
                 }
             }
         }
@@ -83,6 +97,9 @@ pub async fn daemon_main(port: u16, project_path: Option<String>) {
         .unwrap_or(DEFAULT_STARTUP_TIMEOUT_SECS);
 
     monitor_client_lifecycle(startup_timeout_secs).await;
+    let _ = shutdown_tx.send(true);
+    let _ = tokio::time::timeout(Duration::from_secs(2), accept_handle).await;
+    checkpoint_usage_db();
     drop(_lock);
     let _ = fs::remove_file(&path);
     crate::mcp::mcp_logger::log_mcp_direct(
@@ -92,7 +109,6 @@ pub async fn daemon_main(port: u16, project_path: Option<String>) {
         None,
         None,
     );
-    std::process::exit(0);
 }
 
 #[cfg(windows)]
@@ -127,34 +143,57 @@ pub async fn daemon_main(port: u16, project_path: Option<String>) {
 
     crate::dashboard::spawn_dashboard_background(port, project_path);
 
-    tokio::spawn(async move {
-        let mut is_first = true;
+    let mut current_server = match ServerOptions::new().first_pipe_instance(true).create(pipe_name) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            error!("Failed to create initial named pipe instance: {}", e);
+            return;
+        }
+    };
+
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let accept_handle = tokio::spawn(async move {
         let mut consecutive_errors = 0u32;
         loop {
-            let server_res = ServerOptions::new()
-                .first_pipe_instance(is_first)
-                .create(pipe_name);
+            let server = match current_server.take() {
+                Some(s) => s,
+                None => match ServerOptions::new().create(pipe_name) {
+                    Ok(s) => {
+                        consecutive_errors = 0;
+                        s
+                    }
+                    Err(e) => {
+                        consecutive_errors += 1;
+                        error!("Failed to create named pipe instance: {}", e);
+                        if consecutive_errors >= 10 {
+                            error!("Too many consecutive named pipe creation failures; stopping listener.");
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                },
+            };
 
-            let server = match server_res {
-                Ok(s) => {
-                    consecutive_errors = 0;
-                    s
-                }
-                Err(e) => {
-                    consecutive_errors += 1;
-                    error!("Failed to create named pipe instance: {}", e);
-                    is_first = false;
-                    if consecutive_errors >= 10 {
-                        error!("Too many consecutive named pipe creation failures; stopping listener.");
+            let connected = tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
                         break;
                     }
-                    tokio::time::sleep(Duration::from_millis(500)).await;
                     continue;
                 }
+                res = server.connect() => res,
             };
-            is_first = false;
 
-            match server.connect().await {
+            // Pre-create next pipe instance immediately so incoming clients see zero gap.
+            if current_server.is_none()
+                && let Ok(next_s) = ServerOptions::new().create(pipe_name)
+            {
+                current_server = Some(next_s);
+                consecutive_errors = 0;
+            }
+
+            match connected {
                 Ok(()) => {
                     client_connected();
                     tokio::spawn(async move {
@@ -179,6 +218,9 @@ pub async fn daemon_main(port: u16, project_path: Option<String>) {
         .unwrap_or(DEFAULT_STARTUP_TIMEOUT_SECS);
 
     monitor_client_lifecycle(startup_timeout_secs).await;
+    let _ = shutdown_tx.send(true);
+    let _ = tokio::time::timeout(Duration::from_secs(2), accept_handle).await;
+    checkpoint_usage_db();
     drop(_lock);
     crate::mcp::mcp_logger::log_mcp_direct(
         crate::mcp::mcp_logger::LogLevel::Info,
@@ -187,7 +229,6 @@ pub async fn daemon_main(port: u16, project_path: Option<String>) {
         None,
         None,
     );
-    std::process::exit(0);
 }
 
 fn checkpoint_usage_db() {

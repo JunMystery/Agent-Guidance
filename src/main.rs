@@ -136,21 +136,7 @@ async fn main() -> Result<()> {
     }
 
     if args.contains(&"--setup".to_string()) {
-        let exe_path = env::current_exe()?;
-        let target_bin = if cfg!(windows) {
-            dirs::data_local_dir()
-                .map(|d| {
-                    d.join("Programs")
-                        .join("agent-guidance")
-                        .join("bin")
-                        .join("agent-guidance.exe")
-                })
-                .unwrap_or(exe_path)
-        } else {
-            dirs::home_dir()
-                .map(|h| h.join(".local").join("bin").join("agent-guidance"))
-                .unwrap_or(exe_path)
-        };
+        let target_bin = mcp::config::upgrade::get_target_bin_path()?;
         run_setup(&target_bin)?;
         println!("Agent Guidance Rust MCP server configured in all IDE clients successfully!");
         return Ok(());
@@ -163,7 +149,20 @@ async fn main() -> Result<()> {
 
     if args.contains(&"--verify-setup".to_string()) {
         let exe_path = env::current_exe()?;
-        run_verify_setup(&exe_path)?;
+        let target_bin = mcp::config::upgrade::get_target_bin_path()?;
+        let verify_bin = if target_bin.exists() {
+            if exe_path != target_bin {
+                println!(
+                    "Note: Running binary '{}' differs from installed target '{}'; verifying installed target.",
+                    exe_path.display(),
+                    target_bin.display()
+                );
+            }
+            target_bin
+        } else {
+            exe_path
+        };
+        run_verify_setup(&verify_bin)?;
         return Ok(());
     }
 
@@ -246,7 +245,7 @@ async fn main() -> Result<()> {
     }
     if args.contains(&"--proxy".to_string()) || args.contains(&"--force-client".to_string()) {
         if !daemon::try_proxy_mode().await {
-            eprintln!("No daemon socket/pipe found. Is a daemon running?");
+            eprintln!("Daemon proxy mode failed or disconnected.");
             std::process::exit(1);
         }
         return Ok(());
@@ -254,11 +253,17 @@ async fn main() -> Result<()> {
 
     // Auto-Negotiation for Zero-Friction Singleton Shared Daemon Architecture:
     // 1. Transparently proxy to an existing shared daemon instance or auto-spawn a detached one
-    if daemon::try_proxy_mode().await {
-        return Ok(());
+    match daemon::proxy::run_proxy_session().await {
+        daemon::proxy::ProxyOutcome::CleanEof => return Ok(()),
+        daemon::proxy::ProxyOutcome::DisconnectedMidSession => {
+            tracing::error!("Background daemon disconnected mid-session and reconnect failed.");
+            std::process::exit(1);
+        }
+        daemon::proxy::ProxyOutcome::InitialConnectFailed => {
+            // 2. Fallback: if proxy mode could not connect or spawn daemon initially, run direct stdio server
+            tracing::warn!("Could not connect to shared daemon — falling back to direct stdio server.");
+            daemon::handle_mcp_lines(tokio::io::stdin(), tokio::io::stdout()).await;
+        }
     }
-    // 2. Fallback: if proxy mode could not connect or spawn daemon, run direct stdio server
-    tracing::warn!("Could not connect to shared daemon — falling back to direct stdio server.");
-    daemon::handle_mcp_lines(tokio::io::stdin(), tokio::io::stdout()).await;
     Ok(())
 }

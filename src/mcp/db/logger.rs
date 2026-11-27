@@ -92,8 +92,8 @@ fn update_daily_summary(
     llm_queries_delta: i64,
     tokens_orig_delta: i64,
     tokens_opt_delta: i64,
-) {
-    let _ = conn.execute(
+) -> Result<()> {
+    conn.execute(
         "INSERT INTO daily_summaries (day, tool_calls, skills_loaded, embed_queries, llm_queries, tokens_original, tokens_optimized)
          VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(day) DO UPDATE SET
@@ -112,7 +112,8 @@ fn update_daily_summary(
             tokens_orig_delta,
             tokens_opt_delta
         ],
-    );
+    )?;
+    Ok(())
 }
 
 pub fn log_tool_call(
@@ -141,50 +142,62 @@ pub fn log_tool_call(
     with_db(|conn| {
         maybe_prune(now);
 
-        conn.execute(
-            "INSERT INTO tool_calls (tool_name, operation, started_at, duration_ms, tokens_original, tokens_optimized, error_message, project_path, target)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params![
-                tool_name,
-                operation,
-                now,
-                duration_ms as i64,
+        conn.execute_batch("BEGIN IMMEDIATE;")?;
+        let tx_res: Result<()> = (|| {
+            conn.execute(
+                "INSERT INTO tool_calls (tool_name, operation, started_at, duration_ms, tokens_original, tokens_optimized, error_message, project_path, target)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    tool_name,
+                    operation,
+                    now,
+                    duration_ms as i64,
+                    orig_tokens as i64,
+                    opt_tokens as i64,
+                    error_message,
+                    effective_proj,
+                    target
+                ],
+            )?;
+
+            if let Some(normalized) = effective_proj {
+                let p = std::path::Path::new(normalized);
+                let proj_name = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("project");
+
+                conn.execute(
+                    "INSERT INTO tracked_projects (project_path, project_name, first_seen, last_active, total_calls, total_tokens_saved)
+                     VALUES (?1, ?2, ?3, ?3, 1, ?4)
+                     ON CONFLICT(project_path) DO UPDATE SET
+                         last_active = ?3,
+                         total_calls = total_calls + 1,
+                         total_tokens_saved = total_tokens_saved + ?4",
+                    params![normalized, proj_name, now, tokens_saved as i64],
+                )?;
+            }
+
+            update_daily_summary(
+                conn,
+                &day_str,
+                1,
+                0,
+                0,
+                0,
                 orig_tokens as i64,
                 opt_tokens as i64,
-                error_message,
-                effective_proj,
-                target
-            ],
-        )?;
+            )?;
+            Ok(())
+        })();
 
-        if let Some(normalized) = effective_proj {
-            let p = std::path::Path::new(normalized);
-            let proj_name = p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("project");
-
-            let _ = conn.execute(
-                "INSERT INTO tracked_projects (project_path, project_name, first_seen, last_active, total_calls, total_tokens_saved)
-                 VALUES (?1, ?2, ?3, ?3, 1, ?4)
-                 ON CONFLICT(project_path) DO UPDATE SET
-                     last_active = ?3,
-                     total_calls = total_calls + 1,
-                     total_tokens_saved = total_tokens_saved + ?4",
-                params![normalized, proj_name, now, tokens_saved as i64],
-            );
+        match tx_res {
+            Ok(()) => conn.execute_batch("COMMIT;")?,
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK;");
+                return Err(e);
+            }
         }
-
-        update_daily_summary(
-            conn,
-            &day_str,
-            1,
-            0,
-            0,
-            0,
-            orig_tokens as i64,
-            opt_tokens as i64,
-        );
         Ok(())
     });
 }
@@ -202,7 +215,7 @@ pub fn log_skill_load(skill_id: &str) {
             "INSERT INTO skill_loads (skill_id, loaded_at) VALUES (?, ?)",
             params![skill_id, now],
         )?;
-        update_daily_summary(conn, &day_str, 0, 1, 0, 0, 0, 0);
+        let _ = update_daily_summary(conn, &day_str, 0, 1, 0, 0, 0, 0);
         Ok(())
     });
 }
@@ -220,7 +233,7 @@ pub fn log_embed_query(query: &str) {
             "INSERT INTO embed_queries (query_text, queried_at) VALUES (?, ?)",
             params![query, now],
         )?;
-        update_daily_summary(conn, &day_str, 0, 0, 1, 0, 0, 0);
+        let _ = update_daily_summary(conn, &day_str, 0, 0, 1, 0, 0, 0);
         Ok(())
     });
 }

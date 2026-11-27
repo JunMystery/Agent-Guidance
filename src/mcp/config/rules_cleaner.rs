@@ -82,22 +82,24 @@ pub(crate) fn remove_skills_enforcer(home: &Path) -> Result<()> {
 }
 
 fn strip_tagged_section(content: &str, start_tag: &str, end_tag: &str) -> String {
-    if let Some(start_idx) = content.find(start_tag) {
+    let mut current = content.to_string();
+    while let Some(start_idx) = current.find(start_tag) {
         let search_from = start_idx + start_tag.len();
-        if let Some(rel_end_idx) = content[search_from..].find(end_tag) {
-            let end_idx = search_from + rel_end_idx;
-            let before = content[..start_idx].trim_end();
-            let after = content[end_idx + end_tag.len()..].trim_start();
-            let mut res = String::new();
-            res.push_str(before);
-            if !before.is_empty() && !after.is_empty() {
-                res.push('\n');
-            }
-            res.push_str(after);
-            return res;
+        let Some(rel_end_idx) = current[search_from..].find(end_tag) else {
+            break;
+        };
+        let end_idx = search_from + rel_end_idx;
+        let before = current[..start_idx].trim_end();
+        let after = current[end_idx + end_tag.len()..].trim_start();
+        let mut next = String::new();
+        next.push_str(before);
+        if !before.is_empty() && !after.is_empty() {
+            next.push('\n');
         }
+        next.push_str(after);
+        current = next;
     }
-    content.to_string()
+    current
 }
 
 #[cfg(test)]
@@ -119,6 +121,15 @@ mod tests {
         assert_eq!(
             strip_tagged_section(content, "<!-- START -->", "<!-- END -->"),
             "header\nfooter"
+        );
+    }
+
+    #[test]
+    fn test_strip_tagged_section_removes_all_blocks() {
+        let content = "a\n<!-- START -->\nfirst\n<!-- END -->\nb\n<!-- START -->\nsecond\n<!-- END -->\nc";
+        assert_eq!(
+            strip_tagged_section(content, "<!-- START -->", "<!-- END -->"),
+            "a\nb\nc"
         );
     }
 }

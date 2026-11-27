@@ -38,6 +38,19 @@ pub(crate) fn handle_list() -> Value {
         })
 }
 
+pub(crate) fn handle_templates_list() -> Value {
+    json!({
+        "resourceTemplates": [
+            {
+                "uriTemplate": "standards://skill/{name}",
+                "name": "Embedded Skill Document",
+                "description": "Read an embedded skill or standard document by skill name (e.g. 'standards://skill/agent-guidance').",
+                "mimeType": "text/markdown"
+            }
+        ]
+    })
+}
+
 pub(crate) fn handle_read(params: Option<Value>, state: &ServerState) -> Result<Value, (i32, String)> {
             let params = params.ok_or((-32602, "Missing params".to_string()))?;
             let uri = params.get("uri").and_then(|u| u.as_str()).unwrap_or("");
@@ -171,5 +184,15 @@ mod tests {
             let err = handle_read(Some(json!({ "uri": uri })), &state).unwrap_err();
             assert_eq!(err.0, -32602, "Expected -32602 for {}", uri);
         }
+    }
+
+    #[test]
+    fn test_resources_templates_list_exposes_skill_template() {
+        let val = handle_templates_list();
+        let templates = val["resourceTemplates"].as_array().expect("resourceTemplates array");
+        assert!(
+            templates.iter().any(|t| t["uriTemplate"] == "standards://skill/{name}"),
+            "Expected standards://skill/{{name}} template"
+        );
     }
 }

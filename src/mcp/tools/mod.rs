@@ -206,14 +206,15 @@ pub fn handle_tool_call(
 
             let orig_tokens = state.last_raw_baseline_tokens.take().unwrap_or(orig_tokens).max(opt_tokens);
             state.record_call(orig_tokens, opt_tokens);
-            let proj_path = state.workspace_roots.first().map(|s| s.as_str()).or_else(|| state.project_path.as_deref());
-            crate::mcp::db::log_tool_call(name, op.as_deref(), target.as_deref(), orig_tokens, opt_tokens, duration, None, proj_path);
+            let logged_proj = resolved_proj.to_string_lossy();
+            crate::mcp::db::log_tool_call(name, op.as_deref(), target.as_deref(), orig_tokens, opt_tokens, duration, None, Some(logged_proj.as_ref()));
             Ok(val)
         }
         Err(err) => {
             let duration = start_time.elapsed().as_millis() as u64;
-            let proj_path = state.workspace_roots.first().map(|s| s.as_str()).or_else(|| state.project_path.as_deref());
-            crate::mcp::db::log_tool_call(name, op.as_deref(), target.as_deref(), 0, 0, duration, Some(&err.1), proj_path);
+            let resolved_proj = detect_project_path(explicit_proj.as_deref().unwrap_or(""), state);
+            let logged_proj = resolved_proj.to_string_lossy();
+            crate::mcp::db::log_tool_call(name, op.as_deref(), target.as_deref(), 0, 0, duration, Some(&err.1), Some(logged_proj.as_ref()));
             Err(err)
         }
     };

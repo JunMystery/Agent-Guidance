@@ -57,22 +57,56 @@ pub(crate) fn parse_existing_json_object(config_path: &Path) -> Result<Value> {
     Ok(root)
 }
 
-pub(crate) fn check_mcp_registration(config_path: &Path, key: &str) -> bool {
+pub(crate) fn check_mcp_registration_details(config_path: &Path, key: &str) -> (bool, Option<String>) {
     if !config_path.exists() {
-        return false;
+        return (false, None);
     }
     let content = match fs::read_to_string(config_path) {
         Ok(c) => c,
-        Err(_) => return false,
+        Err(_) => return (false, None),
     };
-    match serde_json::from_str::<Value>(&content) {
-        Ok(root) => root
-            .get(key)
-            .and_then(|v| v.as_object())
-            .and_then(|m| m.get(SERVER_ID))
-            .is_some(),
-        Err(_) => content.contains(SERVER_ID),
+
+    let is_toml = config_path.extension().and_then(|e| e.to_str()) == Some("toml")
+        || key == "mcp_servers";
+    if is_toml {
+        return match content.parse::<toml::Value>() {
+            Ok(root) => {
+                let entry = root
+                    .get(key)
+                    .and_then(|v| v.as_table())
+                    .and_then(|m| m.get(SERVER_ID));
+                let cmd = entry
+                    .and_then(|e| e.get("command"))
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.to_string());
+                (entry.is_some(), cmd)
+            }
+            Err(_) => (false, None),
+        };
     }
+
+    match serde_json::from_str::<Value>(&content) {
+        Ok(root) => {
+            let entry = root
+                .get(key)
+                .and_then(|v| v.as_object())
+                .and_then(|m| m.get(SERVER_ID));
+            let cmd = entry.and_then(|e| {
+                e.get("command").and_then(|c| {
+                    c.as_str()
+                        .map(|s| s.to_string())
+                        .or_else(|| c.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()).map(|s| s.to_string()))
+                })
+            });
+            (entry.is_some(), cmd)
+        }
+        Err(_) => (false, None),
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn check_mcp_registration(config_path: &Path, key: &str) -> bool {
+    check_mcp_registration_details(config_path, key).0
 }
 
 // ---- Original MCP Config Functions (required by run_setup) ----
@@ -200,5 +234,28 @@ pub(crate) fn configure_codex_toml(codex_path: &Path, bin_path: &str) -> Result<
     atomic_write_text(codex_path, &toml_string)?;
     info!("Successfully configured ChatGPT/Codex");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_check_mcp_registration_parses_toml_strictly() {
+        let dir = std::env::temp_dir().join(format!("ag_clients_toml_{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let toml_path = dir.join("config.toml");
+
+        // Comment mentioning SERVER_ID must NOT register as present
+        fs::write(&toml_path, "# agent-guidance comment only\n[other_section]\nname = \"agent-guidance\"\n").unwrap();
+        assert!(!check_mcp_registration(&toml_path, "mcp_servers"));
+
+        configure_codex_toml(&toml_path, "/usr/local/bin/agent-guidance").unwrap();
+        let (reg, cmd) = check_mcp_registration_details(&toml_path, "mcp_servers");
+        assert!(reg);
+        assert_eq!(cmd.as_deref(), Some("/usr/local/bin/agent-guidance"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
 
