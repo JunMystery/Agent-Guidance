@@ -20,6 +20,7 @@ pub struct AstCacheKey {
 pub struct AstCacheEntry {
     pub rendered_body: String,
     pub disk_mtime: SystemTime,
+    pub file_size: u64,
     pub cached_at: Instant,
     pub baseline_tokens: u64,
 }
@@ -52,8 +53,10 @@ impl AstResponseCache {
             return None;
         }
 
-        let mtime = fs::metadata(full_path).ok()?.modified().ok()?;
-        if mtime != entry.disk_mtime {
+        let meta = fs::metadata(full_path).ok()?;
+        let mtime = meta.modified().ok()?;
+        let file_size = meta.len();
+        if mtime != entry.disk_mtime || file_size != entry.file_size {
             return None;
         }
 
@@ -71,10 +74,13 @@ impl AstResponseCache {
         full_path: &Path,
         tokens: u64,
     ) {
-        let mtime = match fs::metadata(full_path).ok().and_then(|m| m.modified().ok()) {
-            Some(t) => t,
-            None => return,
+        let Ok(meta) = fs::metadata(full_path) else {
+            return;
         };
+        let Ok(mtime) = meta.modified() else {
+            return;
+        };
+        let file_size = meta.len();
 
         let Ok(mut guard) = self.entries.lock() else {
             return;
@@ -83,7 +89,15 @@ impl AstResponseCache {
         if guard.len() >= self.capacity {
             guard.retain(|_, v| v.cached_at.elapsed() < Duration::from_secs(DEFAULT_CACHE_TTL_SECS));
             if guard.len() >= self.capacity {
-                guard.clear();
+                let to_evict = (guard.len() - self.capacity + 1).max(self.capacity / 4);
+                let mut by_age: Vec<(Instant, AstCacheKey)> = guard
+                    .iter()
+                    .map(|(k, v)| (v.cached_at, k.clone()))
+                    .collect();
+                by_age.sort_by_key(|(ts, _)| *ts);
+                for (_, old_key) in by_age.into_iter().take(to_evict) {
+                    guard.remove(&old_key);
+                }
             }
         }
 
@@ -92,6 +106,7 @@ impl AstResponseCache {
             AstCacheEntry {
                 rendered_body,
                 disk_mtime: mtime,
+                file_size,
                 cached_at: Instant::now(),
                 baseline_tokens: tokens,
             },
@@ -99,12 +114,16 @@ impl AstResponseCache {
     }
 
     pub fn invalidate_file(&mut self, rel_path: &str) {
-        let norm = rel_path.trim().replace('\\', "/");
+        let raw = rel_path.trim().replace('\\', "/");
+        let norm = raw.trim_start_matches("./").trim_start_matches('/');
         if norm.is_empty() {
             return;
         }
+        let boundary_suffix = format!("/{}", norm);
         if let Ok(mut guard) = self.entries.lock() {
-            guard.retain(|k, _| k.path != norm && !k.path.ends_with(&norm));
+            guard.retain(|k, _| {
+                k.path != raw && k.path != norm && !k.path.ends_with(&boundary_suffix)
+            });
         }
     }
 

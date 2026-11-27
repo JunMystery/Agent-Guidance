@@ -161,3 +161,153 @@ fn test_context_read_blocks_external_absolute_path_and_preserves_html_comments()
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn test_read_single_relative_paths_missing_symbol_and_out_of_range() {
+    let temp_dir = std::env::temp_dir().join(format!("read_h13_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let mut big_lines = Vec::new();
+    big_lines.push("use crate::other::ghost_sym;".to_string());
+    big_lines.push("// comment mentioning ghost_sym".to_string());
+    for i in 1..=350 {
+        big_lines.push(format!("pub fn fn_{}() {{ let _v = {}; }}", i, i));
+    }
+    std::fs::write(temp_dir.join("big.rs"), big_lines.join("\n")).unwrap();
+
+    let mut state = ServerState::new();
+    // 1. 1-element relative_paths routes through handle_read, preserving start_line/end_line and AstResponseCache
+    let r1 = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "read",
+            "project_path": temp_dir.to_str().unwrap(),
+            "relative_paths": ["big.rs"],
+            "start_line": 5,
+            "end_line": 10
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let t1 = r1["content"][0]["text"].as_str().unwrap();
+    assert!(t1.contains("# Bounded File Content: big.rs (Lines 5-10 of 352)"), "Got: {}", t1);
+
+    let r2 = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "read",
+            "project_path": temp_dir.to_str().unwrap(),
+            "relative_paths": ["big.rs"],
+            "start_line": 5,
+            "end_line": 10
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let t2 = r2["content"][0]["text"].as_str().unwrap();
+    assert!(t2.contains("AST Response Cache Hit"), "Expected cache hit on 1-element relative_paths, got: {}", t2);
+
+    // 2. Missing symbol must NOT print Target Symbol Extracted
+    let missing = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "read",
+            "project_path": temp_dir.to_str().unwrap(),
+            "relative_path": "big.rs",
+            "target_symbol": "ghost_sym"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let tm = missing["content"][0]["text"].as_str().unwrap();
+    assert!(!tm.contains("Target Symbol Extracted"), "Got: {}", tm);
+    assert!(tm.contains("Symbol Not Found: 'ghost_sym'"), "Got: {}", tm);
+
+    // 3. Out-of-range and >300 line range cap warnings
+    let oor = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "read",
+            "project_path": temp_dir.to_str().unwrap(),
+            "relative_path": "big.rs",
+            "start_line": 900,
+            "end_line": 950
+        }),
+        &mut state,
+    )
+    .unwrap();
+    assert!(oor["content"][0]["text"].as_str().unwrap().contains("out of range"));
+
+    let capped = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "read",
+            "project_path": temp_dir.to_str().unwrap(),
+            "relative_path": "big.rs",
+            "start_line": 1,
+            "end_line": 340
+        }),
+        &mut state,
+    )
+    .unwrap();
+    assert!(capped["content"][0]["text"].as_str().unwrap().contains("was_capped=true"));
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_ast_cache_boundary_invalidation_and_bounded_eviction() {
+    use crate::mcp::tools::context_cache::{AstCacheKey, AstResponseCache};
+
+    let temp_dir = std::env::temp_dir().join(format!("ast_cache_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("src")).unwrap();
+
+    let mod_rs = temp_dir.join("src/mod.rs");
+    let chmod_rs = temp_dir.join("src/chmod.rs");
+    std::fs::write(&mod_rs, "pub fn m() {}").unwrap();
+    std::fs::write(&chmod_rs, "pub fn c() {}").unwrap();
+
+    let mut cache = AstResponseCache::new(10);
+    let key_mod = AstCacheKey {
+        path: mod_rs.to_string_lossy().replace('\\', "/"),
+        target_symbol: None,
+        view_mode: "auto".to_string(),
+        start_line: None,
+        end_line: None,
+        show_line_numbers: false,
+    };
+    let key_chmod = AstCacheKey {
+        path: chmod_rs.to_string_lossy().replace('\\', "/"),
+        target_symbol: None,
+        view_mode: "auto".to_string(),
+        start_line: None,
+        end_line: None,
+        show_line_numbers: false,
+    };
+
+    cache.insert(key_mod.clone(), "mod body".to_string(), &mod_rs, 10);
+    cache.insert(key_chmod.clone(), "chmod body".to_string(), &chmod_rs, 10);
+
+    // Invalidating "mod.rs" must NOT evict "src/chmod.rs"
+    cache.invalidate_file("mod.rs");
+    assert!(cache.get(&key_mod, &mod_rs).is_none());
+    assert!(cache.get(&key_chmod, &chmod_rs).is_some());
+
+    // Bounded eviction should keep remaining entries rather than clearing all
+    for i in 0..12 {
+        let k = AstCacheKey {
+            path: chmod_rs.to_string_lossy().replace('\\', "/"),
+            target_symbol: Some(format!("sym_{}", i)),
+            view_mode: "auto".to_string(),
+            start_line: None,
+            end_line: None,
+            show_line_numbers: false,
+        };
+        cache.insert(k, format!("body {}", i), &chmod_rs, 5);
+    }
+    assert!(cache.len() >= 8 && cache.len() <= 10, "Expected bounded cache size, got {}", cache.len());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

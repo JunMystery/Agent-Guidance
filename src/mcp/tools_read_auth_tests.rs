@@ -247,3 +247,65 @@ fn test_read_authorize_blocked_outside_build_and_cross_workspace_single_auth_wor
 
     let _ = fs::remove_dir_all(&base);
 }
+
+#[test]
+fn test_linked_cross_project_read_authorize_requires_cross_workspace_and_targets_linked_root() {
+    let base = std::env::temp_dir().join(format!("ag_linked_c4_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let primary = base.join("primary");
+    let linked_pkg = base.join("linked_pkg");
+    fs::create_dir_all(primary.join("src")).unwrap();
+    fs::create_dir_all(primary.join(".agent-context")).unwrap();
+    fs::create_dir_all(linked_pkg.join("src")).unwrap();
+
+    fs::write(primary.join("src/shared.rs"), "pub fn primary_only() {}\n").unwrap();
+    fs::write(linked_pkg.join("src/shared.rs"), "pub fn linked_only() {}\n").unwrap();
+    fs::write(
+        primary.join(".agent-context/linked_projects.json"),
+        serde_json::to_string(&vec![serde_json::json!({
+            "name": "linked_pkg",
+            "path": linked_pkg.to_string_lossy()
+        })])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut state = ServerState::new();
+    state.workspace_roots = vec![primary.to_string_lossy().to_string()];
+    state.plan_approved = true;
+    state.workflow_stage = "Build".to_string();
+
+    // 1. Without allow_cross_workspace=true, linked authorize=true must be BLOCKED and never snapshot primary
+    let blocked = call_context(
+        json!({
+            "operation": "read",
+            "project_path": primary.to_string_lossy(),
+            "relative_path": "linked:linked_pkg/src/shared.rs",
+            "authorize": true
+        }),
+        &mut state,
+    );
+    assert!(blocked.contains("CROSS_WORKSPACE_WARNING"), "Expected cross-workspace block, got: {}", blocked);
+    assert!(!state.edit_authorized);
+    assert!(!primary.join(".agent-context/snapshots").exists());
+
+    // 2. With allow_cross_workspace=true, authorization and snapshot target linked_pkg root, never primary
+    let allowed = call_context(
+        json!({
+            "operation": "read",
+            "project_path": primary.to_string_lossy(),
+            "relative_path": "linked:linked_pkg/src/shared.rs",
+            "authorize": true,
+            "allow_cross_workspace": true,
+            "architecture_pattern": "Flat_Library",
+            "justification": "Authorized cross-project linked edit"
+        }),
+        &mut state,
+    );
+    assert!(allowed.contains("pub fn linked_only()"), "Got: {}", allowed);
+    assert!(allowed.contains("PASSED"), "Got: {}", allowed);
+    assert!(!primary.join(".agent-context/snapshots").exists(), "Primary must never be snapshotted for linked read");
+    assert!(linked_pkg.join(".agent-context/snapshots").exists(), "Linked project must receive the snapshot");
+
+    let _ = fs::remove_dir_all(&base);
+}

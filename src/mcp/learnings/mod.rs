@@ -101,6 +101,35 @@ pub(crate) fn parse_learnings_file(proj_path: &Path) -> Vec<LearningItem> {
     items
 }
 
+fn sanitize_learning_category(category: &str) -> String {
+    let cleaned: String = category
+        .replace(['\r', '\n', '[', ']'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_");
+    let stripped = if cleaned.len() >= 7
+        && cleaned.is_char_boundary(7)
+        && cleaned[..7].eq_ignore_ascii_case("PINNED:")
+    {
+        cleaned[7..].trim()
+    } else {
+        cleaned.as_str()
+    };
+    if stripped.is_empty() {
+        "general".to_string()
+    } else {
+        stripped.to_string()
+    }
+}
+
+fn sanitize_learning_content(learning: &str) -> String {
+    learning
+        .replace(['\r', '\n'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn write_learnings_file(proj_path: &Path, items: &[LearningItem]) -> Result<()> {
     let path = learnings_file_path(proj_path);
 
@@ -111,21 +140,31 @@ fn write_learnings_file(proj_path: &Path, items: &[LearningItem]) -> Result<()> 
 
     let mut current_cat = String::new();
     for item in &pinned_items {
-        let cat_key = format!("PINNED:{}", item.category);
+        let safe_cat = sanitize_learning_category(&item.category);
+        let safe_content = sanitize_learning_content(&item.content);
+        if safe_content.is_empty() {
+            continue;
+        }
+        let cat_key = format!("PINNED:{}", safe_cat);
         if cat_key != current_cat {
             current_cat = cat_key.clone();
             output.push_str(&format!("## [{}]\n", current_cat));
         }
-        output.push_str(&format!("- {}\n", item.content));
+        output.push_str(&format!("- {}\n", safe_content));
     }
 
     current_cat.clear();
     for item in &transient_items {
-        if item.category != current_cat {
-            current_cat = item.category.clone();
+        let safe_cat = sanitize_learning_category(&item.category);
+        let safe_content = sanitize_learning_content(&item.content);
+        if safe_content.is_empty() {
+            continue;
+        }
+        if safe_cat != current_cat {
+            current_cat = safe_cat.clone();
             output.push_str(&format!("## [{}]\n", current_cat));
         }
-        output.push_str(&format!("- {}\n", item.content));
+        output.push_str(&format!("- {}\n", safe_content));
     }
 
     write_file_atomically(&path, &output)?;
@@ -139,16 +178,12 @@ pub fn record_project_learning(
     category: &str,
     is_pinned: bool,
 ) -> Result<String> {
-    let clean_learning = learning.trim();
-    if clean_learning.is_empty() {
+    let sanitized_learning = sanitize_learning_content(learning);
+    if sanitized_learning.is_empty() {
         return Ok("Empty learning string ignored.".to_string());
     }
 
-    let clean_cat = if category.trim().is_empty() {
-        "general"
-    } else {
-        category.trim()
-    };
+    let clean_cat = sanitize_learning_category(category);
 
     let mut items = parse_learnings_file(proj_path);
     let mut duplicate_found = false;
@@ -156,7 +191,7 @@ pub fn record_project_learning(
     // 1. Exact match fast check
     if let Some(existing) = items
         .iter_mut()
-        .find(|i| i.category == clean_cat && i.content.eq_ignore_ascii_case(clean_learning))
+        .find(|i| i.category == clean_cat && i.content.eq_ignore_ascii_case(&sanitized_learning))
     {
         if is_pinned {
             existing.is_pinned = true;
@@ -167,19 +202,20 @@ pub fn record_project_learning(
     // 2. Semantic Deduplication check via ML vector similarity (Cosine >= 0.92 for recent category items)
     if !duplicate_found {
         if let Some(model) = crate::ml::embeddings::try_cached_model() {
-            if let Ok(new_vec) = model.embed_text(clean_learning, Some("passage")) {
+            let new_text = format!("{}: {}", clean_cat, sanitized_learning);
+            if let Ok(new_vec) = model.embed_text(&new_text, Some("passage")) {
                 for existing in items.iter_mut().rev().take(10) {
                     if existing.category == clean_cat {
                         let existing_text = format!("{}: {}", existing.category, existing.content);
                         if let Ok(ex_vec) = model.embed_text(&existing_text, Some("passage")) {
                             let sim = crate::ml::embeddings::cosine_similarity(&new_vec, &ex_vec);
                             if sim >= 0.92 {
-                                existing.content = clean_learning.to_string();
+                                existing.content = sanitized_learning.clone();
                                 if is_pinned {
                                     existing.is_pinned = true;
                                 }
                                 duplicate_found = true;
-                                info!("Semantic duplicate learning updated (Cosine: {:.2}): '{}'", sim, clean_learning);
+                                info!("Semantic duplicate learning updated (Cosine: {:.2}): '{}'", sim, sanitized_learning);
                                 break;
                             }
                         }
@@ -191,8 +227,8 @@ pub fn record_project_learning(
 
     if !duplicate_found {
         items.push(LearningItem {
-            category: clean_cat.to_string(),
-            content: clean_learning.to_string(),
+            category: clean_cat.clone(),
+            content: sanitized_learning.clone(),
             is_pinned,
         });
 
@@ -217,7 +253,7 @@ pub fn record_project_learning(
 
     Ok(format!(
         "# Project Learning Saved\n\n- Category: `{}`{}\n- Learning: {}\n- Total Memorized Items: {}\n- File: `.agent-context/learnings.md`",
-        clean_cat, pin_label, clean_learning, items.len()
+        clean_cat, pin_label, sanitized_learning, items.len()
     ))
 }
 

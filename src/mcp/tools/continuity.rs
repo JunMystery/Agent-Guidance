@@ -25,7 +25,7 @@ pub(crate) fn handle(
     let resp = match op {
         "save" => handle_save(state, &proj_path),
         "load" => handle_load(state, &proj_path),
-        "clear" => handle_clear(state, &proj_path),
+        "clear" => handle_clear(&arguments, state, &proj_path),
         "learn" => {
             let learning = arguments
                 .get("learning")
@@ -58,7 +58,7 @@ pub(crate) fn handle(
         "diff" | "changes" => learnings::generate_session_diff_summary(&proj_path, state),
         "list" | "sessions" => handle_list(state, &proj_path),
         "switch" => handle_switch(&arguments, state, &proj_path),
-        _ => format!("# Session Continuity: [{}]\n\nSession state active.", op),
+        _ => return Err((-32602, format!("Unknown session_continuity operation '{}'.", op))),
     };
     Ok(resp)
 }

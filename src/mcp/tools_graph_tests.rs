@@ -214,3 +214,74 @@ fn test_project_context_enrich_graph_and_query() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_blast_radius_disambiguates_relative_path_and_reports_missing_symbol() {
+    let temp_dir = std::env::temp_dir().join(format!("ag_blast_disambig_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("src")).unwrap();
+    std::fs::write(
+        temp_dir.join("src/a.rs"),
+        "pub fn process() {}\npub fn c1() { process(); }\npub fn c2() { process(); }\n",
+    )
+    .unwrap();
+    std::fs::write(temp_dir.join("src/b.rs"), "pub fn process() {}\n").unwrap();
+
+    let mut state = ServerState::new();
+    let _ = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "reindex",
+            "project_path": temp_dir.to_str().unwrap()
+        }),
+        &mut state,
+    )
+    .unwrap();
+    // 1. Missing symbol reports not-found instead of LOW (1.0/10)
+    let missing = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "blast_radius",
+            "project_path": temp_dir.to_str().unwrap(),
+            "query": "nonexistent_symbol_xyz"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let m_text = missing["content"][0]["text"].as_str().unwrap();
+    assert!(m_text.contains("not found"), "Got: {}", m_text);
+    assert!(!m_text.contains("LOW"), "Missing symbol must not report LOW: {}", m_text);
+
+    // 2. Disambiguate same-named symbol via relative_path
+    let br_a = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "blast_radius",
+            "project_path": temp_dir.to_str().unwrap(),
+            "query": "process",
+            "relative_path": "src/a.rs"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let a_text = br_a["content"][0]["text"].as_str().unwrap();
+    assert!(a_text.contains("c1") && a_text.contains("c2"), "Expected c1 and c2 callers for src/a.rs, got: {}", a_text);
+    assert!(a_text.contains("MEDIUM"), "Expected MEDIUM risk for src/a.rs, got: {}", a_text);
+
+    let br_b = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "blast_radius",
+            "project_path": temp_dir.to_str().unwrap(),
+            "query": "process",
+            "relative_path": "src/b.rs"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let b_text = br_b["content"][0]["text"].as_str().unwrap();
+    assert!(!b_text.contains("c1") && !b_text.contains("c2"), "src/b.rs must not include src/a.rs callers: {}", b_text);
+    assert!(b_text.contains("LOW"), "Got: {}", b_text);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

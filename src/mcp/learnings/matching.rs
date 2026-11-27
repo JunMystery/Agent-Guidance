@@ -8,57 +8,79 @@ use super::{LearningItem, parse_learnings_file, handoff_file_path, write_file_at
 
 /// Matches category keywords when ML embeddings are offline.
 pub fn match_category_keywords(items: &[LearningItem], task: &str, limit: usize) -> Vec<String> {
+    if limit == 0 || items.is_empty() {
+        return Vec::new();
+    }
     let task_lower = task.to_lowercase();
-    let mut keyword_matched: Vec<&LearningItem> = Vec::new();
+    let mut target_categories: Vec<&str> = Vec::new();
 
-    let target_categories: Vec<&str> = if task_lower.contains("test")
+    if task_lower.contains("test")
         || task_lower.contains("cargo test")
         || task_lower.contains("bench")
         || task_lower.contains("mock")
+        || task_lower.contains("build")
+        || task_lower.contains("lint")
+        || task_lower.contains("clippy")
     {
-        vec!["build_test"]
-    } else if task_lower.contains("arch")
+        target_categories.push("build_test");
+    }
+    if task_lower.contains("arch")
         || task_lower.contains("pattern")
         || task_lower.contains("layer")
         || task_lower.contains("module")
         || task_lower.contains("structure")
     {
-        vec!["arch"]
-    } else if task_lower.contains("error")
-        || task_lower.contains("bug")
-        || task_lower.contains("fail")
-        || task_lower.contains("panic")
-        || task_lower.contains("fix")
-    {
-        vec!["gotcha"]
-    } else if task_lower.contains("env")
+        target_categories.push("architecture");
+        target_categories.push("arch");
+    }
+    if task_lower.contains("env")
         || task_lower.contains("path")
         || task_lower.contains("config")
         || task_lower.contains("setup")
     {
-        vec!["env"]
-    } else if task_lower.contains("domain")
+        target_categories.push("environment");
+        target_categories.push("env");
+    }
+    if task_lower.contains("domain")
         || task_lower.contains("logic")
         || task_lower.contains("business")
+        || task_lower.contains("rule")
     {
-        vec!["domain"]
-    } else {
-        vec![]
-    };
+        target_categories.push("domain_rule");
+        target_categories.push("domain");
+    }
+    if task_lower.contains("error")
+        || task_lower.contains("bug")
+        || task_lower.contains("fail")
+        || task_lower.contains("panic")
+        || task_lower.contains("fix")
+        || task_lower.contains("gotcha")
+    {
+        target_categories.push("general");
+        target_categories.push("gotcha");
+    }
 
-    if !target_categories.is_empty() {
-        for item in items.iter().rev() {
-            if target_categories.contains(&item.category.as_str()) {
-                keyword_matched.push(item);
-                if keyword_matched.len() >= limit {
-                    break;
-                }
+    if target_categories.is_empty() {
+        return Vec::new();
+    }
+
+    let mut pinned_matched: Vec<&LearningItem> = Vec::new();
+    let mut transient_matched: Vec<&LearningItem> = Vec::new();
+    for item in items.iter().rev() {
+        let cat_lower = item.category.to_lowercase();
+        if target_categories.iter().any(|c| *c == cat_lower) {
+            if item.is_pinned {
+                pinned_matched.push(item);
+            } else {
+                transient_matched.push(item);
             }
         }
     }
 
-    keyword_matched
+    pinned_matched
         .into_iter()
+        .chain(transient_matched)
+        .take(limit)
         .map(|i| {
             let cat_label = if i.is_pinned {
                 format!("PINNED:{}", i.category)
@@ -79,7 +101,7 @@ pub fn get_semantic_relevant_learnings(
     threshold: f32,
 ) -> Vec<String> {
     let items = parse_learnings_file(proj_path);
-    if items.is_empty() || task.trim().is_empty() {
+    if items.is_empty() || task.trim().is_empty() || limit == 0 {
         return Vec::new();
     }
 
@@ -95,24 +117,28 @@ pub fn get_semantic_relevant_learnings(
             let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
 
             if let Ok(item_vecs) = model.embed_batch(&text_refs, Some("passage"), 32) {
-                let mut scored: Vec<(f32, &LearningItem)> = Vec::with_capacity(items.len());
+                let mut scored: Vec<(bool, f32, &LearningItem)> = Vec::with_capacity(items.len());
 
                 for (idx, (item, item_vec)) in items.iter().zip(item_vecs.iter()).enumerate() {
                     let sim = crate::ml::embeddings::cosine_similarity(&task_vec, item_vec);
                     let recency_weight = (idx + 1) as f32 / total as f32;
-                    let hybrid_score = 0.8 * sim + 0.2 * recency_weight;
+                    let pin_boost = if item.is_pinned { 0.15 } else { 0.0 };
+                    let hybrid_score = 0.8 * sim + 0.2 * recency_weight + pin_boost;
 
                     if sim >= threshold {
-                        scored.push((hybrid_score, item));
+                        scored.push((item.is_pinned, hybrid_score, item));
                     }
                 }
 
                 if !scored.is_empty() {
-                    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                    scored.sort_by(|a, b| {
+                        b.0.cmp(&a.0)
+                            .then_with(|| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
+                    });
                     return scored
                         .into_iter()
                         .take(limit)
-                        .map(|(_, i)| {
+                        .map(|(_, _, i)| {
                             let cat_label = if i.is_pinned {
                                 format!("PINNED:{}", i.category)
                             } else {
@@ -139,14 +165,25 @@ pub fn get_semantic_relevant_learnings(
     Vec::new()
 }
 
-/// Computes simple line delta (additions, deletions) between two texts.
+/// Computes multiset line delta (additions, deletions) between two texts, handling duplicate lines.
 pub fn compute_line_delta(original: &str, current: &str) -> (usize, usize) {
-    use std::collections::HashSet;
-    let orig_set: HashSet<&str> = original.lines().collect();
-    let curr_set: HashSet<&str> = current.lines().collect();
+    use std::collections::HashMap;
+    let mut orig_counts: HashMap<&str, usize> = HashMap::new();
+    for line in original.lines() {
+        *orig_counts.entry(line).or_insert(0) += 1;
+    }
 
-    let additions = current.lines().filter(|l| !orig_set.contains(l)).count();
-    let deletions = original.lines().filter(|l| !curr_set.contains(l)).count();
+    let mut additions = 0usize;
+    for line in current.lines() {
+        if let Some(cnt) = orig_counts.get_mut(line) {
+            if *cnt > 0 {
+                *cnt -= 1;
+                continue;
+            }
+        }
+        additions += 1;
+    }
+    let deletions: usize = orig_counts.values().sum();
     (additions, deletions)
 }
 
@@ -205,8 +242,10 @@ pub fn generate_session_diff_summary(proj_path: &Path, state: &ServerState) -> S
         let snap_file = resolve_snapshot_file(proj_path, &snapshots_dir, file);
         let snap_str = if snap_file.is_some() { "Yes" } else { "No" };
 
-        let curr_file_path = proj_path.join(file);
-        let curr_content = fs::read_to_string(&curr_file_path).unwrap_or_default();
+        let curr_content = match crate::mcp::tools::validate_path(proj_path, file) {
+            Ok(curr_file_path) => fs::read_to_string(&curr_file_path).unwrap_or_default(),
+            Err(_) => String::new(),
+        };
 
         let delta_str = if let Some(ref snap_path) = snap_file {
             let orig_content = fs::read_to_string(snap_path).unwrap_or_default();

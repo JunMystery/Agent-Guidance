@@ -25,7 +25,13 @@ pub struct RiskAssessment {
 /// - Medium Risk: 3 to 8 dependencies
 /// - High Risk (Critical Hub): > 8 dependencies
 pub fn assess_file_risk(proj_path: &Path, rel_path: &str) -> RiskAssessment {
-    if rel_path.is_empty() {
+    let clean_rel = rel_path
+        .trim()
+        .trim_start_matches("./")
+        .trim_start_matches(".\\")
+        .trim_start_matches(['/', '\\'])
+        .replace('\\', "/");
+    if clean_rel.is_empty() {
         return RiskAssessment {
             risk_level: RiskLevel::Low,
             dependent_count: 0,
@@ -34,9 +40,16 @@ pub fn assess_file_risk(proj_path: &Path, rel_path: &str) -> RiskAssessment {
         };
     }
 
-    if let Ok(db) = CodeGraphDb::open_for_project(proj_path) {
-        let count = db.count_incoming_dependencies(rel_path).unwrap_or(0);
-        let files = db.get_incoming_dependent_files(rel_path, 10).unwrap_or_default();
+    let db_path = proj_path.join(".agent-context").join("code_graph.db");
+    let db_opt = if db_path.exists() {
+        CodeGraphDb::open_read_only(&db_path).ok()
+    } else {
+        None
+    };
+
+    if let Some(db) = db_opt {
+        let count = db.count_incoming_dependencies(&clean_rel).unwrap_or(0);
+        let files = db.get_incoming_dependent_files(&clean_rel, 10).unwrap_or_default();
 
         if count > 8 {
             RiskAssessment {
@@ -45,7 +58,7 @@ pub fn assess_file_risk(proj_path: &Path, rel_path: &str) -> RiskAssessment {
                 dependent_files: files.clone(),
                 warning: Some(format!(
                     "CRITICAL HUB WARNING: File '{}' has {} incoming dependent modules (e.g. {}). Modifying this core file requires explicit justification and verification.",
-                    rel_path,
+                    clean_rel,
                     count,
                     if files.is_empty() { "—".to_string() } else { files.join(", ") }
                 )),
@@ -57,7 +70,7 @@ pub fn assess_file_risk(proj_path: &Path, rel_path: &str) -> RiskAssessment {
                 dependent_files: files.clone(),
                 warning: Some(format!(
                     "NOTICE: File '{}' is referenced by {} dependent modules ({}). Verify dependent files after editing.",
-                    rel_path,
+                    clean_rel,
                     count,
                     files.join(", ")
                 )),
@@ -88,13 +101,16 @@ pub fn ensure_agent_context_gitignored(proj_path: &Path) {
     let gitignore_path = proj_path.join(".gitignore");
     if gitignore_path.exists() {
         if let Ok(content) = fs::read_to_string(&gitignore_path) {
-            let lines: Vec<&str> = content.lines().map(|l| l.trim()).collect();
-            let already_ignored = lines.iter().any(|&l| {
-                l == ".agent-context"
-                    || l == ".agent-context/"
-                    || l == "/.agent-context"
-                    || l == "/.agent-context/"
-                    || l.starts_with(".agent-context")
+            let already_ignored = content.lines().map(|l| l.trim()).any(|l| {
+                matches!(
+                    l,
+                    ".agent-context"
+                        | ".agent-context/"
+                        | "/.agent-context"
+                        | "/.agent-context/"
+                        | ".agent-context/*"
+                        | "/.agent-context/*"
+                )
             });
             if !already_ignored {
                 let mut updated = content;

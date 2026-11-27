@@ -250,3 +250,179 @@ fn test_project_context_skeleton_mode() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_navigate_scopes_validation_and_file_like_escaping() {
+    let temp_dir = std::env::temp_dir().join(format!("ag_nav_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("src")).unwrap();
+    std::fs::write(temp_dir.join("src/my_file.rs"), "pub fn exact_underscore() {}\n").unwrap();
+    std::fs::write(temp_dir.join("src/myXfile.rs"), "pub fn wildcard_trap() {}\n").unwrap();
+
+    let mut state = ServerState::new();
+    let _ = handle_tool_call(
+        "project_context",
+        json!({"operation": "reindex", "project_path": temp_dir.to_str().unwrap()}),
+        &mut state,
+    )
+    .unwrap();
+
+    // Unknown scope -> Err((-32602, ...))
+    let bad_scope = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "navigate",
+            "project_path": temp_dir.to_str().unwrap(),
+            "query": "my_file",
+            "scope": "invalid_scope"
+        }),
+        &mut state,
+    );
+    assert!(matches!(bad_scope, Err((-32602, _))));
+
+    // Whitespace-only query -> Err((-32602, ...))
+    let ws_query = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "navigate",
+            "project_path": temp_dir.to_str().unwrap(),
+            "query": "   \t ",
+            "scope": "files"
+        }),
+        &mut state,
+    );
+    assert!(matches!(ws_query, Err((-32602, _))));
+
+    // Unknown operation -> Err((-32602, ...))
+    let bad_op = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "nonexistent_op",
+            "project_path": temp_dir.to_str().unwrap()
+        }),
+        &mut state,
+    );
+    assert!(matches!(bad_op, Err((-32602, _))));
+
+    // scope="files" searches files with escaped LIKE '_' wildcard
+    let files_nav = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "navigate",
+            "project_path": temp_dir.to_str().unwrap(),
+            "query": "my_file",
+            "scope": "files"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let files_text = files_nav["content"][0]["text"].as_str().unwrap();
+    assert!(files_text.contains("src/my_file.rs"), "Got: {}", files_text);
+    assert!(!files_text.contains("myXfile.rs"), "LIKE '_' must be escaped: {}", files_text);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_symbols_ast_modifiers_and_dataflow_escaping() {
+    let temp_dir = std::env::temp_dir().join(format!("ag_sym_df_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("src")).unwrap();
+    std::fs::write(
+        temp_dir.join("src/mod_fns.rs"),
+        "pub(crate) fn internal_helper() {}\npub async fn fetch_async() {}\nasync fn bg_task() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("src/client.ts"),
+        "export async function loadUser(id: string) { return id; }\n",
+    )
+    .unwrap();
+
+    let mut state = ServerState::new();
+    let rs_syms = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "symbols",
+            "project_path": temp_dir.to_str().unwrap(),
+            "relative_path": "src/mod_fns.rs"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let rs_text = rs_syms["content"][0]["text"].as_str().unwrap();
+    assert!(rs_text.contains("internal_helper"), "Got: {}", rs_text);
+    assert!(rs_text.contains("fetch_async"), "Got: {}", rs_text);
+    assert!(rs_text.contains("bg_task"), "Got: {}", rs_text);
+
+    let ts_syms = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "symbols",
+            "project_path": temp_dir.to_str().unwrap(),
+            "relative_path": "src/client.ts"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let ts_text = ts_syms["content"][0]["text"].as_str().unwrap();
+    assert!(ts_text.contains("loadUser"), "Got: {}", ts_text);
+
+    // Dataflow LIKE escaping & backward wording ("to" instead of "from")
+    {
+        let db = crate::context::db::CodeGraphDb::open_for_project(&temp_dir).unwrap();
+        db.upsert_file("src/a.rs", "ha", 10, 1).unwrap();
+        db.upsert_file("src/b.rs", "hb", 10, 1).unwrap();
+        db.insert_symbol("src/a.rs::caller", "caller", "function", "src/a.rs", None, 1, 5, None).unwrap();
+        db.insert_symbol("src/b.rs::user_sink", "user_sink", "function", "src/b.rs", None, 1, 5, None).unwrap();
+        db.insert_symbol("src/b.rs::userXsink", "userXsink", "function", "src/b.rs", None, 6, 10, None).unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO data_flow_edges (caller_symbol_id, callee_symbol_id, source_variable, target_parameter, arg_index, call_line, flow_type, confidence)
+                 VALUES ('src/a.rs::caller', 'src/b.rs::user_sink', 'raw_id', 'user_id', 0, 12, 'direct', 0.9),
+                        ('src/a.rs::caller', 'src/b.rs::userXsink', 'raw_id', 'userXid', 0, 14, 'direct', 0.9)",
+                [],
+            )
+            .unwrap();
+    }
+    let df_res = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "data_flow",
+            "project_path": temp_dir.to_str().unwrap(),
+            "target_symbol": "user_sink"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let df_text = df_res["content"][0]["text"].as_str().unwrap();
+    assert!(df_text.contains("passed `raw_id` to `src/b.rs::user_sink`"), "Got: {}", df_text);
+    assert!(!df_text.contains("userXsink"), "LIKE '_' must be escaped in data_flow: {}", df_text);
+
+    // enrich_graph validates confidence & semantic_query rejects empty query
+    let bad_enrich = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "enrich_graph",
+            "project_path": temp_dir.to_str().unwrap(),
+            "edges": [{"source": "a", "target": "b", "confidence": 1.5}]
+        }),
+        &mut state,
+    )
+    .unwrap();
+    assert!(bad_enrich["content"][0]["text"].as_str().unwrap().contains("Invalid confidence"));
+
+    let bad_sem = handle_tool_call(
+        "project_context",
+        json!({
+            "operation": "semantic_query",
+            "project_path": temp_dir.to_str().unwrap(),
+            "query": "   "
+        }),
+        &mut state,
+    )
+    .unwrap();
+    assert!(bad_sem["content"][0]["text"].as_str().unwrap().contains("Error:"));
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

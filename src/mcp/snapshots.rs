@@ -7,14 +7,14 @@ use tracing::info;
 use super::impact::ensure_agent_context_gitignored;
 
 pub fn get_session_snapshot_dir(proj_path: &Path, session_id: &str) -> PathBuf {
-    ensure_agent_context_gitignored(proj_path);
     let clean_session = session_id.replace(['/', '\\', ':', '.'], "_");
     proj_path.join(".agent-context").join("snapshots").join(clean_session)
 }
 
 fn normalize_workspace_rel_path(proj_path: &Path, rel_path: &str) -> Option<PathBuf> {
-    let trimmed = rel_path.trim();
-    if trimmed.is_empty() || trimmed.contains("..") {
+    let normalized = rel_path.trim().replace('\\', "/");
+    let trimmed = normalized.trim_start_matches("./");
+    if trimmed.is_empty() || trimmed.contains("..") || trimmed.contains('\0') {
         return None;
     }
     let candidate = Path::new(trimmed);
@@ -32,7 +32,7 @@ fn normalize_workspace_rel_path(proj_path: &Path, rel_path: &str) -> Option<Path
             return None;
         }
     } else {
-        candidate.to_path_buf()
+        PathBuf::from(trimmed.trim_start_matches('/'))
     };
 
     if stripped.as_os_str().is_empty()
@@ -56,6 +56,7 @@ pub fn create_file_snapshot(proj_path: &Path, rel_path: &str, session_id: &str) 
         return Ok(false);
     }
 
+    ensure_agent_context_gitignored(proj_path);
     let snapshot_dir = get_session_snapshot_dir(proj_path, session_id);
     let target_snapshot = snapshot_dir.join(&safe_rel);
 
@@ -70,6 +71,25 @@ pub fn create_file_snapshot(proj_path: &Path, rel_path: &str, session_id: &str) 
     fs::copy(&source_path, &target_snapshot)?;
     info!("Created local rollback snapshot for '{}' in session '{}'", safe_rel.display(), session_id);
     Ok(true)
+}
+
+fn target_path_within_workspace(proj_path: &Path, canonical_proj: Option<&Path>, rel: &Path) -> bool {
+    let Some(cp) = canonical_proj else {
+        return true;
+    };
+    let mut cur = proj_path.to_path_buf();
+    for comp in rel.components() {
+        cur.push(comp.as_os_str());
+        if let Ok(meta) = fs::symlink_metadata(&cur) {
+            if meta.file_type().is_symlink() {
+                return false;
+            }
+            if !cur.canonicalize().map(|c| c.starts_with(cp)).unwrap_or(false) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Restores all original files from the session snapshot directory back to the workspace.
@@ -92,6 +112,12 @@ pub fn restore_session_snapshots(proj_path: &Path, session_id: &str) -> Result<V
             for entry in fs::read_dir(dir)? {
                 let entry = entry?;
                 let path = entry.path();
+                if fs::symlink_metadata(&path)
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
                 if path.is_dir() {
                     visit_dirs(&path, base_dir, proj_path, canonical_proj, restored)?;
                 } else if path.is_file() {
@@ -99,22 +125,16 @@ pub fn restore_session_snapshots(proj_path: &Path, session_id: &str) -> Result<V
                         if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
                             continue;
                         }
-                        let target_dest = proj_path.join(rel);
-                        if let Some(cp) = canonical_proj {
-                            if target_dest.exists()
-                                && !target_dest
-                                    .canonicalize()
-                                    .map(|c| c.starts_with(cp))
-                                    .unwrap_or(false)
-                            {
-                                continue;
-                            }
+                        if !target_path_within_workspace(proj_path, canonical_proj, rel) {
+                            continue;
                         }
+                        let target_dest = proj_path.join(rel);
                         if let Some(p) = target_dest.parent() {
-                            let _ = fs::create_dir_all(p);
+                            fs::create_dir_all(p)?;
                         }
                         fs::copy(&path, &target_dest)?;
-                        restored.push(rel.to_string_lossy().to_string());
+                        let rel_posix = rel.to_string_lossy().replace('\\', "/");
+                        restored.push(rel_posix);
                     }
                 }
             }
