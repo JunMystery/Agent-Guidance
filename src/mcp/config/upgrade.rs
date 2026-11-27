@@ -116,8 +116,6 @@ pub fn run_upgrade() -> Result<()> {
     let asset_name = get_release_asset_name()
         .ok_or_else(|| anyhow::anyhow!("Unsupported operating system or architecture for automatic upgrade"))?;
 
-    stop_other_agent_guidance_processes();
-
     let staging_root = dirs::home_dir()
         .map(|h| h.join(".agent-guidance").join("staging"))
         .unwrap_or_else(env::temp_dir);
@@ -199,6 +197,8 @@ pub fn run_upgrade() -> Result<()> {
         anyhow::bail!("Extracted archive did not contain agent-guidance binary");
     }
 
+    stop_other_agent_guidance_processes();
+
     let target_bin = get_target_bin_path()?;
     if let Some(parent) = target_bin.parent() {
         fs::create_dir_all(parent)?;
@@ -244,7 +244,7 @@ pub fn run_upgrade() -> Result<()> {
 
     println!("Successfully installed the latest release binary!");
     println!();
-    println!("Configuring MCP server and syncing skills across all IDE clients...");
+    println!("Configuring MCP server across all IDE clients...");
     run_setup(&target_bin)?;
 
     println!("Agent Guidance successfully upgraded to the latest version!");

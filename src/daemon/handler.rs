@@ -1,9 +1,9 @@
+use std::path::Path;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, OwnedMutexGuard, Semaphore};
 use tokio::time::timeout;
 use tracing::{error, info};
 
@@ -13,6 +13,31 @@ use crate::mcp::state::ServerState;
 
 const MAX_REQUEST_WORKERS: usize = 32;
 static REQUEST_WORKERS: std::sync::OnceLock<Arc<Semaphore>> = std::sync::OnceLock::new();
+
+struct CancellationGuard {
+    state: OwnedMutexGuard<ServerState>,
+}
+
+impl CancellationGuard {
+    fn new(mut state: OwnedMutexGuard<ServerState>, cancellation: Arc<AtomicBool>) -> Self {
+        state.set_cancellation(cancellation);
+        Self { state }
+    }
+}
+
+impl Drop for CancellationGuard {
+    fn drop(&mut self) {
+        self.state.clear_cancellation();
+    }
+}
+
+fn configured_request_timeout_secs() -> u64 {
+    std::env::var("AGENT_GUIDANCE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(60)
+}
 
 async fn read_bounded_line<R: AsyncBufReadExt + Unpin>(
     reader: &mut R,
@@ -79,7 +104,7 @@ where
     }
 
     const MAX_LINE_BYTES: usize = 10 * 1024 * 1024;
-    const REQUEST_TIMEOUT_SECS: u64 = 60;
+    let request_timeout_secs = configured_request_timeout_secs();
 
     loop {
         let line = match read_bounded_line(&mut reader, MAX_LINE_BYTES).await {
@@ -106,8 +131,9 @@ where
                 continue;
             }
             Ok(None) => {
+                info!("Client disconnected (EOF on stdio stream). Session terminated cleanly.");
                 crate::mcp::mcp_logger::log_mcp(
-                    crate::mcp::mcp_logger::LogLevel::Warn,
+                    crate::mcp::mcp_logger::LogLevel::Info,
                     "mcp_stdio",
                     "Client disconnected (EOF on stdio stream). Session terminated cleanly.",
                     None,
@@ -156,23 +182,24 @@ where
 
         if request.jsonrpc != "2.0" {
             error!("Unsupported JSON-RPC version: {}", request.jsonrpc);
-            let id = request.id.clone().unwrap_or(serde_json::Value::Null);
-            let err_resp = JsonRpcResponse::error(
-                id,
-                -32600,
-                format!(
-                    "Invalid Request: jsonrpc must be '2.0', got '{}'",
-                    request.jsonrpc
-                ),
-            );
-            let out = serde_json::to_string(&err_resp).unwrap_or_default() + "\n";
-            if let Err(e) = writer.write_all(out.as_bytes()).await {
-                error!("Write error: {}", e);
-                break;
-            }
-            if let Err(e) = writer.flush().await {
-                error!("Flush error: {}", e);
-                break;
+            if let Some(id) = request.id {
+                let err_resp = JsonRpcResponse::error(
+                    id,
+                    -32600,
+                    format!(
+                        "Invalid Request: jsonrpc must be '2.0', got '{}'",
+                        request.jsonrpc
+                    ),
+                );
+                let out = serde_json::to_string(&err_resp).unwrap_or_default() + "\n";
+                if let Err(e) = writer.write_all(out.as_bytes()).await {
+                    error!("Write error: {}", e);
+                    break;
+                }
+                if let Err(e) = writer.flush().await {
+                    error!("Flush error: {}", e);
+                    break;
+                }
             }
             continue;
         }
@@ -181,7 +208,6 @@ where
         let request_method = request.method.clone();
         let timeout_method = request_method.clone();
         let request_params = request.params;
-        let request_state = state.clone();
         let cancellation = Arc::new(AtomicBool::new(false));
         let worker_cancellation = cancellation.clone();
 
@@ -190,7 +216,7 @@ where
             .get_or_init(|| Arc::new(Semaphore::new(MAX_REQUEST_WORKERS)))
             .clone();
         let permit = match timeout(
-            Duration::from_secs(REQUEST_TIMEOUT_SECS),
+            Duration::from_secs(request_timeout_secs),
             worker_pool.acquire_owned(),
         )
         .await
@@ -203,7 +229,7 @@ where
             Err(_) => {
                 error!(
                     "Request worker pool wait exceeded {}s",
-                    REQUEST_TIMEOUT_SECS
+                    request_timeout_secs
                 );
                 if let Some(id) = req_id.clone() {
                     let resp =
@@ -216,54 +242,54 @@ where
             }
         };
 
-        let is_read = crate::mcp::router::is_read_only_request(&request_method, &request_params);
+        // Acquire the async state lock with bounded timeout so a stuck worker never causes permanent lock starvation.
+        let state_guard = match timeout(
+            Duration::from_secs(request_timeout_secs),
+            state.clone().lock_owned(),
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(_) => {
+                drop(permit);
+                error!(
+                    "Request state lock wait exceeded {}s: {}",
+                    request_timeout_secs, timeout_method
+                );
+                if let Some(id) = req_id {
+                    let resp = JsonRpcResponse::error(
+                        id,
+                        -32000,
+                        format!(
+                            "Server state busy: previous request exceeded {}s timeout",
+                            request_timeout_secs
+                        ),
+                    );
+                    let out = serde_json::to_string(&resp).unwrap_or_default() + "\n";
+                    let _ = writer.write_all(out.as_bytes()).await;
+                    let _ = writer.flush().await;
+                }
+                continue;
+            }
+        };
 
         let result = match timeout(
-            Duration::from_secs(REQUEST_TIMEOUT_SECS),
+            Duration::from_secs(request_timeout_secs),
             tokio::task::spawn_blocking(move || {
                 let _permit = permit;
                 let started = Instant::now();
-                let result = if is_read {
-                    let mut live_dirty_clone = None;
-                    let clone_opt = {
-                        let mut state_guard = request_state
-                            .lock()
-                            .map_err(|_| (-32000, "Server state lock poisoned".to_string()))?;
-                        if !state_guard.dirty_files.is_empty() {
-                            // Keep dirty_files flush on live state so subsequent reads don't re-drain clones.
-                            state_guard.set_cancellation(worker_cancellation.clone());
-                            let res = handle_request(&request_method, request_params.clone(), &mut *state_guard);
-                            state_guard.clear_cancellation();
-                            live_dirty_clone = Some(res);
-                            None
-                        } else {
-                            Some(state_guard.clone())
-                        }
-                    };
-                    if let Some(res) = live_dirty_clone {
-                        res
-                    } else {
-                        let mut state_clone = clone_opt.unwrap();
-                        state_clone.set_cancellation(worker_cancellation);
-                        let res = handle_request(&request_method, request_params, &mut state_clone);
-                        state_clone.clear_cancellation();
-                        res
-                    }
+                let mut guard = CancellationGuard::new(state_guard, worker_cancellation);
+                let res = if guard.state.is_cancelled() {
+                    Err((-32000, "Request cancelled".to_string()))
                 } else {
-                    let mut state_guard = request_state
-                        .lock()
-                        .map_err(|_| (-32000, "Server state lock poisoned".to_string()))?;
-                    state_guard.set_cancellation(worker_cancellation);
-                    let res = handle_request(&request_method, request_params, &mut *state_guard);
-                    state_guard.clear_cancellation();
-                    res
+                    handle_request(&request_method, request_params, &mut guard.state)
                 };
                 info!(
                     method = %request_method,
                     elapsed_ms = started.elapsed().as_millis() as u64,
                     "MCP request completed"
                 );
-                result
+                res
             }),
         )
         .await
@@ -274,13 +300,13 @@ where
                 cancellation.store(true, Ordering::Relaxed);
                 error!(
                     "Request timed out after {}s: {}",
-                    REQUEST_TIMEOUT_SECS, timeout_method
+                    request_timeout_secs, timeout_method
                 );
                 if let Some(id) = req_id {
                     let resp = JsonRpcResponse::error(
                         id,
                         -32000,
-                        format!("Request timed out after {}s", REQUEST_TIMEOUT_SECS),
+                        format!("Request timed out after {}s", request_timeout_secs),
                     );
                     let out = serde_json::to_string(&resp).unwrap_or_default() + "\n";
                     let _ = writer.write_all(out.as_bytes()).await;
@@ -320,5 +346,74 @@ where
                 }
             }
         }
+    }
+
+    if let Ok(guard) = state.try_lock()
+        && let Some(ref proj_str) = guard.project_path
+    {
+        let proj = Path::new(proj_str);
+        if proj.is_dir()
+            && (guard.tool_calls > 0
+                || !guard.modified_files.is_empty()
+                || !guard.recent_tasks.is_empty()
+                || guard.plan_approved)
+        {
+            let _ = guard.save_to_dir(proj);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    #[tokio::test]
+    async fn test_handler_ignores_notification_errors_and_updates_state_for_reads() {
+        let (client_tx, server_rx) = tokio::io::duplex(4096);
+        let (server_tx, client_rx) = tokio::io::duplex(4096);
+
+        let handle = tokio::spawn(async move {
+            handle_mcp_lines(server_rx, server_tx).await;
+        });
+
+        let mut writer = client_tx;
+        let mut reader = BufReader::new(client_rx).lines();
+
+        // 1. Notification with wrong jsonrpc version (id: None) -> MUST NOT emit error response
+        writer
+            .write_all(b"{\"jsonrpc\":\"1.0\",\"method\":\"ping\"}\n")
+            .await
+            .unwrap();
+        // 2. Notification with unknown method (id: None) -> MUST NOT emit error response
+        writer
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/unknown\"}\n")
+            .await
+            .unwrap();
+        // 3. Real request with id: 1 -> first response MUST be id: 1
+        writer
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n")
+            .await
+            .unwrap();
+        // 4. Read-only resource read + gate check still runs cleanly on live ServerState
+        writer
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"resources/read\",\"params\":{\"uri\":\"agent-guidance://system/edit-allowed\"}}\n")
+            .await
+            .unwrap();
+        writer.flush().await.unwrap();
+        drop(writer);
+
+        let line1 = reader.next_line().await.unwrap().unwrap();
+        let val1: serde_json::Value = serde_json::from_str(&line1).unwrap();
+        assert_eq!(val1["id"], 1);
+        assert!(val1.get("result").is_some());
+
+        let line2 = reader.next_line().await.unwrap().unwrap();
+        let val2: serde_json::Value = serde_json::from_str(&line2).unwrap();
+        assert_eq!(val2["id"], 2);
+        assert!(val2.get("result").is_some());
+
+        assert!(reader.next_line().await.unwrap().is_none());
+        handle.await.unwrap();
     }
 }

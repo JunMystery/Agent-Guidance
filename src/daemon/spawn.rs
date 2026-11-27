@@ -5,6 +5,51 @@ use tracing::info;
 #[cfg(windows)]
 use tracing::warn;
 
+fn build_wmi_script(exe_str: &str) -> String {
+    let escaped_path = exe_str.replace('"', "\\\"").replace('\'', "''");
+    format!(
+        "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine = '\"{}\" --daemon'}}",
+        escaped_path
+    )
+}
+
+#[cfg(windows)]
+fn spawn_windows_wmi_and_fallback(current_exe: &std::path::Path, exe_str: &str) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let wmi_script = build_wmi_script(exe_str);
+    let mut ps = Command::new("powershell");
+    ps.args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &wmi_script]);
+    ps.stdin(Stdio::null());
+    ps.stdout(Stdio::null());
+    ps.stderr(Stdio::null());
+    ps.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+
+    match ps.status() {
+        Ok(s) if s.success() => {
+            info!("Detached singleton daemon spawned via WMI service.");
+            return Ok(());
+        }
+        Err(e) => {
+            warn!("WMI process spawn failed ({}), falling back to standard detached spawn...", e);
+        }
+        _ => {}
+    }
+
+    let mut fallback = Command::new(current_exe);
+    fallback.arg("--daemon");
+    fallback.stdin(Stdio::null());
+    fallback.stdout(Stdio::null());
+    fallback.stderr(Stdio::null());
+    fallback.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+    fallback.spawn()?;
+    info!("Detached singleton daemon spawned via standard detached fallback.");
+    Ok(())
+}
+
 /// Spawns the agent-guidance daemon as a completely detached background process,
 /// fully decoupled from the launching IDE's process tree and Job Object.
 pub fn ensure_daemon_running() -> Result<()> {
@@ -43,41 +88,8 @@ pub fn ensure_daemon_running() -> Result<()> {
             }
         }
 
-        // Attempt 2: WMI Win32_Process.Create (Runs under Windows WMI Service, 100% outside IDE Job Object)
-        let escaped_path = exe_str.replace("'", "''");
-        let wmi_script = format!(
-            "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine = '\"{}\" --daemon'}}",
-            escaped_path
-        );
-
-        let mut ps = Command::new("powershell");
-        ps.args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &wmi_script]);
-        ps.stdin(Stdio::null());
-        ps.stdout(Stdio::null());
-        ps.stderr(Stdio::null());
-        ps.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
-
-        match ps.status() {
-            Ok(s) if s.success() => {
-                info!("Detached singleton daemon spawned via WMI service.");
-                return Ok(());
-            }
-            Err(e) => {
-                warn!("WMI process spawn failed ({}), falling back to standard detached spawn...", e);
-            }
-            _ => {}
-        }
-
-        // Attempt 3: Standard detached spawn fallback
-        let mut fallback = Command::new(&current_exe);
-        fallback.arg("--daemon");
-        fallback.stdin(Stdio::null());
-        fallback.stdout(Stdio::null());
-        fallback.stderr(Stdio::null());
-        fallback.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
-        fallback.spawn()?;
-        info!("Detached singleton daemon spawned via standard detached fallback.");
-        Ok(())
+        // Attempt 2 & 3: WMI Win32_Process.Create + standard detached fallback
+        spawn_windows_wmi_and_fallback(&current_exe, &exe_str)
     }
 
     #[cfg(unix)]
@@ -92,5 +104,16 @@ pub fn ensure_daemon_running() -> Result<()> {
         cmd.spawn()?;
         info!("Detached singleton daemon spawned with independent process group.");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_wmi_script_escapes_quotes() {
+        let script = build_wmi_script(r#"C:\O'Brien\My "App"\agent-guidance.exe"#);
+        assert!(script.contains(r#"C:\O''Brien\My \"App\"\agent-guidance.exe"#));
     }
 }

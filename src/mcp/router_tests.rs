@@ -186,3 +186,118 @@
         let get_res = handle_tool_call("guidance", json!({"operation": "get", "topic": "Cargo.toml", "project_path": "."}), &mut state).unwrap();
         assert!(get_res["content"][0]["text"].as_str().unwrap().contains("Skill asset not found"));
     }
+
+    #[test]
+    fn test_router_protocol_negotiation_templates_and_tool_gate_is_error() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let mut state = ServerState::new();
+
+        // 1. Negotiate supported protocolVersion, reject invalid sessionId
+        let init_ok = handle_request(
+            "initialize",
+            Some(json!({ "protocolVersion": "2025-03-26", "sessionId": "conv-valid" })),
+            &mut state,
+        )
+        .unwrap();
+        assert_eq!(init_ok["protocolVersion"], "2025-03-26");
+        assert_eq!(state.session_id, "conv-valid");
+
+        let init_bad = handle_request(
+            "initialize",
+            Some(json!({ "sessionId": "../../escape" })),
+            &mut state,
+        )
+        .unwrap_err();
+        assert_eq!(init_bad.0, -32602);
+
+        // 2. resources/templates/list exposes standards://skill/{name}
+        let tpl_res = handle_request("resources/templates/list", None, &mut state).unwrap();
+        let templates = tpl_res["resourceTemplates"].as_array().unwrap();
+        assert!(templates.iter().any(|t| t["uriTemplate"] == "standards://skill/{name}"));
+
+        // 3. notifications/cancelled sets cancellation flag without -32601
+        let flag = Arc::new(AtomicBool::new(false));
+        state.set_cancellation(flag.clone());
+        let cancel_res = handle_request("notifications/cancelled", Some(json!({"requestId": 1})), &mut state);
+        assert!(cancel_res.is_ok());
+        assert!(flag.load(Ordering::Relaxed));
+
+        // 4. Empty or unknown tool name returns -32601 BEFORE can_call_tool
+        let empty_err = handle_request(
+            "tools/call",
+            Some(json!({ "name": "", "arguments": {} })),
+            &mut state,
+        )
+        .unwrap_err();
+        assert_eq!(empty_err.0, -32601);
+
+        let unknown_err = handle_request(
+            "tools/call",
+            Some(json!({ "name": "nonexistent_tool", "arguments": {} })),
+            &mut state,
+        )
+        .unwrap_err();
+        assert_eq!(unknown_err.0, -32601);
+
+        // 5. Gate denial returns standard MCP isError: true rather than JSON-RPC error
+        let gated_res = handle_request(
+            "tools/call",
+            Some(json!({ "name": "guidance", "arguments": { "operation": "list" } })),
+            &mut state,
+        )
+        .unwrap();
+        assert_eq!(gated_res["isError"], json!(true));
+        assert!(gated_res["content"][0]["text"].as_str().unwrap().contains("PRIORITY_REQUIRED"));
+    }
+
+    #[test]
+    fn test_implicit_conversation_switch_saves_and_restores_persisted_state() {
+        let temp_dir = std::env::temp_dir().join(format!("ag_conv_switch_persist_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let mut state = ServerState::new();
+        state.project_path = Some(temp_dir.to_string_lossy().to_string());
+        state.session_id = "conv-alpha".to_string();
+        state.priority_gate_pass();
+        state.workflow_stage = "Build".to_string();
+        state.plan_approved = true;
+        state.edit_authorized = true;
+        state.record_modified_file("src/a.rs");
+        state.push_recent_task("Task Alpha");
+
+        // Switch to conv-beta (no saved file) -> saves conv-alpha and resets priority_gate_passed
+        let res_beta = handle_request(
+            "tools/call",
+            Some(json!({
+                "name": "workflow_gate",
+                "arguments": { "action": "status", "conversation_id": "conv-beta", "project_path": temp_dir.to_str().unwrap() }
+            })),
+            &mut state,
+        )
+        .unwrap();
+        assert!(res_beta["content"][0]["text"].as_str().unwrap().contains("Context"));
+        assert_eq!(state.session_id, "conv-beta");
+        assert!(!state.priority_gate_passed);
+        assert!(!state.plan_approved);
+
+        // Switch back to conv-alpha -> restores saved state
+        let res_alpha = handle_request(
+            "tools/call",
+            Some(json!({
+                "name": "workflow_gate",
+                "arguments": { "action": "status", "conversation_id": "conv-alpha", "project_path": temp_dir.to_str().unwrap() }
+            })),
+            &mut state,
+        )
+        .unwrap();
+        assert!(res_alpha["content"][0]["text"].as_str().unwrap().contains("Build"));
+        assert_eq!(state.session_id, "conv-alpha");
+        assert!(state.priority_gate_passed);
+        assert!(state.plan_approved);
+        assert_eq!(state.modified_files, vec!["src/a.rs"]);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }

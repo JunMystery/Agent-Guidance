@@ -2,11 +2,10 @@ use anyhow::Result;
 use std::path::Path;
 use tracing::info;
 
+use crate::mcp::templates::SERVER_ID;
 use super::clients::{configure_codex_toml, configure_opencode, merge_mcp_config};
 use super::setup_cli::register_cli_clients;
 use super::setup_targets::get_client_targets;
-
-const SERVER_ID: &str = "agent-guidance";
 
 pub fn run_setup(binary_path: &Path) -> Result<()> {
     info!("Configuring MCP clients with binary at {:?}", binary_path);

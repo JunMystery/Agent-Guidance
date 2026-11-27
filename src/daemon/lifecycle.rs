@@ -45,7 +45,7 @@ pub(crate) async fn monitor_client_lifecycle_with_checker<F>(
     let startup_started = tokio::time::Instant::now();
     let mut zero_clients_since: Option<tokio::time::Instant> = None;
     let mut zero_ides_since: Option<tokio::time::Instant> = None;
-    let tick_interval = Duration::from_millis(500);
+    let tick_interval = Duration::from_secs(5);
     let mut next_sleep = tick_interval;
     let mut last_ide_log = tokio::time::Instant::now();
 
