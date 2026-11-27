@@ -75,9 +75,18 @@ pub(crate) fn handle(
         state.active_task.as_deref().unwrap_or("")
     };
 
+    let stage_next_step = match state.workflow_stage.as_str() {
+        "Build" => "-> NEXT STEP: Proceed with implementation. Use `project_context(operation=\"read\")` for bounded reads and `workflow_gate(action=\"authorize_edit\", ...)` before editing files.",
+        "Fix" => "-> NEXT STEP: Isolate the root cause via `project_context` and authorize targeted edits via `workflow_gate(action=\"authorize_edit\", ...)`.",
+        "Test_Recheck" => "-> NEXT STEP: Run empirical tests and static linters via `guidance(operation=\"verify\", ...)`.",
+        _ => "-> NEXT STEP: If codebase inspection is needed, use `project_context(operation=\"search\" | \"read\")`. Otherwise, answer directly or proceed to task planning.",
+    };
+
     let resp = if active_skills.is_empty() {
-        let text = "# Skill Selection\n\nNo skills selected. Proceeding directly to task execution.\n\n-> NEXT STEP: If codebase inspection is needed, use `project_context(operation=\"search\" | \"read\")`. Otherwise, answer directly or proceed to task planning.".to_string();
-        text
+        format!(
+            "# Skill Selection\n\nNo skills selected. Proceeding directly to task execution.\n\n{}",
+            stage_next_step
+        )
     } else {
         let all_skills = load_all_skills(&proj_path);
         let mut loaded_sections = Vec::new();
@@ -90,12 +99,25 @@ pub(crate) fn handle(
 
         for raw_req in &active_skills {
             let clean_name = clean_skill_identifier(raw_req);
-            let mut resolved_content: Option<(String, String, String)> = None;
+            if clean_name.is_empty() {
+                not_found.push(raw_req.clone());
+                continue;
+            }
+            let mut resolved_content: Option<(String, String, String, usize)> = None;
 
             if let Some(ref c) = client {
                 match c.slice_skill(&clean_name, task_to_use) {
-                    Ok(slice_res) => {
-                        resolved_content = Some((clean_name.clone(), slice_res.content, " [Remote ML Worker]".to_string()));
+                    Ok(slice_res) if !slice_res.content.trim().is_empty() => {
+                        let raw_tokens = estimate_tokens(&slice_res.content, false);
+                        resolved_content = Some((
+                            clean_name.clone(),
+                            slice_res.content,
+                            " [Remote ML Worker]".to_string(),
+                            raw_tokens,
+                        ));
+                    }
+                    Ok(_) => {
+                        tracing::warn!("Remote slice returned empty content for {}; fallback to local", clean_name);
                     }
                     Err(e) => {
                         tracing::warn!("Remote slice failed for {}: {}; fallback to local", clean_name, e);
@@ -105,6 +127,7 @@ pub(crate) fn handle(
 
             if resolved_content.is_none() {
                 if let Some((canonical_name, content, tag_str)) = resolve_skill(raw_req, &proposals, &all_skills, &proj_path) {
+                    let raw_tokens = estimate_tokens(&content, false);
                     let processed = if !task_to_use.is_empty() && !content.is_empty() {
                         crate::catalog::slicing::slice_skill_markdown(&content, task_to_use, 5)
                     } else if !content.is_empty() {
@@ -112,17 +135,16 @@ pub(crate) fn handle(
                     } else {
                         "*Content empty or unavailable*".to_string()
                     };
-                    resolved_content = Some((canonical_name, processed, tag_str.to_string()));
+                    resolved_content = Some((canonical_name, processed, tag_str.to_string(), raw_tokens));
                 }
             }
 
-            if let Some((canonical_name, processed, tag_str)) = resolved_content {
+            if let Some((canonical_name, processed, tag_str, raw_tokens)) = resolved_content {
                 crate::mcp::db::log_skill_load(&canonical_name);
                 crate::ml::skill_analytics::record_skill_usage(&proj_path, &canonical_name);
-                raw_token_acc += estimate_tokens(&processed, false);
+                raw_token_acc += raw_tokens;
                 loaded_sections.push(format!("### Skill: {}{}\n```markdown\n{}\n```", canonical_name, tag_str, processed));
             } else {
-                crate::mcp::db::log_skill_load(&clean_name);
                 not_found.push(raw_req.clone());
             }
         }
@@ -130,12 +152,19 @@ pub(crate) fn handle(
         let profile = detect_language_fast(&proj_path, task_to_use);
         let safety_rules = crate::catalog::slicing::get_language_safety_rules(&profile);
 
-        let mut resp = format!(
-            "# Skill Selection Confirmed ({})\n\nLoaded Skills Content:\n\n{}\n\n## Language Safety Rules\n{}",
-            loaded_sections.len(),
-            loaded_sections.join("\n\n---\n\n"),
-            safety_rules
-        );
+        let mut resp = if loaded_sections.is_empty() {
+            format!(
+                "# Skill Selection (0 Loaded)\n\nNo requested skills were loaded.\n\n## Language Safety Rules\n{}",
+                safety_rules
+            )
+        } else {
+            format!(
+                "# Skill Selection Confirmed ({})\n\nLoaded Skills Content:\n\n{}\n\n## Language Safety Rules\n{}",
+                loaded_sections.len(),
+                loaded_sections.join("\n\n---\n\n"),
+                safety_rules
+            )
+        };
 
         if !not_found.is_empty() {
             resp.push_str(&format!(
@@ -144,7 +173,8 @@ pub(crate) fn handle(
             ));
         }
 
-        resp.push_str("\n\n-> NEXT STEP: If codebase inspection is needed, use `project_context(operation=\"search\" | \"read\")`. Otherwise, answer directly or proceed to task planning.");
+        resp.push_str("\n\n");
+        resp.push_str(stage_next_step);
 
         let opt_tokens = estimate_tokens(&resp, false);
         let orig_tokens = raw_token_acc.max(opt_tokens);

@@ -44,34 +44,33 @@ pub(crate) fn clean_skill_identifier(raw: &str) -> String {
 }
 
 pub(crate) fn extract_short_usage(name: &str, rel_path: &str, proj_path: &Path) -> String {
-    let content = get_embedded_skill(name).or_else(|| get_embedded_skill(rel_path))
-        .or_else(|| validate_path(proj_path, rel_path).ok().and_then(|p| std::fs::read_to_string(p).ok()))
-        .or_else(|| validate_path(proj_path, name).ok().and_then(|p| std::fs::read_to_string(p).ok()));
-
-    if let Some(c) = content {
-        let mut lines = c.lines();
-        while let Some(line) = lines.next() {
-            let t = line.trim();
-            if let Some(rest) = t.strip_prefix("description:") {
-                let mut val = rest.trim();
-                if val == ">" || val == "|" || val.is_empty() {
-                    if let Some(next) = lines.next() { val = next.trim(); }
-                }
-                let cleaned = val.trim_matches(|c| matches!(c, '"' | '\'' | '`')).trim();
-                if !cleaned.is_empty() && cleaned != ">" && cleaned != "|" {
-                    let normalized = cleaned.replace(['\u{2014}', '\u{2013}'], "-");
-                    let first = normalized.split(". ").next().unwrap_or(&normalized).trim();
-                    return if first.chars().count() > 50 {
-                        let truncated = crate::mcp::tools::helpers::truncate_chars(first, 47).trim_end();
-                        format!("{}...", truncated)
-                    } else {
-                        first.to_string()
-                    };
-                }
-            }
-        }
+    let clean_name = name.trim();
+    let mut local_candidates = Vec::new();
+    if !rel_path.trim().is_empty() {
+        local_candidates.push(rel_path.trim().to_string());
     }
-    "Skill guidance".to_string()
+    if !clean_name.is_empty() {
+        local_candidates.push(format!(".agents/skills/{}/SKILL.md", clean_name));
+        local_candidates.push(format!(".opencode/skills/{}/SKILL.md", clean_name));
+        local_candidates.push(format!(".claude/skills/{}/SKILL.md", clean_name));
+        local_candidates.push(clean_name.to_string());
+    }
+
+    let content = local_candidates
+        .into_iter()
+        .find_map(|candidate| {
+            validate_path(proj_path, &candidate)
+                .ok()
+                .filter(|p| p.is_file())
+                .and_then(|p| std::fs::read_to_string(p).ok())
+        })
+        .or_else(|| get_embedded_skill(name))
+        .or_else(|| get_embedded_skill(rel_path));
+
+    content
+        .as_deref()
+        .and_then(super::guidance_format::extract_description)
+        .unwrap_or_else(|| "Skill guidance".to_string())
 }
 
 pub(crate) fn check_confirmation_gate(
@@ -86,12 +85,24 @@ pub(crate) fn check_confirmation_gate(
     }
 
     let options: Vec<String> = if !proposals.is_empty() {
-        proposals.iter().map(|(n, rel, _)| format!("{} - {}", n, extract_short_usage(n, rel, proj_path))).collect()
+        proposals
+            .iter()
+            .enumerate()
+            .map(|(idx, (n, rel, _))| {
+                let prefix = if idx == 0 { "(Recommended) " } else { "" };
+                format!("{}{} - {}", prefix, n, extract_short_usage(n, rel, proj_path))
+            })
+            .collect()
     } else {
-        active_skills.iter().map(|raw| {
-            let clean = clean_skill_identifier(raw);
-            format!("{} - {}", clean, extract_short_usage(&clean, &clean, proj_path))
-        }).collect()
+        active_skills
+            .iter()
+            .enumerate()
+            .map(|(idx, raw)| {
+                let clean = clean_skill_identifier(raw);
+                let prefix = if idx == 0 { "(Recommended) " } else { "" };
+                format!("{}{} - {}", prefix, clean, extract_short_usage(&clean, &clean, proj_path))
+            })
+            .collect()
     };
     if !proposals.is_empty() {
         state.pending_skill_proposals = proposals.to_vec();

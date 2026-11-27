@@ -81,13 +81,14 @@ pub fn discover_skills_two_stage(
     (prioritized, profile)
 }
 
-/// Tiers proposal results: Domain skills first (Recommended), Tooling skills (Git, CI, Docs) second
+/// Tiers proposal results: Mentioned skills (in mentioned order) & Domain skills first (Recommended), Tooling skills (Git, CI, Docs) second
 pub fn tier_skill_results(
     results: Vec<(f32, SkillItem)>,
     mentioned_skills: &[String],
     limit: usize,
 ) -> Vec<(f32, SkillItem)> {
     let mut seen = std::collections::HashSet::new();
+    let mut mentioned_bucket: Vec<(usize, f32, SkillItem)> = Vec::new();
     let mut domain_skills = Vec::new();
     let mut tooling_skills = Vec::new();
 
@@ -95,8 +96,8 @@ pub fn tier_skill_results(
         if score < 0.65 || !seen.insert(item.name.clone()) {
             continue;
         }
-        if mentioned_skills.contains(&item.name) {
-            domain_skills.insert(0, (score, item));
+        if let Some(m_idx) = mentioned_skills.iter().position(|m| m == &item.name) {
+            mentioned_bucket.push((m_idx, score, item));
         } else if is_tooling_skill(&item.name) {
             tooling_skills.push((score, item));
         } else {
@@ -104,8 +105,12 @@ pub fn tier_skill_results(
         }
     }
 
-    // Combine: Domain first, then Tooling, capped at limit
-    let mut combined = domain_skills;
+    mentioned_bucket.sort_by_key(|(m_idx, _, _)| *m_idx);
+    let mut combined: Vec<(f32, SkillItem)> = mentioned_bucket
+        .into_iter()
+        .map(|(_, score, item)| (score, item))
+        .collect();
+    combined.extend(domain_skills);
     combined.extend(tooling_skills);
     combined.truncate(limit);
     combined

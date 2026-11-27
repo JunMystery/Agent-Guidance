@@ -133,7 +133,7 @@ fn test_select_skills_unconfirmed_proposal_structure() {
     let text = res.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
     assert!(text.contains("USER_CONFIRMATION_REQUIRED"));
     assert!(text.contains("\"is_multi_select\": true"));
-    assert!(text.contains("agent-guidance - "));
+    assert!(text.contains("(Recommended) agent-guidance - "));
     assert!(!text.contains("Score:"));
     assert!(!text.contains("agent-guidance ("));
 }
@@ -240,6 +240,124 @@ fn test_select_skills_rejects_non_markdown_and_counts_single_call() {
     assert!(text.contains("Skills not found"), "Expected Cargo.toml rejection, got: {}", text);
     assert!(!text.contains("name = \"secret\""));
     assert_eq!(state.tool_calls, 1);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_resolver_prefers_local_override_and_rejects_empty_or_substring() {
+    let temp_dir = std::env::temp_dir().join(format!("ag_res_ov_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let override_dir = temp_dir.join(".agents").join("skills").join("rust-patterns");
+    std::fs::create_dir_all(&override_dir).unwrap();
+    std::fs::write(
+        override_dir.join("SKILL.md"),
+        "---\nname: rust-patterns\ndescription: >\n  Workspace local Rust override\n---\n# Local Rust Override\n",
+    )
+    .unwrap();
+
+    let all_skills = load_all_skills(&temp_dir);
+    let proposals = vec![(
+        "rust-patterns".to_string(),
+        "rust-patterns/SKILL.md".to_string(),
+        1.0,
+    )];
+
+    let (name, content, tag) = resolve_skill("rust-patterns", &proposals, &all_skills, &temp_dir).unwrap();
+    assert_eq!(name, "rust-patterns");
+    assert_eq!(tag, " [Local Workspace]");
+    assert!(content.contains("Local Rust Override"));
+
+    // Empty / "(Recommended)" must return None
+    assert!(resolve_skill("", &proposals, &all_skills, &temp_dir).is_none());
+    assert!(resolve_skill("(Recommended)", &proposals, &all_skills, &temp_dir).is_none());
+
+    // Substring "rust" must NOT match "rust-async"
+    let rust_async_only = vec![crate::catalog::store::SkillItem {
+        name: "rust-async".to_string(),
+        relative_path: "skills/rust-async/SKILL.md".to_string(),
+        source: crate::catalog::store::SkillSource::Embedded,
+        content: "# Rust Async".to_string(),
+    }];
+    assert!(resolve_skill("rust", &[], &rust_async_only, &temp_dir).is_none());
+
+    // Block scalar description parsed cleanly
+    let usage = crate::mcp::tools::skills_gate::extract_short_usage(
+        "rust-patterns",
+        "rust-patterns/SKILL.md",
+        &temp_dir,
+    );
+    assert_eq!(usage, "Workspace local Rust override");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_select_skills_not_found_output_stage_next_step_and_raw_tokens() {
+    let temp_dir = std::env::temp_dir().join(format!("ag_sel_nf_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let skill_dir = temp_dir.join(".agents").join("skills").join("long-local-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    let long_body = format!(
+        "---\nname: long-local-skill\ndescription: Long skill\n---\n# Section One\n{}\n\n# Section Two\n{}\n\n# Section Three\n{}",
+        "alpha ".repeat(80),
+        "beta ".repeat(80),
+        "gamma ".repeat(80)
+    );
+    std::fs::write(skill_dir.join("SKILL.md"), &long_body).unwrap();
+
+    let mut state = ServerState::new();
+    state.workflow_stage = "Build".to_string();
+    let missing_slug = "nonexistent-skill-no-log-999";
+    let res = handle_tool_call(
+        "select_skills",
+        json!({
+            "skills": [missing_slug],
+            "project_path": temp_dir.to_str().unwrap(),
+            "user_confirmed": true
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let text = res["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Skill Selection (0 Loaded)"));
+    assert!(!text.contains("Skill Selection Confirmed (0)"));
+    assert!(text.contains("Skills not found"));
+    assert!(text.contains("authorize_edit"));
+
+    let db_path = crate::mcp::db::get_db_path();
+    if let Ok(conn) = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM skill_loads WHERE skill_id = ?1",
+                rusqlite::params![missing_slug],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(count, 0, "not_found skill must not be recorded in skill_loads");
+    }
+    let freqs = crate::ml::skill_analytics::get_project_skill_frequencies(&temp_dir);
+    assert!(!freqs.contains_key(missing_slug));
+
+    // Raw token baseline measured BEFORE slicing
+    let res_ok = handle_tool_call(
+        "select_skills",
+        json!({
+            "skills": ["long-local-skill"],
+            "project_path": temp_dir.to_str().unwrap(),
+            "task": "Section One alpha",
+            "user_confirmed": true
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let out_text = res_ok["content"][0]["text"].as_str().unwrap();
+    let out_tokens = crate::optimizer::compressor::estimate_tokens(out_text, false) as u64;
+    let raw_tokens = crate::optimizer::compressor::estimate_tokens(&long_body, false) as u64;
+    assert!(state.tokens_original >= raw_tokens.max(out_tokens));
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
