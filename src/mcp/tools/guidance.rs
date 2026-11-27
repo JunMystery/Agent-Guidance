@@ -33,6 +33,12 @@ pub(crate) fn handle(
             let p = super::helpers::detect_project_path(p_arg, state);
             Ok(crate::ml::skill_analytics::format_skill_analytics_report(&p))
         }
-        _ => Ok(format!("Guidance operation '{}' completed successfully.", op)),
+        _ => Err((
+            -32602,
+            format!(
+                "Invalid guidance operation '{}'. Valid operations: list, search, reindex_skills, reindex, get, docs, workflow, ui_ux, precode, verify, analytics, skill_analytics.",
+                op
+            ),
+        )),
     }
 }

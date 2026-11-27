@@ -1,4 +1,43 @@
 use std::collections::HashSet;
+use crate::catalog::language_detector::contains_word;
+
+const KNOWN_IDE_COMMANDS: &[&str] = &[
+    "generative_ui",
+    "plan",
+    "goal",
+    "compact",
+    "schedule",
+    "grill_me",
+    "learn",
+    "automation",
+    "plugin",
+    "swarm",
+    "mcp",
+    "help",
+    "status",
+    "clear",
+    "reset",
+    "review",
+    "test",
+    "fix",
+    "build",
+    "refactor",
+    "debug",
+    "audit",
+    "verify",
+    "init",
+    "docs",
+    "precode",
+    "ui_ux",
+    "antigravity_guide",
+    "agy_customizations",
+    "ui_plugin_navigation",
+    "migrate_workflows",
+    "migrate_agent_settings",
+    "run_workflow",
+    "conversations",
+    "swarm_monitor",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessedQueryIntent {
@@ -10,13 +49,23 @@ pub struct ProcessedQueryIntent {
 }
 
 pub fn analyze_query_intent(query: &str, known_skill_names: &[String]) -> ProcessedQueryIntent {
-    let (cleaned_query, slash_commands) = strip_slash_commands(query);
+    let (cleaned_query, slash_commands, slash_skills) =
+        strip_slash_commands_with_skills(query, known_skill_names);
     let is_empty_task = cleaned_query.trim().is_empty();
-    let mentioned_skills = if !is_empty_task {
-        detect_mentioned_skills(&cleaned_query, known_skill_names)
-    } else {
-        Vec::new()
-    };
+    let mut mentioned_skills = Vec::new();
+    let mut seen = HashSet::new();
+    for s in slash_skills {
+        if seen.insert(s.clone()) {
+            mentioned_skills.push(s);
+        }
+    }
+    if !is_empty_task {
+        for s in detect_mentioned_skills(&cleaned_query, known_skill_names) {
+            if seen.insert(s.clone()) {
+                mentioned_skills.push(s);
+            }
+        }
+    }
     let is_question = if !is_empty_task {
         is_informational_question(&cleaned_query)
     } else {
@@ -32,10 +81,21 @@ pub fn analyze_query_intent(query: &str, known_skill_names: &[String]) -> Proces
     }
 }
 
+#[cfg(test)]
 pub fn strip_slash_commands(text: &str) -> (String, Vec<String>) {
+    let (cleaned, cmds, _) = strip_slash_commands_with_skills(text, &[]);
+    (cleaned, cmds)
+}
+
+fn strip_slash_commands_with_skills(
+    text: &str,
+    known_skill_names: &[String],
+) -> (String, Vec<String>, Vec<String>) {
     let mut remaining_words = Vec::new();
     let mut slash_commands = Vec::new();
-    let mut seen = HashSet::new();
+    let mut slash_skills = Vec::new();
+    let mut seen_cmds = HashSet::new();
+    let mut seen_skills = HashSet::new();
 
     for token in text.split_whitespace() {
         if let Some(rest) = token.strip_prefix('/') {
@@ -45,50 +105,87 @@ pub fn strip_slash_commands(text: &str) -> (String, Vec<String>) {
                 || trimmed_rest.contains('\\')
                 || trimmed_rest.contains('.');
             if !is_path_like {
-                let cmd_name = trimmed_rest
-                    .trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
-                    .to_lowercase();
-                if !cmd_name.is_empty() {
-                    if seen.insert(cmd_name.clone()) {
-                        slash_commands.push(cmd_name);
+                let raw_cmd = trimmed_rest
+                    .trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+                let norm_cmd = normalize_identifier(raw_cmd);
+                if !norm_cmd.is_empty() {
+                    if KNOWN_IDE_COMMANDS.contains(&norm_cmd.as_str()) {
+                        if seen_cmds.insert(norm_cmd.clone()) {
+                            slash_commands.push(norm_cmd);
+                        }
+                        continue;
                     }
-                    continue;
+                    if let Some(matched_skill) = known_skill_names
+                        .iter()
+                        .find(|s| normalize_identifier(s) == norm_cmd)
+                    {
+                        if seen_skills.insert(matched_skill.clone()) {
+                            slash_skills.push(matched_skill.clone());
+                        }
+                        remaining_words.push(raw_cmd);
+                        continue;
+                    }
                 }
             }
         }
         remaining_words.push(token);
     }
 
-    (remaining_words.join(" "), slash_commands)
+    (remaining_words.join(" "), slash_commands, slash_skills)
 }
 
 pub fn is_tooling_skill(skill_name: &str) -> bool {
     let s = skill_name.to_lowercase();
-    s.contains("git")
-        || s.contains("github")
-        || s.contains("docker")
-        || s.contains("ci")
-        || s.contains("cd")
-        || s.contains("bash")
-        || s.contains("shell")
-        || s.contains("powershell")
-        || s.contains("deploy")
-        || s.contains("release")
-        || s.contains("docs")
+    const TOOLING_KEYWORDS: &[&str] = &[
+        "git",
+        "github",
+        "docker",
+        "ci",
+        "cd",
+        "bash",
+        "shell",
+        "powershell",
+        "deploy",
+        "deployment",
+        "release",
+        "docs",
+    ];
+    TOOLING_KEYWORDS.iter().any(|kw| contains_word(&s, kw))
 }
 
 fn normalize_identifier(name: &str) -> String {
     name.trim().to_lowercase().replace('-', "_")
 }
 
+fn find_identifier_word_pos(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    let is_ident_char = |c: char| c.is_alphanumeric() || c == '_';
+    for (idx, _) in haystack.match_indices(needle) {
+        let before_ok = haystack[..idx]
+            .chars()
+            .next_back()
+            .map(|c| !is_ident_char(c))
+            .unwrap_or(true);
+        let after_ok = haystack[idx + needle.len()..]
+            .chars()
+            .next()
+            .map(|c| !is_ident_char(c))
+            .unwrap_or(true);
+        if before_ok && after_ok {
+            return Some(idx);
+        }
+    }
+    None
+}
+
 pub fn detect_mentioned_skills(text: &str, known_skill_names: &[String]) -> Vec<String> {
-    let mut matched = Vec::new();
+    let mut matched: Vec<(usize, String)> = Vec::new();
     let mut seen = HashSet::new();
 
     const BUILTIN_IDE_SKILLS: &[&str] = &[
         "generative_ui",
-        "automation",
-        "plugin",
         "antigravity_guide",
         "agy_customizations",
         "ui_plugin_navigation",
@@ -103,18 +200,10 @@ pub fn detect_mentioned_skills(text: &str, known_skill_names: &[String]) -> Vec<
         if norm_known.len() < 3 || seen.contains(known) {
             continue;
         }
-
-        let is_found = if normalized_text.contains(&norm_known) {
-            let pattern = format!(r"(?i)\b{}\b", regex::escape(&norm_known));
-            regex::Regex::new(&pattern)
-                .map(|re| re.is_match(&normalized_text))
-                .unwrap_or(false)
-        } else {
-            false
-        };
-
-        if is_found && seen.insert(known.clone()) {
-            matched.push(known.clone());
+        if let Some(pos) = find_identifier_word_pos(&normalized_text, &norm_known) {
+            if seen.insert(known.clone()) {
+                matched.push((pos, known.clone()));
+            }
         }
     }
 
@@ -123,22 +212,15 @@ pub fn detect_mentioned_skills(text: &str, known_skill_names: &[String]) -> Vec<
         if seen.contains(*builtin) {
             continue;
         }
-
-        let is_found = if normalized_text.contains(&norm_known) {
-            let pattern = format!(r"(?i)\b{}\b", regex::escape(&norm_known));
-            regex::Regex::new(&pattern)
-                .map(|re| re.is_match(&normalized_text))
-                .unwrap_or(false)
-        } else {
-            false
-        };
-
-        if is_found && seen.insert(builtin.to_string()) {
-            matched.push(builtin.to_string());
+        if let Some(pos) = find_identifier_word_pos(&normalized_text, &norm_known) {
+            if seen.insert(builtin.to_string()) {
+                matched.push((pos, builtin.to_string()));
+            }
         }
     }
 
-    matched
+    matched.sort_by_key(|(pos, _)| *pos);
+    matched.into_iter().map(|(_, name)| name).collect()
 }
 
 pub fn is_informational_question(text: &str) -> bool {
@@ -151,14 +233,14 @@ pub fn is_informational_question(text: &str) -> bool {
     const QUESTION_PATTERNS: &[&str] = &[
         "how to", "how do", "how can", "how does", "what is", "what are",
         "why is", "why does", "where is", "when to", "who is", "which is",
-        "can i", "is there", "could you", "explain", "compare", "review",
+        "can i", "is there", "explain", "compare",
         "làm sao", "làm thế nào", "thế nào", "là gì", "tại sao", "ở đâu",
         "khi nào", "ai là", "có được không", "được không", "sao lại",
-        "cho hỏi", "giải thích", "so sánh", "đánh giá", "phân tích"
+        "cho hỏi", "giải thích", "so sánh"
     ];
 
     for pat in QUESTION_PATTERNS {
-        if lower.starts_with(pat) || lower.contains(&format!(" {} ", pat)) {
+        if contains_word(&lower, pat) {
             return true;
         }
     }
@@ -229,5 +311,47 @@ mod tests {
         let res = analyze_query_intent("Làm thế nào để index dữ liệu?", &known);
         assert!(res.is_question);
         assert!(res.mentioned_skills.is_empty());
+    }
+
+    #[test]
+    fn test_slash_command_hardening_and_hyphen_normalization() {
+        // Hyphenated /generative-ui normalizes to generative_ui
+        let res = analyze_query_intent("/generative-ui render dashboard", &[]);
+        assert_eq!(res.slash_commands, vec!["generative_ui"]);
+        assert_eq!(res.cleaned_query, "render dashboard");
+
+        // Unknown /health, /login, /tmp are NOT stripped
+        let (cleaned, cmds) = strip_slash_commands("Check /health and /login in /tmp");
+        assert_eq!(cleaned, "Check /health and /login in /tmp");
+        assert!(cmds.is_empty());
+
+        // Known /<skill> is preserved in cleaned_query and boosted in mentioned_skills
+        let known = vec!["sql-safety".to_string(), "agent-guidance".to_string()];
+        let skill_res = analyze_query_intent("/sql-safety fix query", &known);
+        assert_eq!(skill_res.cleaned_query, "sql-safety fix query");
+        assert_eq!(skill_res.mentioned_skills, vec!["sql-safety"]);
+    }
+
+    #[test]
+    fn test_word_boundaries_question_patterns_and_mention_order() {
+        assert!(!is_tooling_skill("pricing-rules"));
+        assert!(!is_tooling_skill("incident-response"));
+        assert!(is_tooling_skill("ci-cd-and-automation"));
+        assert!(is_tooling_skill("git-ops"));
+
+        assert!(!is_informational_question("Could you implement JWT auth"));
+        assert!(!is_informational_question("Review PR security"));
+        assert!(!is_informational_question("Đánh giá hiệu năng API"));
+        assert!(!is_informational_question("Phân tích bug crash"));
+
+        // Generic plugin/automation without slash prefix must not auto-inject
+        assert!(detect_mentioned_skills("write automation tests with plugin", &[]).is_empty());
+
+        // Order of multiple mentioned skills preserved
+        let known = vec!["agent-guidance".to_string(), "sql-safety".to_string()];
+        assert_eq!(
+            detect_mentioned_skills("use sql-safety then agent-guidance", &known),
+            vec!["sql-safety", "agent-guidance"]
+        );
     }
 }

@@ -1,9 +1,62 @@
 use serde_json::Value;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{OnceLock, RwLock};
+use std::time::SystemTime;
 
 use crate::config::current_config;
-use crate::config::project_rules::load_project_rules;
+use crate::config::project_rules::{get_project_rules_path, load_project_rules};
 use crate::config::schema::{ToolRuleItem, ToolRulesConfig};
+
+type CachedRuleEntry = (Option<(SystemTime, u64)>, Option<ToolRulesConfig>);
+static DEFAULT_RULES_CACHE: OnceLock<HashMap<String, ToolRuleItem>> = OnceLock::new();
+static PROJECT_RULES_CACHE: OnceLock<RwLock<HashMap<PathBuf, CachedRuleEntry>>> = OnceLock::new();
+
+fn default_rules_cached() -> &'static HashMap<String, ToolRuleItem> {
+    DEFAULT_RULES_CACHE.get_or_init(ToolRulesConfig::default_rules)
+}
+
+fn load_project_rules_cached(project_path: &Path) -> Option<ToolRulesConfig> {
+    let rules_path = get_project_rules_path(project_path);
+    let stamp = std::fs::metadata(&rules_path)
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|m| (m.modified().unwrap_or(SystemTime::UNIX_EPOCH), m.len()));
+
+    let cache = PROJECT_RULES_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    if let Ok(guard) = cache.read() {
+        if let Some((cached_stamp, cached_cfg)) = guard.get(&rules_path) {
+            if *cached_stamp == stamp {
+                return cached_cfg.clone();
+            }
+        }
+    }
+
+    let loaded = if stamp.is_some() {
+        load_project_rules(project_path)
+    } else {
+        None
+    };
+
+    if let Ok(mut guard) = cache.write() {
+        if guard.len() > 64 {
+            guard.clear();
+        }
+        guard.insert(rules_path, (stamp, loaded.clone()));
+    }
+    loaded
+}
+
+fn should_suppress_micro_rule(existing_text: &str) -> bool {
+    let trimmed = existing_text.trim_start();
+    trimmed.starts_with("# Informational Query Detected")
+        || trimmed.starts_with("# Generative UI Active")
+        || trimmed.starts_with("# Slash Command Detected:")
+        || trimmed.starts_with("# Workflow Stage Status")
+        || trimmed.starts_with("# Workflow Gate: [check]")
+        || trimmed.starts_with("# Workflow Gate: [status]")
+        || trimmed.starts_with("# Skill Selection\n\nNo skills selected.")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleScope {
@@ -36,7 +89,7 @@ pub fn resolve_effective_rule(
     let canonical = normalize_tool_name(tool_name);
     if let Some(path_str) = project_path {
         let p = Path::new(path_str);
-        if let Some(cfg) = load_project_rules(p) {
+        if let Some(cfg) = load_project_rules_cached(p) {
             if let Some(item) = cfg.get_rule(canonical) {
                 return Some((ToolRulesConfig::upgrade_legacy_rule(canonical, item), RuleScope::Project));
             }
@@ -48,8 +101,7 @@ pub fn resolve_effective_rule(
         return Some((ToolRulesConfig::upgrade_legacy_rule(canonical, item), RuleScope::Global));
     }
 
-    let defaults = ToolRulesConfig::default_rules();
-    defaults
+    default_rules_cached()
         .get(canonical)
         .cloned()
         .map(|item| (item, RuleScope::Default))
@@ -82,6 +134,9 @@ pub fn inject_tool_micro_rule(
             if let Some(first_obj) = obj.as_object_mut() {
                 if let Some(text_val) = first_obj.get_mut("text") {
                     if let Some(existing_text) = text_val.as_str() {
+                        if should_suppress_micro_rule(existing_text) {
+                            break;
+                        }
                         let mut updated = existing_text.to_string();
                         updated.push_str(&banner);
                         *text_val = Value::String(updated);
@@ -145,5 +200,44 @@ mod tests {
         let custom = ToolRuleItem::new(true, "My custom project rule");
         let preserved = ToolRulesConfig::upgrade_legacy_rule("project_context", &custom);
         assert_eq!(preserved.rule, "My custom project rule");
+    }
+
+    #[test]
+    fn test_micro_rule_suppression_and_mtime_cache() {
+        let mut qa_val = json!({
+            "content": [{ "type": "text", "text": "# Informational Query Detected for 'x'\n\nAnswer directly." }]
+        });
+        inject_tool_micro_rule("guidance", None, &mut qa_val);
+        assert!(!qa_val["content"][0]["text"].as_str().unwrap().contains("[Rule:"));
+
+        let mut genui_val = json!({
+            "content": [{ "type": "text", "text": "# Generative UI Active: cards\n\nRender HTML." }]
+        });
+        inject_tool_micro_rule("guidance", None, &mut genui_val);
+        assert!(!genui_val["content"][0]["text"].as_str().unwrap().contains("[Rule:"));
+
+        let mut status_val = json!({
+            "content": [{ "type": "text", "text": "# Workflow Stage Status\n\n- Active Stage: Plan" }]
+        });
+        inject_tool_micro_rule("workflow_gate", None, &mut status_val);
+        assert!(!status_val["content"][0]["text"].as_str().unwrap().contains("[Rule:"));
+
+        let tmp = std::env::temp_dir().join(format!("ag_microrule_cache_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let ctx_dir = tmp.join(".agent-context");
+        std::fs::create_dir_all(&ctx_dir).unwrap();
+        let rules_file = ctx_dir.join("tool_rules.toml");
+        std::fs::write(&rules_file, "[rules.guidance]\nenabled = true\nrule = \"Rule v1\"\n").unwrap();
+
+        let (item1, scope1) = resolve_effective_rule("guidance", tmp.to_str()).unwrap();
+        assert_eq!(scope1, RuleScope::Project);
+        assert_eq!(item1.rule, "Rule v1");
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&rules_file, "[rules.guidance]\nenabled = true\nrule = \"Rule v2 updated\"\n").unwrap();
+        let (item2, _) = resolve_effective_rule("guidance", tmp.to_str()).unwrap();
+        assert_eq!(item2.rule, "Rule v2 updated");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

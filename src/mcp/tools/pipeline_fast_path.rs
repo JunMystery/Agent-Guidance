@@ -5,6 +5,12 @@
 use std::path::Path;
 use serde_json::Value;
 
+use crate::catalog::language_detector::contains_word;
+
+fn contains_any_word(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| contains_word(haystack, needle))
+}
+
 pub fn infer_or_normalize_phase(raw_phase: Option<&str>, task: &str) -> String {
     let raw = raw_phase.unwrap_or("").trim().to_lowercase();
     match raw.as_str() {
@@ -17,61 +23,48 @@ pub fn infer_or_normalize_phase(raw_phase: Option<&str>, task: &str) -> String {
     }
 
     let task_lower = task.trim().to_lowercase();
-    if task_lower.contains("plan")
-        || task_lower.contains("kế hoạch")
-        || task_lower.contains("design")
-        || task_lower.contains("thiết kế")
-        || task_lower.contains("architecture")
-        || task_lower.contains("kiến trúc")
-    {
+    if contains_any_word(
+        &task_lower,
+        &["plan", "planning", "kế hoạch", "design", "thiết kế", "architecture", "kiến trúc"],
+    ) {
         return "plan".to_string();
     }
 
-    if task_lower.contains("fix")
-        || task_lower.contains("bug")
-        || task_lower.contains("crash")
-        || task_lower.contains("sửa lỗi")
-        || task_lower.contains("khắc phục")
-        || task_lower.contains("vấn đề")
-        || task_lower.contains("error")
-        || task_lower.contains("issue")
-    {
+    if contains_any_word(
+        &task_lower,
+        &[
+            "fix", "fixed", "fixing", "bug", "bugs", "bugfix", "crash",
+            "sửa lỗi", "khắc phục", "vấn đề", "error", "errors", "issue", "issues",
+        ],
+    ) {
         return "fix".to_string();
     }
 
-    if task_lower.contains("test")
-        || task_lower.contains("kiểm thử")
-        || task_lower.contains("verify")
-        || task_lower.contains("assert")
-        || task_lower.contains("kiem thu")
-    {
+    if contains_any_word(
+        &task_lower,
+        &["test", "tests", "testing", "kiểm thử", "verify", "assert", "kiem thu"],
+    ) {
         return "test".to_string();
     }
 
-    if task_lower.contains("review")
-        || task_lower.contains("audit")
-        || task_lower.contains("đánh giá")
-        || task_lower.contains("soát code")
-        || task_lower.contains("soát lỗi")
-    {
+    if contains_any_word(
+        &task_lower,
+        &["review", "audit", "đánh giá", "soát code", "soát lỗi"],
+    ) {
         return "review".to_string();
     }
 
-    if task_lower.contains("refactor")
-        || task_lower.contains("tách file")
-        || task_lower.contains("decompose")
-        || task_lower.contains("clean up")
-        || task_lower.contains("tối ưu")
-        || task_lower.contains("tái cấu trúc")
-    {
+    if contains_any_word(
+        &task_lower,
+        &["refactor", "refactoring", "tách file", "decompose", "clean up", "cleanup", "tối ưu", "tái cấu trúc"],
+    ) {
         return "refactor".to_string();
     }
 
-    if task_lower.contains("build")
-        || task_lower.contains("implement")
-        || task_lower.contains("triển khai")
-        || task_lower.contains("phát triển")
-    {
+    if contains_any_word(
+        &task_lower,
+        &["build", "implement", "triển khai", "phát triển"],
+    ) {
         return "build".to_string();
     }
 
@@ -84,6 +77,11 @@ pub fn infer_or_normalize_phase(raw_phase: Option<&str>, task: &str) -> String {
 
 /// Detects whether a task qualifies for Minor Task Fast-Path Exemption.
 pub fn is_minor_task(task: &str, arguments: &Value) -> bool {
+    let norm_task = task.trim().to_lowercase().replace('-', "_");
+    if contains_word(&norm_task, "generative_ui") {
+        return false;
+    }
+
     // 1. Explicit argument flag
     if arguments
         .get("is_minor")
@@ -102,31 +100,25 @@ pub fn is_minor_task(task: &str, arguments: &Value) -> bool {
 
     // 2. Negative guardrails: major/architectural changes can never be fast-path
     let negative_keywords = [
-        "refactor", "redesign", "rewrite", "migrate", "migration",
-        "architecture", "breaking change", "schema change", "database",
-        "security audit", "performance overhaul", "re-architect",
+        "refactor", "refactoring", "redesign", "rewrite", "rewriting",
+        "migrate", "migration", "migrating", "architecture", "architectural",
+        "breaking change", "schema change", "database", "security audit",
+        "performance overhaul", "re-architect",
     ];
-    for neg in negative_keywords {
-        if t.contains(neg) {
-            return false;
-        }
+    if contains_any_word(&t, &negative_keywords) {
+        return false;
     }
 
     // 3. Positive keyword heuristics (multilingual EN + VI)
     let positive_keywords = [
         "typo", "spelling", "fix spelling", "fix comment", "update comment",
-        "update docs", "update readme", "fix doc", "fix docs", "documentation",
+        "update docs", "update readme", "fix doc", "fix docs",
+        "update documentation", "fix documentation", "edit documentation",
         "changelog", "rename variable", "fix grammar", "clean comment",
         "sửa lỗi chính tả", "cập nhật docs", "cập nhật tài liệu", "sửa comment",
         "sửa chú thích", "sửa readme", "sửa typo", "chỉnh tài liệu",
     ];
-    for pos in positive_keywords {
-        if t.contains(pos) {
-            return true;
-        }
-    }
-
-    false
+    contains_any_word(&t, &positive_keywords)
 }
 
 /// Generates the concise, actionable fast-path activation response.

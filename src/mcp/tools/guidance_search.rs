@@ -1,10 +1,11 @@
 use serde_json::Value;
 
+use crate::catalog::language_detector::contains_word;
 use crate::catalog::store::{SkillSource, load_all_skills};
 use crate::config::current_config;
 use crate::mcp::state::ServerState;
 use super::guidance_format::{extract_description, format_search_output};
-use super::guidance_intent::analyze_query_intent;
+use super::guidance_intent::{analyze_query_intent, is_tooling_skill};
 use super::helpers::{detect_project_path, ensure_not_cancelled, truncate_chars};
 
 pub(crate) fn handle_list(arguments: &Value, state: &mut ServerState) -> Result<String, (i32, String)> {
@@ -13,14 +14,50 @@ pub(crate) fn handle_list(arguments: &Value, state: &mut ServerState) -> Result<
         .and_then(|p| p.as_str())
         .unwrap_or(".");
     let proj_path = detect_project_path(proj_path_arg, state);
+    let topic_filter = arguments
+        .get("topic")
+        .or_else(|| arguments.get("query"))
+        .or_else(|| arguments.get("filter"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase());
+    let limit = arguments
+        .get("limit")
+        .or_else(|| arguments.get("max_results"))
+        .and_then(|v| v.as_u64())
+        .map(|n| (n as usize).clamp(1, 500))
+        .unwrap_or(50);
+
     let skills = load_all_skills(&proj_path);
-    let names: Vec<String> = skills
+    let filtered: Vec<_> = skills
         .iter()
+        .filter(|s| match &topic_filter {
+            Some(topic) => {
+                s.name.to_lowercase().contains(topic)
+                    || s.relative_path.to_lowercase().contains(topic)
+            }
+            None => true,
+        })
+        .collect();
+    let total_matching = filtered.len();
+    let names: Vec<String> = filtered
+        .into_iter()
+        .take(limit)
         .map(|s| format!("- {} ({})", s.name, s.relative_path))
         .collect();
+    let header_note = if names.len() < total_matching {
+        format!(
+            "showing {} of {}; pass `limit` or `topic` to filter",
+            names.len(),
+            total_matching
+        )
+    } else {
+        total_matching.to_string()
+    };
     Ok(format!(
         "# Registered Skills Catalog ({})\n\n{}",
-        names.len(),
+        header_note,
         names.join("\n")
     ))
 }
@@ -42,6 +79,11 @@ pub(crate) fn handle_search(
     let workflow_arg = arguments.get("workflow").and_then(|v| v.as_str()).unwrap_or("");
     let tech_stack_arg = arguments.get("tech_stack").and_then(|v| v.as_str()).unwrap_or("");
     let files_arg = arguments.get("files").or_else(|| arguments.get("related_files"));
+    let max_results = arguments
+        .get("max_results")
+        .and_then(|v| v.as_u64())
+        .map(|n| (n as usize).clamp(1, 20))
+        .unwrap_or(6);
 
     let primary_prompt = if !query.trim().is_empty() {
         query.trim()
@@ -55,35 +97,20 @@ pub(crate) fn handle_search(
         "general programming guidance"
     };
 
-    let mut query_parts = vec![primary_prompt.to_string()];
-    if !workflow_arg.trim().is_empty() && !primary_prompt.contains(workflow_arg) {
-        query_parts.push(workflow_arg.trim().to_string());
-    }
-    if !tech_stack_arg.trim().is_empty() && !primary_prompt.contains(tech_stack_arg) {
-        query_parts.push(tech_stack_arg.trim().to_string());
-    }
-    if let Some(files) = files_arg {
-        let f_str = if let Some(arr) = files.as_array() {
-            arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" ")
-        } else if let Some(s) = files.as_str() {
-            s.to_string()
-        } else {
-            String::new()
-        };
-        if !f_str.is_empty() {
-            query_parts.push(f_str);
-        }
-    }
-
     // Collect recent task and work context (Multi-tier context)
     let mut recent_context_items = Vec::new();
     if let Some(active) = &state.active_task {
-        if active.as_str() != primary_prompt {
+        if !active.trim().eq_ignore_ascii_case(primary_prompt) {
             recent_context_items.push(format!("Active: {}", active));
         }
     }
     for t in &state.recent_tasks {
-        if t.as_str() != primary_prompt && !recent_context_items.iter().any(|item| item.contains(t)) {
+        let t_lower = t.to_lowercase();
+        if !t.trim().eq_ignore_ascii_case(primary_prompt)
+            && !recent_context_items
+                .iter()
+                .any(|item| item.to_lowercase().contains(&t_lower))
+        {
             recent_context_items.push(t.clone());
         }
     }
@@ -106,16 +133,12 @@ pub(crate) fn handle_search(
     let all_skills = load_all_skills(&proj_path);
     let skill_names: Vec<String> = all_skills.iter().map(|s| s.name.clone()).collect();
 
-    let raw_search_query = if query_parts.is_empty() {
-        "general programming guidance".to_string()
-    } else {
-        query_parts.join(" ")
-    };
-
-    let intent = analyze_query_intent(&raw_search_query, &skill_names);
+    // Analyze intent strictly on primary_prompt BEFORE appending files/tech_stack
+    let intent = analyze_query_intent(primary_prompt, &skill_names);
+    let norm_prompt = primary_prompt.to_lowercase().replace('-', "_");
     let is_gen_ui = intent.slash_commands.iter().any(|c| c == "generative_ui")
         || intent.mentioned_skills.iter().any(|s| s == "generative_ui")
-        || raw_search_query.to_lowercase().contains("generative_ui");
+        || contains_word(&norm_prompt, "generative_ui");
 
     if intent.is_empty_task {
         state.pending_skill_proposals.clear();
@@ -148,18 +171,62 @@ pub(crate) fn handle_search(
         ));
     }
 
-    let search_query = intent.cleaned_query;
+    let mut search_parts = vec![intent.cleaned_query.clone()];
+    let cleaned_lower = intent.cleaned_query.to_lowercase();
+    if !workflow_arg.trim().is_empty() && !cleaned_lower.contains(&workflow_arg.trim().to_lowercase()) {
+        search_parts.push(workflow_arg.trim().to_string());
+    }
+    if !tech_stack_arg.trim().is_empty() && !cleaned_lower.contains(&tech_stack_arg.trim().to_lowercase()) {
+        search_parts.push(tech_stack_arg.trim().to_string());
+    }
+    if let Some(files) = files_arg {
+        let f_str = if let Some(arr) = files.as_array() {
+            arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(" ")
+        } else if let Some(s) = files.as_str() {
+            s.to_string()
+        } else {
+            String::new()
+        };
+        if !f_str.is_empty() {
+            search_parts.push(f_str);
+        }
+    }
+    let search_query = search_parts.join(" ");
 
     let cfg = current_config();
     if cfg.server.is_remote() {
         let client = crate::client::default_client();
-        match client.search_skills(&search_query, 6) {
+        match client.search_skills(&search_query, max_results) {
             Ok(remote_res) => {
+                let mut seen_remote = std::collections::HashSet::new();
+                let mut mentioned_bucket = Vec::new();
+                let mut domain_bucket = Vec::new();
+                let mut tooling_bucket = Vec::new();
+
+                for item in remote_res.skills {
+                    let is_mentioned = intent.mentioned_skills.contains(&item.name);
+                    if (!is_mentioned && item.score < 0.65) || !seen_remote.insert(item.name.clone()) {
+                        continue;
+                    }
+                    if let Some(m_idx) = intent.mentioned_skills.iter().position(|m| m == &item.name) {
+                        mentioned_bucket.push((m_idx, item));
+                    } else if is_tooling_skill(&item.name) {
+                        tooling_bucket.push(item);
+                    } else {
+                        domain_bucket.push(item);
+                    }
+                }
+                mentioned_bucket.sort_by_key(|(m_idx, _)| *m_idx);
+                let mut tiered_remote: Vec<_> = mentioned_bucket.into_iter().map(|(_, item)| item).collect();
+                tiered_remote.extend(domain_bucket);
+                tiered_remote.extend(tooling_bucket);
+                tiered_remote.truncate(max_results);
+
                 let mut options = Vec::new();
                 let mut proposals = Vec::new();
                 let mut formatted = Vec::new();
 
-                for item in remote_res.skills {
+                for (idx, item) in tiered_remote.into_iter().enumerate() {
                     let desc = if !item.summary.is_empty() {
                         item.summary
                     } else if !item.intent.is_empty() {
@@ -173,10 +240,12 @@ pub(crate) fn handle_search(
                     } else {
                         desc
                     };
-                    let opt_label = if intent.mentioned_skills.contains(&item.name) {
-                        format!("(Recommended) {} - {}", item.name, short_desc)
+                    let is_mentioned = intent.mentioned_skills.contains(&item.name);
+                    let prefix = if is_mentioned || idx == 0 { "(Recommended) " } else { "" };
+                    let opt_label = if short_desc.is_empty() {
+                        format!("{}{}", prefix, item.name)
                     } else {
-                        format!("{} - {}", item.name, short_desc)
+                        format!("{}{} - {}", prefix, item.name, short_desc)
                     };
                     options.push(opt_label);
                     proposals.push((item.name.clone(), format!("remote://skills/{}", item.name), item.score));
@@ -187,7 +256,7 @@ pub(crate) fn handle_search(
                 }
 
                 state.pending_skill_proposals = proposals;
-                return format_search_output(&search_query, context_note, &formatted, &options, "Remote ML Worker (In-Memory AGV1)", is_gen_ui);
+                return format_search_output(&search_query, context_note, &formatted, &options, "Remote ML Worker (In-Memory AGV1)");
             }
             Err(e) => {
                 tracing::warn!("Remote skill search failed: {}; attempting fallback", e);
@@ -206,7 +275,7 @@ pub(crate) fn handle_search(
     let tiered_results = super::guidance_search_stages::tier_skill_results(
         ranked_results,
         &intent.mentioned_skills,
-        6,
+        max_results,
     );
 
     state.pending_skill_proposals = tiered_results
@@ -227,7 +296,7 @@ pub(crate) fn handle_search(
             if short_desc.is_empty() {
                 format!("{}{}", prefix, item.name)
             } else {
-                format!("{}{}{}", prefix, item.name, format!(" - {}", short_desc))
+                format!("{}{} - {}", prefix, item.name, short_desc)
             }
         })
         .collect();
@@ -246,5 +315,5 @@ pub(crate) fn handle_search(
         })
         .collect();
 
-    format_search_output(&search_query, context_note, &formatted_results, &options, "Two-Stage Tiered Hybrid Vector & Cross-Encoder", is_gen_ui)
+    format_search_output(&search_query, context_note, &formatted_results, &options, "Two-Stage Tiered Hybrid Vector & Cross-Encoder")
 }

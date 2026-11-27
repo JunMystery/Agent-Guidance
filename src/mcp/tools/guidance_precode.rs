@@ -1,44 +1,97 @@
+use std::path::Path;
 use serde_json::Value;
 
-use crate::catalog::language_detector::detect_language_fast;
+use crate::catalog::language_detector::{contains_word, detect_language_fast};
 use crate::mcp::state::ServerState;
 use super::helpers::{detect_project_architecture, detect_project_path};
 
-pub(crate) fn handle_precode(
-    arguments: &Value,
-    query: &str,
-    state: &mut ServerState,
-) -> String {
-    let proj_path_arg = arguments
-        .get("project_path")
-        .and_then(|p| p.as_str())
-        .unwrap_or(".");
-    let proj_path = detect_project_path(proj_path_arg, state);
-    let profile = detect_language_fast(&proj_path, query);
-    let active_arch = state
-        .active_architecture_pattern
-        .clone()
-        .unwrap_or_else(|| detect_project_architecture(&proj_path));
-
-    let primary_lang = if profile.primary_languages.contains("rust") {
-        "Rust"
-    } else if profile.primary_languages.contains("kotlin")
-        || profile.primary_languages.contains("java")
-    {
-        "Kotlin/Java"
-    } else if profile.primary_languages.contains("go") {
-        "Go"
-    } else if profile.primary_languages.contains("python") {
-        "Python"
-    } else if profile.primary_languages.contains("typescript")
-        || profile.primary_languages.contains("javascript")
-    {
-        "TypeScript/JavaScript"
-    } else {
-        "General"
+fn detect_target_languages(arguments: &Value, query: &str) -> Vec<&'static str> {
+    let mut langs: Vec<&'static str> = Vec::new();
+    let mut push_lang = |lang: &'static str| {
+        if !langs.contains(&lang) {
+            langs.push(lang);
+        }
     };
 
-    let (lang_rules, linter_hint) = match primary_lang {
+    let files_val = arguments
+        .get("files")
+        .or_else(|| arguments.get("relative_paths"))
+        .or_else(|| arguments.get("relative_path"))
+        .or_else(|| arguments.get("file_path"));
+
+    let mut file_strs: Vec<String> = Vec::new();
+    if let Some(arr) = files_val.and_then(|v| v.as_array()) {
+        for item in arr {
+            if let Some(s) = item.as_str() {
+                file_strs.push(s.to_string());
+            }
+        }
+    } else if let Some(s) = files_val.and_then(|v| v.as_str()) {
+        file_strs.push(s.to_string());
+    }
+
+    for f in &file_strs {
+        let ext = Path::new(f.trim())
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match ext.as_str() {
+            "rs" => push_lang("Rust"),
+            "kt" | "kts" | "java" => push_lang("Kotlin/Java"),
+            "go" => push_lang("Go"),
+            "py" | "pyw" => push_lang("Python"),
+            "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => push_lang("TypeScript/JavaScript"),
+            _ => {}
+        }
+    }
+
+    let framework_str = arguments
+        .get("framework")
+        .or_else(|| arguments.get("tech_stack"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let hint_text = format!("{} {}", query, framework_str).to_lowercase();
+
+    for kw in ["rust", "cargo", "axum", "actix", "tokio"] {
+        if contains_word(&hint_text, kw) {
+            push_lang("Rust");
+            break;
+        }
+    }
+    for kw in ["kotlin", "java", "android", "compose", "spring", "springboot", "gradle"] {
+        if contains_word(&hint_text, kw) {
+            push_lang("Kotlin/Java");
+            break;
+        }
+    }
+    for kw in ["go", "golang", "gin", "echo", "fiber"] {
+        if contains_word(&hint_text, kw) {
+            push_lang("Go");
+            break;
+        }
+    }
+    for kw in ["python", "django", "fastapi", "flask", "pytest", "pytorch"] {
+        if contains_word(&hint_text, kw) {
+            push_lang("Python");
+            break;
+        }
+    }
+    for kw in [
+        "typescript", "javascript", "react", "vue", "angular", "svelte", "next", "nextjs",
+        "node", "nodejs", "vite", "tailwind",
+    ] {
+        if contains_word(&hint_text, kw) {
+            push_lang("TypeScript/JavaScript");
+            break;
+        }
+    }
+
+    langs
+}
+
+fn lang_rules_and_linter(lang: &str) -> (&'static str, &'static str) {
+    match lang {
         "Rust" => (
             "- Rust Safety: Explicit lifetime/borrowing checks, handle Result/Option cleanly, avoid unwrap() in production paths.",
             "cargo clippy --all-targets",
@@ -63,7 +116,59 @@ pub(crate) fn handle_precode(
             "- Language Safety: Verify non-null objects before dereferencing, enforce explicit error handling.",
             "language static linter",
         ),
-    };
+    }
+}
+
+pub(crate) fn handle_precode(
+    arguments: &Value,
+    query: &str,
+    state: &mut ServerState,
+) -> String {
+    let proj_path_arg = arguments
+        .get("project_path")
+        .and_then(|p| p.as_str())
+        .unwrap_or(".");
+    let proj_path = detect_project_path(proj_path_arg, state);
+    let active_arch = state
+        .active_architecture_pattern
+        .clone()
+        .unwrap_or_else(|| detect_project_architecture(&proj_path));
+
+    let mut target_langs = detect_target_languages(arguments, query);
+    if target_langs.is_empty() {
+        let profile = detect_language_fast(&proj_path, query);
+        if profile.primary_languages.contains("rust") {
+            target_langs.push("Rust");
+        }
+        if profile.primary_languages.contains("kotlin") || profile.primary_languages.contains("java") {
+            target_langs.push("Kotlin/Java");
+        }
+        if profile.primary_languages.contains("go") {
+            target_langs.push("Go");
+        }
+        if profile.primary_languages.contains("python") {
+            target_langs.push("Python");
+        }
+        if profile.primary_languages.contains("typescript") || profile.primary_languages.contains("javascript") {
+            target_langs.push("TypeScript/JavaScript");
+        }
+    }
+    if target_langs.is_empty() {
+        target_langs.push("General");
+    }
+
+    let primary_lang = target_langs.join(" + ");
+    let mut rules_vec = Vec::new();
+    let mut linters_vec = Vec::new();
+    for lang in &target_langs {
+        let (rules, linter) = lang_rules_and_linter(lang);
+        rules_vec.push(rules);
+        if !linters_vec.contains(&linter) {
+            linters_vec.push(linter);
+        }
+    }
+    let lang_rules = rules_vec.join("\n   ");
+    let linter_hint = linters_vec.join(" ; ");
 
     let arch_blueprint = match active_arch.as_str() {
         "Clean_Architecture" => {

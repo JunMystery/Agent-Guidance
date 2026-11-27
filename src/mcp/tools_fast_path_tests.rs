@@ -28,6 +28,54 @@ mod tests {
         assert_eq!(state.workflow_stage, "Build");
         assert!(state.plan_approved);
         assert!(state.is_fast_path);
+        assert!(!state.edit_authorized, "Fast-path without target file must not grant global edit_authorized");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_fast_path_avoids_false_positives_and_skips_gen_ui() {
+        use crate::mcp::tools::pipeline_fast_path::is_minor_task;
+        assert!(!is_minor_task("Fix docker container networking", &json!({})));
+        assert!(!is_minor_task("Build automated API documentation generator", &json!({})));
+        assert!(!is_minor_task("/generative_ui fix typo in README.md", &json!({"is_minor": true})));
+
+        let temp_dir = std::env::temp_dir().join(format!("ag_fast_genui_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::create_dir_all(&temp_dir);
+        fs::write(temp_dir.join("README.md"), "# Readme\n").unwrap();
+
+        let mut state = ServerState::new();
+        state.workspace_roots = vec![temp_dir.to_string_lossy().to_string()];
+
+        // /generative_ui must NOT fast-path even with typo keyword
+        let res = handle_tool_call(
+            "task_pipeline",
+            json!({
+                "task": "/generative_ui fix typo in widget",
+                "project_path": temp_dir.to_string_lossy().to_string()
+            }),
+            &mut state,
+        )
+        .unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains("Minor Task Fast-Path Exemption"));
+        assert!(!state.is_fast_path);
+
+        // Targeted file on fast-path authorizes only that file
+        let res_targeted = handle_tool_call(
+            "task_pipeline",
+            json!({
+                "task": "Fix typo in README.md",
+                "relative_path": "README.md",
+                "project_path": temp_dir.to_string_lossy().to_string()
+            }),
+            &mut state,
+        )
+        .unwrap();
+        assert!(res_targeted["content"][0]["text"].as_str().unwrap().contains("Minor Task Fast-Path Exemption"));
+        assert!(state.edit_authorized);
+        assert_eq!(state.fast_path_files, vec!["README.md"]);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
