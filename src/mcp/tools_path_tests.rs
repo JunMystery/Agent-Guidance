@@ -54,6 +54,7 @@ fn test_validate_path_blocks_outside_and_traversal() {
     #[cfg(not(windows))]
     {
         assert!(validate_path(base, "/etc/passwd").is_err());
+        assert!(validate_path(base, "/tmp/definitely_nonexistent_outside_ag/secret.rs").is_err());
     }
 }
 

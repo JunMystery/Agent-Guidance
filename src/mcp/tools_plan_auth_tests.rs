@@ -57,6 +57,10 @@ Some overview text here with false alarms like `cargo test` and `v2.0.0`.
     let _ = fs::remove_dir_all(&temp);
 }
 
+fn canonical_path(p: &Path) -> PathBuf {
+    fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
 #[test]
 fn test_plan_artifact_discovery_multitier() {
     let temp = create_temp_dir();
@@ -69,13 +73,13 @@ fn test_plan_artifact_discovery_multitier() {
     let custom_file = proj.join("custom_plan.md");
     fs::write(&custom_file, "# Custom").unwrap();
     let found = find_plan_artifact(proj, Some("custom_plan.md"), None);
-    assert_eq!(found, Some(custom_file));
+    assert_eq!(found.as_deref().map(canonical_path), Some(canonical_path(&custom_file)));
 
     // 3. Fallback to workspace implementation_plan.md
     let ws_plan = proj.join("implementation_plan.md");
     fs::write(&ws_plan, "# Workspace Plan").unwrap();
     let found_ws = find_plan_artifact(proj, None, None);
-    assert_eq!(found_ws, Some(ws_plan));
+    assert_eq!(found_ws.as_deref().map(canonical_path), Some(canonical_path(&ws_plan)));
 
     // 4. Fallback to .agent-context
     let ctx_dir = proj.join(".agent-context");
@@ -84,7 +88,7 @@ fn test_plan_artifact_discovery_multitier() {
     fs::write(&ctx_plan, "# Context Plan").unwrap();
     fs::remove_file(proj.join("implementation_plan.md")).unwrap();
     let found_ctx = find_plan_artifact(proj, None, None);
-    assert_eq!(found_ctx, Some(ctx_plan));
+    assert_eq!(found_ctx.as_deref().map(canonical_path), Some(canonical_path(&ctx_plan)));
 
     // 5. Fallback to brain dir when workspace has no plans
     fs::remove_file(ctx_dir.join("implementation_plan.md")).unwrap();
@@ -97,7 +101,7 @@ fn test_plan_artifact_discovery_multitier() {
         std::env::set_var("AGY_BRAIN_DIR", &brain_dir);
     }
     let found_brain = find_plan_artifact(proj, None, Some("sess_xyz"));
-    assert_eq!(found_brain, Some(brain_plan));
+    assert_eq!(found_brain.as_deref().map(canonical_path), Some(canonical_path(&brain_plan)));
     unsafe {
         std::env::remove_var("AGY_BRAIN_DIR");
     }

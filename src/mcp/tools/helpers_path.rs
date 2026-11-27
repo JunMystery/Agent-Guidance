@@ -192,6 +192,46 @@ pub fn validate_path(base_path: &Path, rel_path: &str) -> Result<PathBuf, String
     validate_path_scoped(base_path, rel_path, false)
 }
 
+fn strip_absolute_or_leading_prefix(
+    base_path: &Path,
+    canonical_base: &Path,
+    p_clean_base: &Path,
+    rel_path: &str,
+) -> Result<String, String> {
+    let p_rel = Path::new(rel_path);
+    if !p_rel.is_absolute() {
+        return Ok(rel_path.to_string());
+    }
+    if let Ok(sub) = p_rel
+        .strip_prefix(base_path)
+        .or_else(|_| p_rel.strip_prefix(canonical_base))
+        .or_else(|_| p_rel.strip_prefix(p_clean_base))
+    {
+        return Ok(sub.to_string_lossy().to_string());
+    }
+    if let Ok(can_rel) = p_rel.canonicalize() {
+        return can_rel
+            .strip_prefix(canonical_base)
+            .map(|sub| sub.to_string_lossy().to_string())
+            .map_err(|_| "Target path resolves outside workspace root.".to_string());
+    }
+    // On Unix, virtual workspace-root paths like "/Cargo.toml" look absolute due to leading '/'.
+    let candidate = rel_path.trim().trim_start_matches(['/', '\\']).replace('\\', "/");
+    let has_drive = candidate.as_bytes().get(1) == Some(&b':');
+    let joined = canonical_base.join(&candidate);
+    if !has_drive
+        && !candidate.is_empty()
+        && joined.exists()
+        && joined
+            .canonicalize()
+            .map(|p| p.starts_with(canonical_base))
+            .unwrap_or(false)
+    {
+        return Ok(candidate);
+    }
+    Err("Target path resolves outside workspace root.".to_string())
+}
+
 pub fn validate_path_scoped(base_path: &Path, rel_path: &str, allow_cross_workspace: bool) -> Result<PathBuf, String> {
     if rel_path.contains("..") {
         return Err("Path traversal (..) is strictly prohibited.".to_string());
@@ -213,21 +253,7 @@ pub fn validate_path_scoped(base_path: &Path, rel_path: &str, allow_cross_worksp
     let clean_base_str = clean_base.strip_prefix(r"\\?\").unwrap_or(&clean_base);
     let p_clean_base = Path::new(clean_base_str);
 
-    let stripped = if p_rel.is_absolute() {
-        if let Ok(sub) = p_rel.strip_prefix(base_path).or_else(|_| p_rel.strip_prefix(&canonical_base)).or_else(|_| p_rel.strip_prefix(p_clean_base)) {
-            sub.to_string_lossy().to_string()
-        } else if let Ok(can_rel) = p_rel.canonicalize() {
-            if let Ok(sub) = can_rel.strip_prefix(&canonical_base) {
-                sub.to_string_lossy().to_string()
-            } else {
-                return Err("Target path resolves outside workspace root.".to_string());
-            }
-        } else {
-            return Err("Target path resolves outside workspace root.".to_string());
-        }
-    } else {
-        rel_path.to_string()
-    };
+    let stripped = strip_absolute_or_leading_prefix(base_path, &canonical_base, p_clean_base, rel_path)?;
 
     let clean_rel = stripped
         .trim()
