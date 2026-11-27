@@ -3,6 +3,10 @@ use std::path::Path;
 /// Checks whether a new file name or justification suggests cross-domain bundling,
 /// returning a soft domain/feature cohesion advisory instead of a hard block.
 pub(crate) fn validate_new_file_modularity(rel_path: &str, justification: &str) -> Option<String> {
+    if crate::context::ast::metrics::is_test_file_path(rel_path) {
+        return None;
+    }
+
     let file_path = Path::new(rel_path);
     let file_name = file_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let file_stem = file_path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
@@ -20,13 +24,14 @@ pub(crate) fn validate_new_file_modularity(rel_path: &str, justification: &str) 
     ];
 
     for suffix in compound_suffixes {
-        if clean_stem == suffix || clean_stem.ends_with(&format!("_{}", suffix)) || clean_stem.ends_with(suffix) {
-            if clean_stem.len() > suffix.len() + 1 {
-                return Some(format!(
-                    "**DOMAIN_COHESION_ADVISORY**: New file `{}` (`{}`) uses container suffix `*{}`. Verify it serves ONE cohesive domain/use case (e.g., `orders/` or `auth/`) rather than bundling unrelated utilities across modules.",
-                    rel_path, file_name, suffix
-                ));
-            }
+        if clean_stem == suffix
+            || clean_stem.ends_with(&format!("_{}", suffix))
+            || (clean_stem.len() > suffix.len() && clean_stem.ends_with(suffix))
+        {
+            return Some(format!(
+                "**DOMAIN_COHESION_ADVISORY**: New file `{}` (`{}`) uses container suffix `*{}`. Verify it serves ONE cohesive domain/use case (e.g., `orders/` or `auth/`) rather than bundling unrelated utilities across modules.",
+                rel_path, file_name, suffix
+            ));
         }
     }
 
@@ -90,5 +95,19 @@ mod tests {
         );
         assert!(res.is_some());
         assert!(res.unwrap().contains("DOMAIN_COHESION_ADVISORY"));
+    }
+
+    #[test]
+    fn test_advises_on_exact_plural_stem_and_excludes_test_files() {
+        let adv = validate_new_file_modularity("src/utils.rs", "Shared helpers");
+        assert!(adv.is_some());
+        assert!(adv.unwrap().contains("DOMAIN_COHESION_ADVISORY"));
+
+        assert!(validate_new_file_modularity("src/helpers.rs", "Helpers").is_some());
+        assert!(validate_new_file_modularity("tests/test_helpers.rs", "Test helpers").is_none());
+        assert!(
+            validate_new_file_modularity("tests/integration_utils.rs", "Add modal and service helpers")
+                .is_none()
+        );
     }
 }

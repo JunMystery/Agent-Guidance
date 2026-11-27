@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::mcp::state::ServerState;
 use super::gate_edit::is_exempt_from_loc_limit;
-use super::helpers::resolve_architecture_pattern;
+use super::helpers::{is_valid_architecture_pattern, resolve_architecture_pattern};
 
 pub(crate) fn count_file_lines(path: &Path) -> usize {
     if let Ok(file) = std::fs::File::open(path) {
@@ -73,15 +73,6 @@ pub(crate) fn check_proposal_exit_gates(
         return Ok(String::new());
     }
 
-    if state.verification_command.is_some() && !state.verification_passed {
-        return Err(format!(
-            "# Workflow Gate: [{}]\n\nStatus: BLOCKED (VERIFICATION_NOT_PASSED)\n\nVerification contract (`{}`) has not been confirmed as passing. Run verification and call `workflow_gate(action=\"pass_verification\")` before advancing to `{}`.",
-            action,
-            state.verification_command.as_deref().unwrap_or(""),
-            target_stage
-        ));
-    }
-
     let (safety_blockers, safety_advisories) = collect_post_edit_safety_findings(proj_path, state);
     if !safety_blockers.is_empty() {
         return Err(format!(
@@ -89,6 +80,24 @@ pub(crate) fn check_proposal_exit_gates(
             action,
             target_stage,
             safety_blockers.join("\n")
+        ));
+    }
+
+    let has_code_edits = state
+        .modified_files
+        .iter()
+        .any(|f| !is_exempt_from_loc_limit(f));
+    if (state.verification_command.is_some() || has_code_edits) && !state.verification_passed {
+        let cmd_desc = state
+            .verification_command
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("modified non-exempt code files");
+        return Err(format!(
+            "# Workflow Gate: [{}]\n\nStatus: BLOCKED (VERIFICATION_NOT_PASSED)\n\nVerification contract (`{}`) has not been confirmed as passing. Run verification and call `workflow_gate(action=\"pass_verification\")` before advancing to `{}`.",
+            action,
+            cmd_desc,
+            target_stage
         ));
     }
 
@@ -120,7 +129,7 @@ pub(crate) fn handle_set_stage(
             Ok(adv) => adv,
             Err(blocked_msg) => return blocked_msg,
         };
-        if target.eq_ignore_ascii_case("build") && inline_approved {
+        if matches!(target.trim().to_ascii_lowercase().as_str(), "build" | "fix") && inline_approved {
             state.approve_plan();
         }
         match state.set_stage(target) {
@@ -152,6 +161,7 @@ pub(crate) fn handle_advance(
 ) -> String {
     let target_stage = arguments
         .get("target_stage")
+        .or_else(|| arguments.get("stage"))
         .and_then(|t| t.as_str())
         .unwrap_or("Build");
 
@@ -160,6 +170,7 @@ pub(crate) fn handle_advance(
         Err(blocked_msg) => return blocked_msg,
     };
 
+    let has_explicit_arch = arguments.get("architecture_pattern").is_some();
     let raw_arch = arguments
         .get("architecture_pattern")
         .and_then(|a| a.as_str())
@@ -169,15 +180,35 @@ pub(crate) fn handle_advance(
         .and_then(|r| r.as_str())
         .unwrap_or("LOW");
     let arch_pattern = resolve_architecture_pattern(raw_arch, proj_path, state);
-    let paths = super::gate_edit::extract_target_paths(arguments);
+
+    let norm_target = target_stage.trim().to_ascii_lowercase();
+    let will_be_edit_stage = matches!(norm_target.as_str(), "build" | "fix");
+
+    let mut paths = super::gate_edit::extract_target_paths(arguments);
+    if will_be_edit_stage {
+        for dp in &state.deferred_authorized_paths {
+            if !paths.contains(dp) {
+                paths.push(dp.clone());
+            }
+        }
+    }
+
+    if (has_explicit_arch || (will_be_edit_stage && !paths.is_empty()))
+        && !is_valid_architecture_pattern(&arch_pattern)
+    {
+        return format!(
+            "# Workflow Gate: [advance]\n\nStatus: BLOCKED (ARCHITECTURE_GATE_BLOCKED)\n- Declared Architecture: '{}'\n\nError: ARCHITECTURE_GATE_BLOCKED: Invalid `architecture_pattern`. Allowed: 'Clean_Architecture', 'Layered_Architecture', 'Package_By_Feature', 'Orchestrator', 'CLI_Pipeline', 'Flat_Library', or 'Auto'.",
+            if arch_pattern.is_empty() { "NONE" } else { &arch_pattern }
+        );
+    }
+
     let allow_cross = arguments
         .get("allow_cross_workspace")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    let will_be_build = target_stage.eq_ignore_ascii_case("build");
-    let will_be_approved = state.plan_approved || (will_be_build && inline_approved);
-    if !paths.is_empty() && will_be_build && will_be_approved {
+    let will_be_approved = state.plan_approved || (will_be_edit_stage && inline_approved);
+    if !paths.is_empty() && will_be_edit_stage && will_be_approved {
         if let Some(blocked_msg) =
             super::gate_edit::enforce_edit_boundaries(proj_path, &paths, allow_cross, state)
         {
@@ -188,21 +219,14 @@ pub(crate) fn handle_advance(
         }
     }
 
-    if will_be_build && inline_approved {
+    if will_be_edit_stage && inline_approved {
         state.approve_plan();
     }
     state.last_risk_level = Some(risk_level.to_string());
     let stage_res = state.set_stage(target_stage);
 
-    if matches!(
-        arch_pattern.as_str(),
-        "Clean_Architecture"
-            | "Layered_Architecture"
-            | "Package_By_Feature"
-            | "Orchestrator"
-            | "CLI_Pipeline"
-            | "Flat_Library"
-    ) && state.workflow_stage == "Build"
+    if is_valid_architecture_pattern(&arch_pattern)
+        && matches!(state.workflow_stage.as_str(), "Build" | "Fix")
         && state.plan_approved
     {
         state.active_architecture_pattern = Some(arch_pattern.clone());
@@ -210,11 +234,15 @@ pub(crate) fn handle_advance(
 
     match stage_res {
         Ok(msg) => {
-            if !paths.is_empty() && state.workflow_stage == "Build" && state.plan_approved {
+            if !paths.is_empty()
+                && matches!(state.workflow_stage.as_str(), "Build" | "Fix")
+                && state.plan_approved
+            {
+                state.clear_deferred_authorized_paths();
                 let justification = arguments
                     .get("justification")
                     .and_then(|j| j.as_str())
-                    .unwrap_or("Pre-authorized during stage advance to Build");
+                    .unwrap_or("Pre-authorized during stage advance");
                 let batch_report = super::gate_edit_batch::handle_batch_authorize(
                     proj_path,
                     &paths,
@@ -270,7 +298,9 @@ pub(crate) fn handle_check(state: &ServerState) -> String {
 }
 
 pub(crate) fn handle_status(state: &ServerState) -> String {
-    let edit_allowed = state.workflow_stage == "Build" && state.plan_approved && state.edit_authorized;
+    let edit_allowed = matches!(state.workflow_stage.as_str(), "Build" | "Fix")
+        && state.plan_approved
+        && state.edit_authorized;
     format!(
         "# Workflow Stage Status\n\n- Active Stage: {}\n- Plan Approved: {}\n- Fix Attempts: {}/3\n- Edit Authorized: {}",
         state.workflow_stage, state.plan_approved, state.fix_attempts, edit_allowed

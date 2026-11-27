@@ -47,9 +47,9 @@ pub(crate) fn evaluate_read_authorization(
         if state.workflow_stage == "Plan" {
             let _ = state.set_stage("Build");
         }
-        if state.workflow_stage != "Build" {
+        if !matches!(state.workflow_stage.as_str(), "Build" | "Fix") {
             return format!(
-                "\n---\n# Edit Approval Gate Authorization\n\n- Status: BLOCKED\n- Active Stage: {}\n\nError: WORKFLOW_STAGE_BLOCKED: Edits require `Build` stage (current stage: `{}`). Advance to `Build` before authorizing edits.",
+                "\n---\n# Edit Approval Gate Authorization\n\n- Status: BLOCKED\n- Active Stage: {}\n\nError: WORKFLOW_STAGE_BLOCKED: Edits require `Build` or `Fix` stage (current stage: `{}`). Advance to `Build` or `Fix` before authorizing edits.",
                 state.workflow_stage, state.workflow_stage
             );
         }
@@ -58,15 +58,7 @@ pub(crate) fn evaluate_read_authorization(
             .and_then(|a| a.as_str())
             .unwrap_or("Auto");
         let arch_pattern = super::helpers::resolve_architecture_pattern(raw_arch, proj_path, state);
-        if !matches!(
-            arch_pattern.as_str(),
-            "Clean_Architecture"
-                | "Layered_Architecture"
-                | "Package_By_Feature"
-                | "Orchestrator"
-                | "CLI_Pipeline"
-                | "Flat_Library"
-        ) {
+        if !super::helpers::is_valid_architecture_pattern(&arch_pattern) {
             return format!(
                 "\n---\n# Edit Approval Gate Authorization\n\n- Status: BLOCKED (ARCHITECTURE_GATE_BLOCKED)\n- Declared Architecture: '{}'\n\nError: ARCHITECTURE_GATE_BLOCKED: Select a valid `architecture_pattern` before authorizing edits.",
                 if arch_pattern.is_empty() { "NONE" } else { &arch_pattern }
@@ -80,17 +72,28 @@ pub(crate) fn evaluate_read_authorization(
         );
         format!("\n---\n## Direct Edit Authorization Report\n\n{}", auth_report)
     } else {
-        if let Some(bad) = paths.iter().find(|p| p.contains("..") || p.contains('\0')) {
-            return format!(
-                "\n---\n# Edit Approval Gate Authorization\n\n- Status: BLOCKED (PATH_TRAVERSAL_PROHIBITED)\n- Target File: `{}`\n\nError: PATH_TRAVERSAL_PROHIBITED: Path traversal (..) or null byte is strictly prohibited.",
-                bad
-            );
+        let mut normalized_paths = Vec::with_capacity(paths.len());
+        for p in paths {
+            match super::helpers::validate_path_scoped_normalized(proj_path, p, allow_cross) {
+                Ok((_, norm)) if !norm.is_empty() => {
+                    if !normalized_paths.contains(&norm) {
+                        normalized_paths.push(norm);
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    return format!(
+                        "\n---\n# Edit Approval Gate Authorization\n\n- Status: BLOCKED (PATH_TRAVERSAL_PROHIBITED)\n- Target File: `{}`\n\nError: PATH_TRAVERSAL_PROHIBITED: {}",
+                        p, err
+                    );
+                }
+            }
         }
         if let Some(blocked) = super::helpers_path::check_cross_workspace_guard(proj_path, paths, state, allow_cross) {
             return format!("\n---\n{}", blocked);
         }
         let mut advisories = Vec::new();
-        for p in paths {
+        for p in &normalized_paths {
             if !proj_path.join(p).exists()
                 && !super::gate_exemptions::is_exempt_from_loc_limit(p)
                 && let Some(adv) = super::gate_edit_modularity::validate_new_file_modularity(p, justification)
@@ -99,7 +102,7 @@ pub(crate) fn evaluate_read_authorization(
             }
         }
 
-        state.queue_deferred_authorization(paths);
+        state.queue_deferred_authorization(&normalized_paths);
         let adv_section = if advisories.is_empty() {
             String::new()
         } else {
@@ -107,7 +110,7 @@ pub(crate) fn evaluate_read_authorization(
         };
         format!(
             "\n---\n> [!NOTE] **Deferred Pre-Authorization Queued**:\n> {} file(s) queued for automatic authorization upon plan approval.\n> Active Stage: '{}' | Plan Approved: {}.\n> Call `workflow_gate(action=\"approve_plan\", user_confirmed=true)` once plan is confirmed to activate authorization in 1 turn.{}",
-            paths.len(), state.workflow_stage, state.plan_approved, adv_section
+            normalized_paths.len(), state.workflow_stage, state.plan_approved, adv_section
         )
     }
 }

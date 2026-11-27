@@ -6,6 +6,7 @@ use std::time::SystemTime;
 use super::ServerState;
 
 static TMP_FILE_SEQ: AtomicU64 = AtomicU64::new(1);
+static SAVE_CLEANUP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Atomically writes `content` to `path` via a unique sibling temp file and rename.
 pub(crate) fn atomic_write_file(path: &Path, content: &[u8]) -> std::io::Result<()> {
@@ -95,6 +96,10 @@ impl ServerState {
         // Also atomically update legacy single-session pointer
         let legacy_file = proj_path.join(".agent-context").join("session.json");
         let _ = atomic_write_file(&legacy_file, content.as_bytes());
+
+        if SAVE_CLEANUP_SEQ.fetch_add(1, Ordering::Relaxed).is_multiple_of(16) {
+            Self::cleanup_stale_sessions(proj_path);
+        }
         Ok(())
     }
 
@@ -138,8 +143,11 @@ impl ServerState {
         // 2. Legacy fallback: .agent-context/session.json
         let legacy_file = proj_path.join(".agent-context").join("session.json");
         if legacy_file.exists() {
-            let content = fs::read_to_string(legacy_file).map_err(|e| e.to_string())?;
-            return serde_json::from_str(&content).map_err(|e| e.to_string());
+            if let Ok(content) = fs::read_to_string(&legacy_file) {
+                if let Ok(loaded) = serde_json::from_str::<Self>(&content) {
+                    return Ok(loaded);
+                }
+            }
         }
 
         Ok(Self::new())

@@ -1,7 +1,8 @@
 use std::path::Path;
 
+use crate::context::db::CodeGraphDb;
 use crate::mcp::state::ServerState;
-use super::gate_edit_single::evaluate_single_file_auth;
+use super::gate_edit_single::evaluate_single_file_auth_with_db;
 
 pub(crate) fn handle_batch_authorize(
     proj_path: &Path,
@@ -15,6 +16,7 @@ pub(crate) fn handle_batch_authorize(
         return "# Edit Approval Gate Authorization\n\n- Status: BLOCKED (NO_FILES_SPECIFIED)\n\nError: `relative_paths` array is empty. Please provide at least one target file path.".to_string();
     }
 
+    let db = CodeGraphDb::open_for_project(proj_path).ok();
     let mut passed_count = 0;
     let mut blocked_count = 0;
     let mut details = Vec::new();
@@ -27,13 +29,14 @@ pub(crate) fn handle_batch_authorize(
             continue;
         }
 
-        let outcome = evaluate_single_file_auth(
+        let outcome = evaluate_single_file_auth_with_db(
             proj_path,
             &clean_path,
             justification,
             arch_pattern,
             allow_cross,
             state,
+            db.as_ref(),
         );
 
         if outcome.is_passed {
@@ -51,7 +54,7 @@ pub(crate) fn handle_batch_authorize(
                 outcome.risk_level,
                 outcome
                     .warning
-                    .unwrap_or_else(|| "Snapshot created".to_string())
+                    .unwrap_or(outcome.snapshot_note)
             ));
             if let Some(tip) = outcome.co_change_tip {
                 co_change_tips.push(tip);

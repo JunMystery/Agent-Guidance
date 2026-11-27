@@ -52,10 +52,15 @@ impl ServerState {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
+        let active_proj = self
+            .project_path
+            .as_deref()
+            .or_else(|| self.workspace_roots.first().map(|s| s.as_str()));
         let sentinel = serde_json::json!({
             "status": "PASSED",
             "timestamp": self.last_session_start,
-            "project_path": self.project_path
+            "session_id": self.session_id,
+            "project_path": active_proj
         });
         let payload = serde_json::to_string(&sentinel).unwrap_or_default();
         let _ = super::persistence::atomic_write_file(&path, payload.as_bytes());
@@ -93,17 +98,26 @@ impl ServerState {
                             .project_path
                             .as_deref()
                             .or_else(|| self.workspace_roots.first().map(|s| s.as_str()));
-                        let sentinel_proj = sentinel.get("project_path").and_then(|p| p.as_str());
+                        let sentinel_proj = sentinel
+                            .get("project_path")
+                            .and_then(|p| p.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty());
+                        let sentinel_sess = sentinel
+                            .get("session_id")
+                            .and_then(|s| s.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty());
+                        let same_session = sentinel_sess == Some(self.session_id.as_str());
                         let same_project = match (active_proj, sentinel_proj) {
                             (Some(cur), Some(sent)) => {
-                                let can_cur = Path::new(cur).canonicalize().unwrap_or_else(|_| Path::new(cur).to_path_buf());
-                                let can_sent = Path::new(sent).canonicalize().unwrap_or_else(|_| Path::new(sent).to_path_buf());
+                                let can_cur = super::workspace::canonicalize_or_normalize(Path::new(cur));
+                                let can_sent = super::workspace::canonicalize_or_normalize(Path::new(sent));
                                 can_cur == can_sent
                             }
-                            (_, None) => true,
-                            (None, Some(_)) => false,
+                            _ => false,
                         };
-                        if fresh && same_project {
+                        if fresh && same_session && same_project {
                             self.priority_gate_passed = true;
                             self.last_session_start = Some(ts);
                             return Ok(());
@@ -199,8 +213,11 @@ impl ServerState {
             // Note: active_architecture_pattern is preserved across stages for session consistency
         }
 
-        if normalized == "Build" && !self.plan_approved {
-            return Err("WORKFLOW_STAGE_BLOCKED: Cannot enter 'Build' stage because plan_approved is false. Obtain explicit user approval first.".to_string());
+        if (normalized == "Build" || normalized == "Fix") && !self.plan_approved {
+            return Err(format!(
+                "WORKFLOW_STAGE_BLOCKED: Cannot enter '{}' stage because plan_approved is false. Obtain explicit user approval first.",
+                normalized
+            ));
         }
 
         if normalized == "Fix" {
@@ -208,15 +225,13 @@ impl ServerState {
             if self.fix_attempts > 3 {
                 self.workflow_stage = "Ask_Revise".to_string();
                 self.plan_approved = false;
+                self.edit_authorized = false;
                 self.clear_deferred_authorized_paths();
                 self.clear_fast_path();
                 self.fix_attempts = 0;
                 return Err("WORKFLOW_STAGE_BLOCKED: Circuit breaker triggered after 3 consecutive failed fix attempts. Workflow stage automatically reset to 'Ask_Revise' with plan_approved=false. Please request user guidance.".to_string());
             }
-        } else if normalized == "Test_Recheck"
-            || normalized == "Proposal"
-            || normalized == "Context"
-        {
+        } else if normalized == "Proposal" || normalized == "Context" {
             self.fix_attempts = 0;
         }
 

@@ -372,3 +372,137 @@
 
         let _ = fs::remove_file(&path);
     }
+
+    #[test]
+    fn test_build_unapproved_exempts_gate_and_continuity_and_requires_priority_gate() {
+        let path = ServerState::priority_gate_path();
+        let _ = fs::remove_file(&path);
+
+        let mut no_prio = ServerState::new();
+        no_prio.project_path = Some("d:/repo_prio".to_string());
+        for args in [
+            serde_json::json!({"action": "approve_plan", "user_confirmed": true}),
+            serde_json::json!({"action": "approve", "user_confirmed": true}),
+            serde_json::json!({"action": "authorize_edit", "relative_path": "src/main.rs"}),
+            serde_json::json!({"action": "set_stage", "target_stage": "Build"}),
+            serde_json::json!({"action": "set_stage", "target_stage": "Fix"}),
+            serde_json::json!({"action": "advance"}),
+            serde_json::json!({"action": "advance_stage", "stage": "Fix"}),
+        ] {
+            let err = no_prio.can_call_tool("workflow_gate", &args).unwrap_err();
+            assert!(err.contains("PRIORITY_REQUIRED"), "Expected priority block for {:?}", args);
+        }
+        assert!(no_prio.can_call_tool("workflow_gate", &serde_json::json!({"action": "check"})).is_ok());
+        assert!(no_prio.can_call_tool("workflow_gate", &serde_json::json!({"action": "status"})).is_ok());
+        assert!(no_prio.can_call_tool("workflow_gate", &serde_json::json!({"action": "set_stage", "target_stage": "Plan"})).is_ok());
+
+        let mut restored = ServerState::new();
+        restored.priority_gate_pass();
+        restored.workflow_stage = "Build".to_string();
+        restored.plan_approved = false;
+
+        for action in [
+            "check",
+            "status",
+            "approve_plan",
+            "approve",
+            "set_stage",
+            "advance",
+            "rollback",
+            "set_architecture",
+            "pass_verification",
+            "invalidate",
+            "sync_file",
+        ] {
+            assert!(
+                restored
+                    .can_call_tool("workflow_gate", &serde_json::json!({"action": action}))
+                    .is_ok(),
+                "Action '{}' should not deadlock in Build && !plan_approved",
+                action
+            );
+        }
+        assert!(restored.can_call_tool("session_continuity", &serde_json::json!({"operation": "load"})).is_ok());
+        assert!(restored.can_call_tool("workflow_gate", &serde_json::json!({"action": "authorize_edit"})).is_err());
+        assert!(restored.can_call_tool("guidance", &serde_json::json!({"operation": "precode"})).is_err());
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_fix_circuit_breaker_persists_across_test_recheck_loops() {
+        let mut state = ServerState::new();
+        assert!(state.set_stage("Fix").is_err(), "Fix requires plan_approved=true");
+
+        state.approve_plan();
+        state.set_stage("Build").unwrap();
+        assert_eq!(state.set_stage("Fix").unwrap(), "Fix");
+        assert_eq!(state.fix_attempts, 1);
+        assert_eq!(state.set_stage("Test_Recheck").unwrap(), "Test_Recheck");
+        assert_eq!(state.fix_attempts, 1, "Test_Recheck must not reset fix_attempts");
+
+        assert_eq!(state.set_stage("Fix").unwrap(), "Fix");
+        assert_eq!(state.fix_attempts, 2);
+        assert_eq!(state.set_stage("Test_Recheck").unwrap(), "Test_Recheck");
+        assert_eq!(state.set_stage("Fix").unwrap(), "Fix");
+        assert_eq!(state.fix_attempts, 3);
+        assert_eq!(state.set_stage("Test_Recheck").unwrap(), "Test_Recheck");
+
+        let err = state.set_stage("Fix").unwrap_err();
+        assert!(err.contains("Circuit breaker"));
+        assert_eq!(state.workflow_stage, "Ask_Revise");
+        assert!(!state.plan_approved);
+        assert!(!state.edit_authorized);
+        assert_eq!(state.fix_attempts, 0);
+    }
+
+    #[test]
+    fn test_sentinel_scoped_to_session_and_non_null_project_and_corrupt_legacy_fallback() {
+        let path = ServerState::priority_gate_path();
+        let _ = fs::remove_file(&path);
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let dir = std::env::temp_dir().join(format!("ag_sentinel_scope_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".agent-context")).unwrap();
+
+        // Null project_path must be rejected even with matching session_id
+        let mut s = ServerState::new();
+        s.project_path = Some(dir.to_string_lossy().to_string());
+        fs::write(
+            &path,
+            serde_json::json!({"status": "PASSED", "timestamp": now, "session_id": s.session_id, "project_path": serde_json::Value::Null}).to_string(),
+        )
+        .unwrap();
+        assert!(s.priority_gate_check().is_err());
+
+        // Mismatched session_id must be rejected even with matching project_path
+        fs::write(
+            &path,
+            serde_json::json!({"status": "PASSED", "timestamp": now, "session_id": "other_session", "project_path": dir.to_string_lossy()}).to_string(),
+        )
+        .unwrap();
+        assert!(s.priority_gate_check().is_err());
+
+        // Matching session_id and project_path succeeds
+        fs::write(
+            &path,
+            serde_json::json!({"status": "PASSED", "timestamp": now, "session_id": s.session_id, "project_path": dir.to_string_lossy()}).to_string(),
+        )
+        .unwrap();
+        assert!(s.priority_gate_check().is_ok());
+
+        // Corrupt legacy session.json falls back cleanly to fresh ServerState
+        fs::write(dir.join(".agent-context").join("session.json"), "{broken json").unwrap();
+        let loaded = ServerState::load_from_dir(&dir).unwrap();
+        assert_eq!(loaded.workflow_stage, "Context");
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&dir);
+    }

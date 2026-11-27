@@ -8,6 +8,7 @@ use crate::mcp::tools::gate_approval::handle_approve_plan;
 use crate::mcp::tools::gate_plan_parser::{extract_paths_from_plan_content, find_plan_artifact};
 
 static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static BRAIN_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn create_temp_dir() -> PathBuf {
     let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -97,13 +98,16 @@ fn test_plan_artifact_discovery_multitier() {
     fs::create_dir_all(&session_dir).unwrap();
     let brain_plan = session_dir.join("implementation_plan.md");
     fs::write(&brain_plan, "# Brain Plan").unwrap();
-    unsafe {
-        std::env::set_var("AGY_BRAIN_DIR", &brain_dir);
-    }
-    let found_brain = find_plan_artifact(proj, None, Some("sess_xyz"));
-    assert_eq!(found_brain.as_deref().map(canonical_path), Some(canonical_path(&brain_plan)));
-    unsafe {
-        std::env::remove_var("AGY_BRAIN_DIR");
+    {
+        let _guard = BRAIN_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("AGY_BRAIN_DIR", &brain_dir);
+        }
+        let found_brain = find_plan_artifact(proj, None, Some("sess_xyz"));
+        assert_eq!(found_brain.as_deref().map(canonical_path), Some(canonical_path(&brain_plan)));
+        unsafe {
+            std::env::remove_var("AGY_BRAIN_DIR");
+        }
     }
 
     let _ = fs::remove_dir_all(&temp);
@@ -231,6 +235,82 @@ fn test_find_plan_artifact_rejects_traversal_and_non_markdown_custom_paths() {
     assert!(find_plan_artifact(&repo, Some("../outside/secret.md"), None).is_none());
     assert!(find_plan_artifact(&repo, Some(outside_md.to_str().unwrap()), None).is_none());
     assert!(find_plan_artifact(&repo, Some("Cargo.toml"), None).is_none());
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_plan_parser_skips_code_blocks_excluded_sections_and_prose_js_tokens() {
+    let base = create_temp_dir();
+    let repo = base.join("app");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(repo.join("Cargo.toml"), "[package]\n").unwrap();
+
+    let markdown = r#"
+# Implementation Plan
+
+## Proposed Changes
+We use `next.js`, `vue.js`, and `node.js` in prose, plus `Cargo.toml`.
+- `src/components/Button.tsx`
+- src/views/Dashboard.vue: Plain path under Proposed Changes
+- `scripts/deploy.ps1`
+- `d:/ag_plan_auth_other/src/should_not_strip.rs`
+
+```rust
+// Inside fenced code block: must NOT be extracted
+let fake = "`src/fake_from_codeblock.rs`";
+```
+
+## Verification Plan
+- Run tests in `src/verify_only.rs`
+
+## Out of Scope
+- `src/out_of_scope.rs`
+"#;
+
+    let paths = extract_paths_from_plan_content(markdown, &repo);
+    assert!(paths.contains(&"Cargo.toml".to_string()));
+    assert!(paths.contains(&"src/components/Button.tsx".to_string()));
+    assert!(paths.contains(&"src/views/Dashboard.vue".to_string()));
+    assert!(paths.contains(&"scripts/deploy.ps1".to_string()));
+    assert!(paths.contains(&"d:/ag_plan_auth_other/src/should_not_strip.rs".to_string()));
+    assert!(!paths.contains(&"next.js".to_string()));
+    assert!(!paths.contains(&"vue.js".to_string()));
+    assert!(!paths.contains(&"node.js".to_string()));
+    assert!(!paths.contains(&"src/fake_from_codeblock.rs".to_string()));
+    assert!(!paths.contains(&"src/verify_only.rs".to_string()));
+    assert!(!paths.contains(&"src/out_of_scope.rs".to_string()));
+
+    // Prefix stripping must respect `/` boundary (`d:/ag_plan_auth` must not strip `d:/ag_plan_auth_other/...`)
+    let boundary_paths = extract_paths_from_plan_content(
+        "## Proposed Changes\n- `d:/ag_plan_auth_other/src/keep.rs`\n",
+        Path::new("d:/ag_plan_auth"),
+    );
+    assert_eq!(boundary_paths, vec!["d:/ag_plan_auth_other/src/keep.rs".to_string()]);
+
+    // UTF-8 prefix slicing safety
+    let utf8_paths = extract_paths_from_plan_content(
+        "## Proposed Changes\n- `src/tài_liệu_tiếng_việt.md`\n",
+        Path::new("d:/Dự án rất dài hơn path"),
+    );
+    assert_eq!(utf8_paths, vec!["src/tài_liệu_tiếng_việt.md".to_string()]);
+
+    // Invalid AGY_CONVERSATION_ID with path traversal must be ignored
+    let brain_dir = base.join("brain_sec");
+    fs::create_dir_all(&brain_dir).unwrap();
+    fs::write(base.join("implementation_plan.md"), "# Secret").unwrap();
+    {
+        let _guard = BRAIN_ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("AGY_BRAIN_DIR", &brain_dir);
+            std::env::set_var("AGY_CONVERSATION_ID", "..");
+        }
+        assert!(find_plan_artifact(&repo, None, None).is_none());
+        unsafe {
+            std::env::remove_var("AGY_CONVERSATION_ID");
+            std::env::remove_var("AGY_BRAIN_DIR");
+        }
+    }
 
     let _ = fs::remove_dir_all(&base);
 }

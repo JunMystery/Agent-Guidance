@@ -90,4 +90,51 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_modularity_advises_on_exact_plural_stem_and_excludes_tests() {
+        let temp_dir = std::env::temp_dir().join(format!("mod_exempt_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let mut state = ServerState::new();
+        state.plan_approved = true;
+        let _ = state.set_stage("Build");
+
+        let utils_res = handle_tool_call(
+            "workflow_gate",
+            json!({
+                "action": "authorize_edit",
+                "relative_path": "src/utils.rs",
+                "architecture_pattern": "Flat_Library",
+                "justification": "Shared utility functions",
+                "project_path": temp_dir.to_str().unwrap()
+            }),
+            &mut state,
+        )
+        .unwrap();
+        assert!(utils_res["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("DOMAIN_COHESION_ADVISORY"));
+
+        let test_res = handle_tool_call(
+            "workflow_gate",
+            json!({
+                "action": "authorize_edit",
+                "relative_path": "tests/integration_utils.rs",
+                "architecture_pattern": "Flat_Library",
+                "justification": "Add modal and service helpers",
+                "project_path": temp_dir.to_str().unwrap()
+            }),
+            &mut state,
+        )
+        .unwrap();
+        assert!(!test_res["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("DOMAIN_COHESION_ADVISORY"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 }

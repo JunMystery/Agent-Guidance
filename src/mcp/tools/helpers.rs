@@ -7,9 +7,11 @@ use crate::mcp::state::ServerState;
 #[allow(unused_imports)]
 pub use super::helpers_path::{
     detect_parent_process_cwd, detect_project_path, detect_project_path_with_targets,
-    is_generic_home_dir, validate_path, validate_path_scoped,
+    is_generic_home_dir, validate_path, validate_path_scoped, validate_path_scoped_normalized,
 };
 pub use super::helpers_spec::TargetPathSpec;
+#[allow(unused_imports)]
+pub use crate::mcp::state::permissions::is_valid_architecture_pattern;
 
 pub fn ensure_not_cancelled(state: &ServerState) -> Result<(), (i32, String)> {
     if state.is_cancelled() {
@@ -141,7 +143,7 @@ pub fn truncate_chars(s: &str, max_chars: usize) -> &str {
 }
 
 /// Truncate string to at most `max_bytes` without splitting UTF-8 char boundaries.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn truncate_bytes_safe(s: &str, max_bytes: usize) -> &str {
     if max_bytes >= s.len() {
         return s;
