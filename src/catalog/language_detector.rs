@@ -1,5 +1,6 @@
 use crate::context::scanner::FileEntry;
 use std::collections::HashSet;
+use std::path::Path;
 
 #[derive(Debug, Clone, Default)]
 pub struct ProjectLanguageProfile {
@@ -7,15 +8,63 @@ pub struct ProjectLanguageProfile {
     pub secondary_tech: HashSet<String>,
 }
 
+/// Returns true if `needle` appears in `haystack` bounded on both sides by non-alphanumeric characters.
+pub(crate) fn contains_word(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    for (idx, _) in haystack.match_indices(needle) {
+        let before_ok = haystack[..idx]
+            .chars()
+            .next_back()
+            .map(|c| !c.is_alphanumeric())
+            .unwrap_or(true);
+        let after_ok = haystack[idx + needle.len()..]
+            .chars()
+            .next()
+            .map(|c| !c.is_alphanumeric())
+            .unwrap_or(true);
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true if `needle` appears in `haystack` starting at a non-alphanumeric boundary.
+pub(crate) fn contains_word_prefix(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    for (idx, _) in haystack.match_indices(needle) {
+        let before_ok = haystack[..idx]
+            .chars()
+            .next_back()
+            .map(|c| !c.is_alphanumeric())
+            .unwrap_or(true);
+        if before_ok {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn detect_language_profile(files: &[FileEntry], task_prompt: &str) -> ProjectLanguageProfile {
     let mut ext_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
     for file in files {
+        if file.file_type == "dir" {
+            continue;
+        }
         let path = file.path.to_lowercase();
-        if let Some(ext) = path.split('.').last() {
+        if let Some(ext) = Path::new(&path).extension().and_then(|e| e.to_str()) {
             *ext_counts.entry(ext.to_string()).or_insert(0) += 1;
         }
-        if path.ends_with("dockerfile") || path.contains("docker") {
+        let file_name = Path::new(&path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        if file_name.contains("docker") || path.split(['/', '\\']).any(|seg| seg == "docker") {
             *ext_counts.entry("docker".to_string()).or_insert(0) += 1;
         }
     }
@@ -82,31 +131,37 @@ pub fn detect_language_profile(files: &[FileEntry], task_prompt: &str) -> Projec
     }
 
     // Explicit User Mentions in prompt override/add to profile
+    // Match mode: 0 = substring, 1 = word prefix, 2 = whole word
     let prompt_lower = task_prompt.to_lowercase();
-    let known_tech = vec![
-        ("rust", "rust"),
-        ("python", "python"),
-        ("javascript", "javascript"),
-        ("typescript", "typescript"),
-        ("golang", "go"),
-        ("go", "go"),
-        ("java", "java"),
-        ("kotlin", "kotlin"),
-        ("android", "kotlin"),
-        ("swift", "swift"),
-        ("c++", "c++"),
-        ("c#", "c#"),
-        ("sql", "sql"),
-        ("database", "database"),
-        ("docker", "docker"),
-        ("frontend", "frontend"),
-        ("html", "web"),
-        ("css", "web"),
-        ("bash", "bash"),
+    let known_tech: [(&str, &str, u8); 19] = [
+        ("rust", "rust", 2),
+        ("python", "python", 0),
+        ("javascript", "javascript", 0),
+        ("typescript", "typescript", 0),
+        ("golang", "go", 0),
+        ("go", "go", 2),
+        ("java", "java", 2),
+        ("kotlin", "kotlin", 2),
+        ("android", "kotlin", 0),
+        ("swift", "swift", 2),
+        ("c++", "c++", 1),
+        ("c#", "c#", 1),
+        ("sql", "sql", 0),
+        ("database", "database", 0),
+        ("docker", "docker", 0),
+        ("frontend", "frontend", 0),
+        ("html", "web", 2),
+        ("css", "web", 2),
+        ("bash", "bash", 2),
     ];
 
-    for (keyword, tech) in known_tech {
-        if prompt_lower.contains(keyword) {
+    for (keyword, tech, mode) in known_tech {
+        let matched = match mode {
+            2 => contains_word(&prompt_lower, keyword),
+            1 => contains_word_prefix(&prompt_lower, keyword),
+            _ => prompt_lower.contains(keyword),
+        };
+        if matched {
             profile.primary_languages.insert(tech.to_string());
             profile.secondary_tech.insert(tech.to_string());
         }
@@ -124,11 +179,15 @@ pub fn detect_language_fast(proj_path: &std::path::Path, task: &str) -> ProjectL
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten().take(50) {
                 let path = entry.path();
-                let path_str = path.to_string_lossy().to_string();
+                let rel_str = path
+                    .strip_prefix(proj_path)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
                 let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
                 let file_type = if is_dir { "dir".to_string() } else { "file".to_string() };
                 files.push(FileEntry {
-                    path: path_str,
+                    path: rel_str,
                     file_type,
                     size_bytes: 0,
                 });
@@ -203,5 +262,49 @@ mod tests {
 
         let py_profile = detect_language_profile(&files, "write a python script");
         assert!(py_profile.primary_languages.contains("python"));
+    }
+
+    #[test]
+    fn test_language_detector_avoids_word_and_extension_false_positives() {
+        let files = vec![
+            FileEntry {
+                path: "go".to_string(),
+                file_type: "file".to_string(),
+                size_bytes: 10,
+            },
+            FileEntry {
+                path: "scripts.py".to_string(),
+                file_type: "dir".to_string(),
+                size_bytes: 0,
+            },
+        ];
+        let profile = detect_language_profile(
+            &files,
+            "implement a good javascript algorithm with trust",
+        );
+        assert!(profile.primary_languages.contains("javascript"));
+        assert!(!profile.primary_languages.contains("java"));
+        assert!(!profile.primary_languages.contains("go"));
+        assert!(!profile.primary_languages.contains("rust"));
+        assert!(!profile.primary_languages.contains("python"));
+
+        let go_cpp = detect_language_profile(&[], "write a go and c++20 service");
+        assert!(go_cpp.primary_languages.contains("go"));
+        assert!(go_cpp.primary_languages.contains("c++"));
+    }
+
+    #[test]
+    fn test_detect_language_fast_ignores_parent_docker_dir() {
+        let tmp_parent = std::env::temp_dir()
+            .join(format!("docker_parent_{}_{:?}", std::process::id(), std::thread::current().id()));
+        let proj = tmp_parent.join("my_rust_app");
+        let _ = std::fs::create_dir_all(proj.join("src"));
+        let _ = std::fs::write(proj.join("src").join("main.rs"), "fn main() {}");
+
+        let profile = detect_language_fast(&proj, "build binary");
+        assert!(profile.primary_languages.contains("rust"));
+        assert!(!profile.secondary_tech.contains("docker"));
+
+        let _ = std::fs::remove_dir_all(&tmp_parent);
     }
 }

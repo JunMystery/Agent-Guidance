@@ -19,13 +19,17 @@ impl TargetPathSpec {
             };
         }
 
-        // 1. Separate symbol fragment after '#'
-        let (path_part, symbol_opt) = match trimmed.find('#') {
+        // 1. Separate symbol fragment after '#' (ignore '#' in directory names like C#/Program.cs)
+        let (path_part, symbol_opt) = match trimmed.rfind('#') {
             Some(idx) => {
-                let p = &trimmed[..idx];
                 let s = trimmed[idx + 1..].trim();
-                let sym = if s.is_empty() { None } else { Some(s.to_string()) };
-                (p, sym)
+                if s.contains('/') || s.contains('\\') {
+                    (trimmed, None)
+                } else {
+                    let p = &trimmed[..idx];
+                    let sym = if s.is_empty() { None } else { Some(s.to_string()) };
+                    (p, sym)
+                }
             }
             None => (trimmed, None),
         };
@@ -80,4 +84,25 @@ fn parse_numbers(s: &str) -> Option<(usize, usize)> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_preserves_hash_in_directory_name() {
+        let dir_hash = TargetPathSpec::parse("C#/Program.cs");
+        assert_eq!(dir_hash.clean_path, "C#/Program.cs");
+        assert_eq!(dir_hash.target_symbol, None);
+
+        let dir_hash_with_sym = TargetPathSpec::parse("C#/Program.cs#Main");
+        assert_eq!(dir_hash_with_sym.clean_path, "C#/Program.cs");
+        assert_eq!(dir_hash_with_sym.target_symbol.as_deref(), Some("Main"));
+
+        let dir_hash_with_range = TargetPathSpec::parse("F#/src/App.fs:10-20#run");
+        assert_eq!(dir_hash_with_range.clean_path, "F#/src/App.fs");
+        assert_eq!(dir_hash_with_range.line_range, Some((10, 20)));
+        assert_eq!(dir_hash_with_range.target_symbol.as_deref(), Some("run"));
+    }
 }

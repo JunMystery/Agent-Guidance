@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-This server is a Rust binary that auto-detects daemon/proxy mode via Unix socket. Configure each IDE/CLI to launch `agent-guidance` as a stdio MCP command.
+This server is a Rust binary that auto-detects daemon/proxy mode via Named Pipe (Windows) or Unix domain socket (macOS/Linux). Configure each IDE/CLI to launch `agent-guidance` as a stdio MCP command.
 
 ## VS Code And GitHub Copilot
 
@@ -131,6 +131,10 @@ Configure these environment variables in your client configuration `"env"` block
 | `AGENT_GUIDANCE_DEVICE` | `auto` | ML compute provider: `auto`, `cpu`, `cuda` (NVIDIA), `directml` / `dml` (Windows AMD/Intel/NVIDIA), `metal` (macOS Apple Silicon) |
 | `AGENT_GUIDANCE_IDLE_TIMEOUT` | `60` | Daemon idle shutdown countdown in seconds after all IDE clients disconnect (note: daemon stays alive if an IDE process like VS Code, Cursor, or Antigravity is running) |
 | `AGENT_GUIDANCE_DASHBOARD_PORT`| `11997` | Port for the embedded telemetry dashboard and REST API |
+| `AGENT_GUIDANCE_WORKER_PORT` | `11998` | Port for the Remote ML Worker daemon (`--server`) |
+| `AGENT_GUIDANCE_BIND_ADDR` | `127.0.0.1` | Bind address for `--server` (non-loopback binds require `AGENT_GUIDANCE_API_KEY` or `--api-key`) |
+| `AGENT_GUIDANCE_API_KEY` | empty | Bearer authentication token for Remote ML Worker and non-loopback Dashboard `/api/*` requests (preferred over `--api-key` in service files) |
+| `AGENT_GUIDANCE_MAX_THREADS` | `4` | Rayon worker pool thread limit |
 | `AGENT_GUIDANCE_TOKEN_OPT` | `1` | `0` = disable markdown token compression and whitespace reduction |
 | `AGENT_GUIDANCE_ONNX_PATH` | auto (`~/.agent-guidance/models`) | Custom directory containing ONNX quantized embedding models |
 | `AGENT_GUIDANCE_DISABLE_ML` | `0` | `1` = bypass background VRAM auto-warmup |

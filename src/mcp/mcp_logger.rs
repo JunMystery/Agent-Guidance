@@ -52,6 +52,9 @@ pub struct McpLogStats {
 }
 
 pub fn get_crash_log_dir() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("ag_test_logs_{}", std::process::id()));
+    }
     dirs::home_dir()
         .map(|h| h.join(".agent-guidance").join("logs"))
         .unwrap_or_else(|| PathBuf::from(".agent-guidance").join("logs"))
@@ -114,6 +117,18 @@ pub(crate) fn log_mcp_direct(level: LogLevel, source: &str, message: &str, detai
 
     if let Ok(conn) = Connection::open_with_flags(&db_path, flags) {
         let _ = conn.busy_timeout(std::time::Duration::from_millis(400));
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS mcp_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                level TEXT NOT NULL,
+                source TEXT NOT NULL,
+                message TEXT NOT NULL,
+                details TEXT,
+                project_path TEXT
+            );",
+            [],
+        );
         let res = conn.execute(
             "INSERT INTO mcp_logs (timestamp, level, source, message, details, project_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![now, level.as_str(), source, message, details, project_path],
@@ -226,6 +241,7 @@ pub fn query_mcp_logs(
 
 pub fn clear_mcp_logs(db_path: &PathBuf, level_filter: Option<&str>) -> Result<usize> {
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
     let deleted = match level_filter.map(|s| s.to_uppercase()) {
         Some(lvl) if lvl != "ALL" && !lvl.is_empty() => conn.execute("DELETE FROM mcp_logs WHERE level = ?1", params![lvl])?,
         _ => conn.execute("DELETE FROM mcp_logs", [])?,

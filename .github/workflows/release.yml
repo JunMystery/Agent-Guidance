@@ -7,16 +7,50 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release Tag to build (e.g. v2.0.2)'
+        description: 'Release Tag to build (e.g. v2.0.3)'
         required: false
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  test-gate:
+    name: Pre-Release Manifest & Test Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify precomputed skill manifest sync
+        run: |
+          manifest_count=$(grep -o '"count":[[:space:]]*[0-9]*' src/ml/precomputed_manifest.json | head -n1 | grep -o '[0-9]*' || echo "0")
+          skill_count=$(find skills -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+          echo "Manifest skill count: ${manifest_count}, Workspace skills/: ${skill_count}"
+          if [ "${manifest_count}" != "${skill_count}" ]; then
+            echo "::error::Precomputed skill vectors (${manifest_count}) differ from skills/ directory count (${skill_count}). Run --reindex-skills and sync src/ml/precomputed_* before tagging."
+            exit 1
+          fi
+
+      - name: Cargo test
+        run: cargo test --bin agent-guidance -- --nocapture
+
   build-release:
     name: Build Release Artifacts (${{ matrix.target }})
+    needs: test-gate
+    permissions:
+      contents: write
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -65,7 +99,8 @@ jobs:
           skill_count=$(find skills -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
           echo "Manifest skill count: ${manifest_count}, Workspace skills/: ${skill_count}"
           if [ "${manifest_count}" != "${skill_count}" ]; then
-            echo "::warning::Precomputed skill vectors (${manifest_count}) differ from skills/ directory count (${skill_count}). Run --reindex-skills before tagging for optimal startup embedding coverage."
+            echo "::error::Precomputed skill vectors (${manifest_count}) differ from skills/ directory count (${skill_count}). Run --reindex-skills before tagging."
+            exit 1
           fi
 
       - name: Build release binary

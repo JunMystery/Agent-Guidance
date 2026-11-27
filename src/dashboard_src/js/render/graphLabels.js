@@ -63,9 +63,10 @@ export function drawNodeLabels(ctx, nodeArr, opts) {
     const fontSize = isTarget ? baseFontSize + 1 : baseFontSize;
     ctx.font = `${isHigh ? '600 ' : '400 '}${fontSize}px Inter, -apple-system, sans-serif`;
 
-    const labelText = (!isHigh && n.label.length > 22)
-      ? (n.label.slice(0, 20) + '…')
-      : n.label;
+    const rawLabel = String(n.label ?? n.id ?? '');
+    const labelText = (!isHigh && rawLabel.length > 22)
+      ? (rawLabel.slice(0, 20) + '…')
+      : rawLabel;
 
     const tw = ctx.measureText(labelText).width;
     const lx = n.x + n.radius + 4;

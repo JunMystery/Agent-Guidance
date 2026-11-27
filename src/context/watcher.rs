@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -69,32 +69,16 @@ pub fn is_watching(project_path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-const DEBOUNCE_DURATION: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+const REINDEX_INTERVAL: Duration = Duration::from_secs(60);
 
 fn watcher_loop(project_path: PathBuf, active: std::sync::Arc<std::sync::atomic::AtomicBool>) {
-    let mut pending: HashSet<PathBuf> = HashSet::new();
-    let mut last_event: Option<Instant> = None;
     let mut last_snapshot_time = Instant::now();
 
     while active.load(std::sync::atomic::Ordering::Relaxed) {
         std::thread::sleep(POLL_INTERVAL);
 
-        // Check if debounce time elapsed and we have pending files to index
-        if let Some(last) = last_event {
-            if !pending.is_empty() && last.elapsed() >= DEBOUNCE_DURATION {
-                let changed: Vec<PathBuf> = pending.drain().collect();
-                if let Ok(mut indexer) = IncrementalIndexer::new(&project_path) {
-                    let _ = indexer.index_specific_files(&changed);
-                    let _ = indexer.embed_symbols();
-                    let _ = indexer.embed_chunks();
-                    let _ = indexer.update_graph_rag("Auto");
-                }
-                last_event = None;
-                last_snapshot_time = Instant::now();
-            }
-        } else if last_snapshot_time.elapsed() >= Duration::from_secs(60) {
-            // Periodic background incremental check every 60s
+        if last_snapshot_time.elapsed() >= REINDEX_INTERVAL {
             if let Ok(mut indexer) = IncrementalIndexer::new(&project_path) {
                 if let Ok(report) = indexer.incremental_index() {
                     if report.files_indexed > 0 {

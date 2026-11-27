@@ -87,7 +87,7 @@ export function initFileGraphCanvas(canvasId, rawNodes = [], rawEdges = [], onSe
   let scale = 0.85, panX = 0, panY = 0;
   let isDragging = false, hasDragged = false, startX = 0, startY = 0, lastX = 0, lastY = 0;
   let selectedId = null, hoverId = null, isIsolated = false;
-  let pulseEnabled = true, animTime = 0, running = true;
+  let pulseEnabled = true, animTime = 0, running = true, rafId = null;
   let hideOrphans = true;
 
   function computeIsolatedSet(focusId) {
@@ -221,10 +221,10 @@ export function initFileGraphCanvas(canvasId, rawNodes = [], rawEdges = [], onSe
     });
 
     ctx.restore();
-    requestAnimationFrame(render);
+    rafId = requestAnimationFrame(render);
   }
 
-  requestAnimationFrame(render);
+  rafId = requestAnimationFrame(render);
 
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -245,7 +245,7 @@ export function initFileGraphCanvas(canvasId, rawNodes = [], rawEdges = [], onSe
     lastX = e.clientX; lastY = e.clientY;
   });
 
-  window.addEventListener('mousemove', (e) => {
+  const onMouseMove = (e) => {
     if (isDragging) {
       if (Math.hypot(e.clientX - startX, e.clientY - startY) > 4) hasDragged = true;
       panX += e.clientX - lastX; panY += e.clientY - lastY;
@@ -256,9 +256,11 @@ export function initFileGraphCanvas(canvasId, rawNodes = [], rawEdges = [], onSe
     const found = nodeArr.find(n => !(hideOrphans && n.isOrphan) && Math.hypot(n.x - worldX, n.y - worldY) <= n.radius + 4.5);
     hoverId = found ? found.id : null;
     canvas.style.cursor = found ? 'pointer' : (isDragging ? 'grabbing' : 'grab');
-  });
+  };
 
-  window.addEventListener('mouseup', () => { isDragging = false; });
+  const onMouseUp = () => { isDragging = false; };
+  window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mouseup', onMouseUp);
 
   canvas.addEventListener('click', (e) => {
     if (hasDragged) return;
@@ -294,6 +296,12 @@ export function initFileGraphCanvas(canvasId, rawNodes = [], rawEdges = [], onSe
     clearIsolate: () => { isIsolated = false; selectedId = null; fitToNodes(); },
     toggleOrphans: (hide) => { hideOrphans = hide; fitToNodes(); },
     setPulse: (p) => { pulseEnabled = p; },
-    destroy: () => { running = false; if (resizeObs) resizeObs.disconnect(); }
+    destroy: () => {
+      running = false;
+      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      if (resizeObs) resizeObs.disconnect();
+    }
   };
 }

@@ -149,6 +149,10 @@ pub(crate) fn handle_api_projects(request: tiny_http::Request, db_path: &PathBuf
 
 /// HTTP API handler for POST /api/projects/prune
 pub(crate) fn handle_api_prune(request: tiny_http::Request, db_path: &PathBuf) {
+    if request.method() != &tiny_http::Method::Post {
+        json_response(request, 405, &json!({ "success": false, "error": "Method not allowed" }));
+        return;
+    }
     match prune_missing_projects(db_path) {
         Ok(pruned) => json_response(
             request,

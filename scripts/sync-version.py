@@ -6,20 +6,23 @@ Reads version from Cargo.toml and synchronizes all files across the repository:
 - Cargo.lock (via cargo check)
 - scripts/install.ps1
 - scripts/install.sh
-- scripts/package-release.ps1
-- packaging/winget/JunMystery.AgentGuidance.locale.en-US.yaml
-- packaging/winget/JunMystery.AgentGuidance.installer.yaml
+- src/dashboard_src/package.json
+- build.rs
+- package.json & packaging/npm/package.json
 - packaging/homebrew/agent-guidance.rb
+- README.md badge
 
 Usage:
     python scripts/sync-version.py [OPTIONAL_NEW_VERSION]
-    (e.g., python scripts/sync-version.py 1.3.0)
+    (e.g., python scripts/sync-version.py 2.0.2)
 """
 
 import re
 import sys
 import subprocess
 from pathlib import Path
+
+SEMVER_RE = re.compile(r'^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')
 
 def get_script_dir():
     return Path(__file__).resolve().parent
@@ -57,8 +60,11 @@ def main():
     cargo_path = root / "Cargo.toml"
 
     if len(sys.argv) > 1:
-        new_version = sys.argv[1].lstrip("v")
-        set_cargo_version(cargo_path, new_version)
+        candidate = sys.argv[1].strip().lstrip("v")
+        if not SEMVER_RE.match(candidate):
+            print(f"Error: invalid semantic version '{sys.argv[1]}'. Expected e.g. 2.0.2", file=sys.stderr)
+            sys.exit(1)
+        set_cargo_version(cargo_path, candidate)
 
     version = read_cargo_version(cargo_path)
     v_version = f"v{version}"

@@ -5,6 +5,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::CodeGraphDb;
 use super::sanitize_fts5_query;
 
+fn escape_like_literal(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 impl CodeGraphDb {
     #[cfg(test)]
     pub fn get_file_content_hash(&self, path: &str) -> Result<Option<String>> {
@@ -50,9 +64,9 @@ impl CodeGraphDb {
         // Cascade will automatically clear symbols, symbol_edges, symbol_vectors, content_chunks, chunk_vectors
         self.conn.execute("DELETE FROM symbols WHERE file_path = ?", params![file_path])?;
         self.conn.execute("DELETE FROM content_chunks WHERE file_path = ?", params![file_path])?;
-        let prefix = format!("{}::%", file_path);
+        let prefix = format!("{}::%", escape_like_literal(file_path));
         let _ = self.conn.execute(
-            "DELETE FROM data_flow_edges WHERE caller_symbol_id LIKE ?1 OR callee_symbol_id LIKE ?1",
+            "DELETE FROM data_flow_edges WHERE caller_symbol_id LIKE ?1 ESCAPE '\\' OR callee_symbol_id LIKE ?1 ESCAPE '\\'",
             params![prefix],
         );
         Ok(())
@@ -73,9 +87,9 @@ impl CodeGraphDb {
 
         let mut pruned = 0;
         for path in recorded_paths {
-            if crate::context::exclusion::is_excluded_path(&path) || !project_path.join(&path).exists() {
-                let _ = self.clear_file_data(&path);
-                let _ = self.delete_file(&path);
+            if (crate::context::exclusion::is_excluded_path(&path) || !project_path.join(&path).exists())
+                && self.delete_file(&path).is_ok()
+            {
                 pruned += 1;
             }
         }
@@ -106,8 +120,19 @@ impl CodeGraphDb {
         language: Option<&str>, namespace: Option<&str>, receiver: Option<&str>,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO symbols (id, name, kind, file_path, parent, start_line, end_line, signature, language, namespace, receiver)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO symbols (id, name, kind, file_path, parent, start_line, end_line, signature, language, namespace, receiver)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                kind = excluded.kind,
+                file_path = excluded.file_path,
+                parent = excluded.parent,
+                start_line = excluded.start_line,
+                end_line = excluded.end_line,
+                signature = excluded.signature,
+                language = excluded.language,
+                namespace = excluded.namespace,
+                receiver = excluded.receiver",
             params![id, name, kind, file_path, parent, start_line as i64, end_line as i64, signature, language.unwrap_or("unknown"), namespace, receiver],
         )?;
         Ok(())
@@ -193,11 +218,11 @@ impl CodeGraphDb {
              FROM symbol_edges e
              JOIN symbols s1 ON e.source_id = s1.id
              JOIN symbols s2 ON e.target_id = s2.id
-             WHERE s1.name LIKE ?1 OR s2.name LIKE ?1
+             WHERE s1.name LIKE ?1 ESCAPE '\\' OR s2.name LIKE ?1 ESCAPE '\\'
              LIMIT 20",
         )?;
 
-        let pattern = format!("%{}%", symbol_name.trim());
+        let pattern = format!("%{}%", escape_like_literal(symbol_name.trim()));
         let rows = stmt.query_map(params![pattern], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -269,5 +294,85 @@ impl CodeGraphDb {
             params![passage_hash, bytes, model_version, now],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db_path(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "storage_test_{}_{}_{:?}",
+            label,
+            std::process::id(),
+            std::thread::current().id()
+        ))
+    }
+
+    #[test]
+    fn test_upsert_symbol_preserves_fts5_integrity_and_edges() {
+        let dir = temp_db_path("fts_upsert");
+        let _ = std::fs::remove_dir_all(&dir);
+        let db = CodeGraphDb::open(&dir.join("graph.db")).unwrap();
+
+        db.upsert_file("src/a.rs", "h1", 10, 1).unwrap();
+        db.insert_symbol("src/a.rs::fn::caller::L1", "caller", "function", "src/a.rs", None, 1, 5, Some("fn caller()")).unwrap();
+        db.insert_symbol("src/a.rs::fn::target::L10", "target", "function", "src/a.rs", None, 10, 15, Some("fn target()")).unwrap();
+        db.insert_edge("src/a.rs::fn::caller::L1", "src/a.rs::fn::target::L10", "calls", 1.0).unwrap();
+
+        // Re-inserting existing symbol id must update in place without corrupting FTS5 or cascading edge deletion
+        db.insert_symbol("src/a.rs::fn::target::L10", "target_renamed", "function", "src/a.rs", None, 10, 20, Some("fn target_renamed()")).unwrap();
+
+        db.conn
+            .execute("INSERT INTO symbols_fts(symbols_fts) VALUES('integrity-check')", [])
+            .expect("symbols_fts integrity check must pass after symbol upsert");
+
+        let related = db.search_related_symbols("target_renamed").unwrap();
+        assert_eq!(related.len(), 1);
+        assert_eq!(related[0].0, "caller");
+        assert_eq!(related[0].2, "target_renamed");
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_like_wildcards_are_escaped_in_clear_and_search() {
+        let dir = temp_db_path("like_escape");
+        let _ = std::fs::remove_dir_all(&dir);
+        let db = CodeGraphDb::open(&dir.join("graph.db")).unwrap();
+
+        db.upsert_file("src/a_b.rs", "h1", 10, 1).unwrap();
+        db.upsert_file("src/axb.rs", "h2", 10, 1).unwrap();
+
+        db.insert_symbol("src/a_b.rs::fn::foo_bar::L1", "foo_bar", "function", "src/a_b.rs", None, 1, 5, None).unwrap();
+        db.insert_symbol("src/axb.rs::fn::fooXbar::L1", "fooXbar", "function", "src/axb.rs", None, 1, 5, None).unwrap();
+        db.insert_symbol("src/axb.rs::fn::sink::L10", "sink", "function", "src/axb.rs", None, 10, 15, None).unwrap();
+
+        db.insert_edge("src/a_b.rs::fn::foo_bar::L1", "src/axb.rs::fn::sink::L10", "calls", 1.0).unwrap();
+        db.insert_edge("src/axb.rs::fn::fooXbar::L1", "src/axb.rs::fn::sink::L10", "calls", 1.0).unwrap();
+
+        db.conn.execute(
+            "INSERT INTO data_flow_edges (caller_symbol_id, callee_symbol_id, source_variable, target_parameter, arg_index, call_line)
+             VALUES (?1, ?2, 'x', 'y', 0, 2)",
+            params!["src/axb.rs::fn::fooXbar::L1", "src/axb.rs::fn::sink::L10"],
+        ).unwrap();
+
+        // Searching with '_' must NOT match 'fooXbar'
+        let matches = db.search_related_symbols("foo_bar").unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].0, "foo_bar");
+
+        // Clearing 'src/a_b.rs' must NOT delete data_flow_edges for 'src/axb.rs'
+        db.clear_file_data("src/a_b.rs").unwrap();
+        let remaining: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM data_flow_edges", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 1);
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

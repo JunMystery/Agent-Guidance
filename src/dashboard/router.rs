@@ -1,7 +1,114 @@
 use super::{DashboardAssets, StatsCache, graph, logs_api, projects, stats::handle_api_stats};
 use serde_json::json;
+use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tiny_http::{Header, Response, StatusCode};
+
+pub(crate) const MAX_API_BODY_BYTES: u64 = 1024 * 1024;
+static ENGINE_REFRESH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn read_bounded_body(request: &mut tiny_http::Request) -> Result<String, (u16, String)> {
+    let mut buf = Vec::new();
+    let mut reader = request.as_reader().take(MAX_API_BODY_BYTES + 1);
+    reader
+        .read_to_end(&mut buf)
+        .map_err(|e| (400, format!("Failed to read request body: {}", e)))?;
+    if buf.len() as u64 > MAX_API_BODY_BYTES {
+        return Err((413, "Request body exceeds 1 MB limit".to_string()));
+    }
+    String::from_utf8(buf).map_err(|e| (400, format!("Invalid UTF-8 request body: {}", e)))
+}
+
+pub(crate) fn is_loopback_origin(origin: &str) -> bool {
+    let lower = origin.trim().to_ascii_lowercase();
+    let rest = if let Some(r) = lower.strip_prefix("http://") {
+        r
+    } else if let Some(r) = lower.strip_prefix("https://") {
+        r
+    } else {
+        return false;
+    };
+    let rest = rest.trim_end_matches('/');
+    let host_port = if let Some(after_bracket) = rest.strip_prefix("[::1]") {
+        after_bracket
+    } else if let Some(after_host) = rest.strip_prefix("127.0.0.1") {
+        after_host
+    } else if let Some(after_host) = rest.strip_prefix("localhost") {
+        after_host
+    } else {
+        return false;
+    };
+    host_port.is_empty()
+        || host_port
+            .strip_prefix(':')
+            .is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn allowed_cors_origin(request: &tiny_http::Request) -> Option<String> {
+    let origin = request
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Origin"))
+        .map(|h| h.value.as_str().trim().to_string())?;
+    if is_loopback_origin(&origin) {
+        return Some(origin);
+    }
+    let host = request
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Host"))
+        .map(|h| h.value.as_str().trim());
+    if let Some(h) = host {
+        let lower_origin = origin.trim_end_matches('/').to_ascii_lowercase();
+        let lower_host = h.to_ascii_lowercase();
+        if lower_origin == format!("http://{}", lower_host)
+            || lower_origin == format!("https://{}", lower_host)
+        {
+            return Some(origin);
+        }
+    }
+    None
+}
+
+fn check_dashboard_access(request: &tiny_http::Request, path: &str) -> Option<(u16, &'static str)> {
+    if !path.starts_with("/api/") && path != "/health" {
+        return None;
+    }
+
+    let has_origin = request.headers().iter().any(|h| h.field.equiv("Origin"));
+    if has_origin && allowed_cors_origin(request).is_none() {
+        return Some((403, "Forbidden: cross-origin request rejected"));
+    }
+
+    let is_remote_client = request
+        .remote_addr()
+        .map(|addr| !addr.ip().is_loopback())
+        .unwrap_or(false);
+
+    if is_remote_client && path.starts_with("/api/") {
+        let cfg_key = crate::config::current_config().server.api_key.clone();
+        let expected_key = if !cfg_key.is_empty() {
+            cfg_key
+        } else {
+            std::env::var("AGENT_GUIDANCE_API_KEY").unwrap_or_default()
+        };
+        if expected_key.is_empty() {
+            return Some((403, "Forbidden: remote API access requires configured api_key"));
+        }
+        let auth_hdr = request
+            .headers()
+            .iter()
+            .find(|h| h.field.equiv("Authorization"))
+            .map(|h| h.value.as_str());
+        let expected = format!("Bearer {}", expected_key);
+        if auth_hdr != Some(expected.as_str()) {
+            return Some((401, "Unauthorized: invalid or missing Bearer token"));
+        }
+    }
+
+    None
+}
 
 pub(crate) fn handle_dashboard_request(
     request: tiny_http::Request,
@@ -15,6 +122,25 @@ pub(crate) fn handle_dashboard_request(
         .unwrap_or("/")
         .trim_end_matches('/');
     let path = if url.is_empty() { "/" } else { url };
+
+    if request.method() == &tiny_http::Method::Options {
+        let mut resp = Response::empty(204);
+        if let Some(origin) = allowed_cors_origin(&request) {
+            if let Ok(hdr) = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], origin.as_bytes()) {
+                resp.add_header(hdr);
+            }
+            resp.add_header(Header::from_bytes(&b"Vary"[..], &b"Origin"[..]).unwrap());
+            resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap());
+            resp.add_header(Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, Authorization"[..]).unwrap());
+        }
+        let _ = request.respond(resp);
+        return;
+    }
+
+    if let Some((status, msg)) = check_dashboard_access(&request, path) {
+        json_response(request, status, &json!({ "status": "error", "error": msg }));
+        return;
+    }
 
     match path {
         "/" | "/index.html" => serve_asset(request, "index.html", "text/html; charset=utf-8"),
@@ -32,21 +158,15 @@ pub(crate) fn handle_dashboard_request(
         "/api/stats" => handle_api_stats(request, project_path, cache),
         "/api/engine/refresh" => handle_api_engine_refresh(request, cache),
         "/api/projects" => {
-            let db_path = dirs::home_dir()
-                .map(|h| h.join(".agent-guidance").join("usage.db"))
-                .unwrap_or_else(|| std::path::PathBuf::from("usage.db"));
+            let db_path = crate::mcp::db::get_db_path();
             projects::handle_api_projects(request, &db_path);
         }
         "/api/projects/prune" => {
-            let db_path = dirs::home_dir()
-                .map(|h| h.join(".agent-guidance").join("usage.db"))
-                .unwrap_or_else(|| std::path::PathBuf::from("usage.db"));
+            let db_path = crate::mcp::db::get_db_path();
             projects::handle_api_prune(request, &db_path);
         }
         "/api/projects/delete" => {
-            let db_path = dirs::home_dir()
-                .map(|h| h.join(".agent-guidance").join("usage.db"))
-                .unwrap_or_else(|| std::path::PathBuf::from("usage.db"));
+            let db_path = crate::mcp::db::get_db_path();
             projects::handle_api_delete_project(request, &db_path, cache);
         }
         "/api/graph" => graph::handle_api_graph(request, project_path),
@@ -120,34 +240,37 @@ pub(crate) fn serve_asset(request: tiny_http::Request, name: &str, mime_type: &s
 pub(crate) fn json_response(request: tiny_http::Request, status_code: u16, data: &serde_json::Value) {
     let body = serde_json::to_string(data).unwrap_or_default();
     let header_ct = Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap();
-    let origin_str = request
-        .headers()
-        .iter()
-        .find(|h| h.field.equiv("Origin"))
-        .map(|h| h.value.as_str())
-        .unwrap_or("*");
-    let header_cors = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], origin_str.as_bytes()).unwrap();
-    let header_methods = Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap();
-    let header_headers = Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, Authorization"[..]).unwrap();
-    let response = Response::from_string(body)
+    let cors_origin = allowed_cors_origin(&request);
+    let mut response = Response::from_string(body)
         .with_header(header_ct)
-        .with_header(header_cors)
-        .with_header(header_methods)
-        .with_header(header_headers)
         .with_status_code(StatusCode(status_code));
+    if let Some(origin_str) = cors_origin {
+        if let Ok(hdr) = Header::from_bytes(&b"Access-Control-Allow-Origin"[..], origin_str.as_bytes()) {
+            response.add_header(hdr);
+            response.add_header(Header::from_bytes(&b"Vary"[..], &b"Origin"[..]).unwrap());
+            response.add_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap());
+            response.add_header(Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, Authorization"[..]).unwrap());
+        }
+    }
     let _ = request.respond(response);
 }
 
 fn handle_api_cleanup(request: tiny_http::Request) {
-    let db_path = dirs::home_dir()
-        .map(|h| h.join(".agent-guidance").join("usage.db"))
-        .unwrap_or_else(|| std::path::PathBuf::from("usage.db"));
+    if request.method() != &tiny_http::Method::Post {
+        json_response(request, 405, &json!({ "success": false, "error": "Method not allowed" }));
+        return;
+    }
+
+    let db_path = crate::mcp::db::get_db_path();
 
     let conn = match rusqlite::Connection::open_with_flags(
         &db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     ) {
-        Ok(c) => c,
+        Ok(c) => {
+            let _ = c.busy_timeout(std::time::Duration::from_millis(2000));
+            c
+        }
         Err(e) => {
             json_response(request, 500, &json!({"error": e.to_string()}));
             return;
@@ -173,10 +296,26 @@ fn handle_api_cleanup(request: tiny_http::Request) {
 }
 
 fn handle_api_engine_refresh(request: tiny_http::Request, cache: &Arc<Mutex<StatsCache>>) {
+    if request.method() != &tiny_http::Method::Post {
+        json_response(request, 405, &json!({ "success": false, "error": "Method not allowed" }));
+        return;
+    }
+
     crate::ml::embeddings::cache::clear_passage_cache();
-    crate::ml::embeddings::cache::warmup_cache();
     if let Ok(mut guard) = cache.lock() {
         guard.data = None;
+    }
+    if !ENGINE_REFRESH_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        if std::thread::Builder::new()
+            .name("ag-dash-refresh".to_string())
+            .spawn(|| {
+                crate::ml::embeddings::cache::warmup_cache();
+                ENGINE_REFRESH_IN_FLIGHT.store(false, Ordering::SeqCst);
+            })
+            .is_err()
+        {
+            ENGINE_REFRESH_IN_FLIGHT.store(false, Ordering::SeqCst);
+        }
     }
     let db_bytes = crate::mcp::db::get_db_size_bytes();
     json_response(
@@ -184,7 +323,7 @@ fn handle_api_engine_refresh(request: tiny_http::Request, cache: &Arc<Mutex<Stat
         200,
         &json!({
             "success": true,
-            "message": "Neural vector embeddings cache refreshed and model checkpoints reloaded",
+            "message": "Neural vector embeddings cache refresh scheduled in background",
             "status": "ok",
             "engine": "rust-candle",
             "backend": "candle-bert",
@@ -220,4 +359,26 @@ pub fn url_decode(s: &str) -> String {
         }
     }
     String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_loopback_origin_validation() {
+        assert!(is_loopback_origin("http://127.0.0.1:11997"));
+        assert!(is_loopback_origin("http://localhost:3000"));
+        assert!(is_loopback_origin("http://[::1]:11997"));
+        assert!(is_loopback_origin("https://localhost"));
+        assert!(!is_loopback_origin("http://localhost.evil.com"));
+        assert!(!is_loopback_origin("https://evil.com"));
+        assert!(!is_loopback_origin("null"));
+    }
+
+    #[test]
+    fn test_url_decode_utf8_multibyte() {
+        assert_eq!(url_decode("t%E1%BA%A3o+code"), "tảo code");
+        assert_eq!(url_decode("agent-guidance"), "agent-guidance");
+    }
 }

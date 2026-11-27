@@ -100,6 +100,7 @@ pub fn load_connected_graph_data(conn: &Connection, max_nodes: usize) -> Result<
         "WITH selected AS (
             SELECT id FROM (
                 SELECT s.id,
+                       (SELECT COUNT(*) FROM symbol_edges e WHERE e.source_id = s.id OR e.target_id = s.id) as degree,
                        ROW_NUMBER() OVER (
                            PARTITION BY substr(replace(s.file_path, '\\', '/'), 1, 
                                case when instr(replace(s.file_path, '\\', '/'), '/') > 0 
@@ -110,7 +111,7 @@ pub fn load_connected_graph_data(conn: &Connection, max_nodes: usize) -> Result<
                        ) as rank_in_domain
                 FROM symbols s
                 WHERE s.kind != 'package'
-            ) WHERE rank_in_domain <= 35 LIMIT ?1
+            ) WHERE rank_in_domain <= 35 ORDER BY degree DESC LIMIT ?1
         )
         SELECT e.source_id, e.target_id, e.edge_type, e.weight, {}
         FROM symbol_edges e
@@ -193,4 +194,95 @@ pub fn load_connected_graph_data(conn: &Connection, max_nodes: usize) -> Result<
         nodes: sorted_nodes,
         edges,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_edge_sql_selects_high_degree_hubs_from_late_domain() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE symbols (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                parent TEXT,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL
+            );
+            CREATE TABLE symbol_edges (
+                source_id TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                edge_type TEXT NOT NULL,
+                weight REAL NOT NULL
+            );",
+        )
+        .unwrap();
+
+        // Populate 4 alphabetically early domains with 35 degree-0 symbols each (140 > primary_limit=120).
+        // Without ORDER BY degree DESC in edge_sql's `selected` CTE, LIMIT 120 truncates before `z_hub`.
+        for d in 0..4 {
+            for i in 0..35 {
+                let id = format!("d{d}_{i}");
+                let name = format!("fn_{d}_{i}");
+                let file_path = format!("d{d:02}/mod.rs");
+                conn.execute(
+                    "INSERT INTO symbols (id, name, kind, file_path, parent, start_line, end_line)
+                     VALUES (?1, ?2, 'function', ?3, NULL, 1, 10)",
+                    rusqlite::params![id, name, file_path],
+                )
+                .unwrap();
+            }
+        }
+
+        // Insert high-degree hubs in a late-sorting domain `z_hub/`.
+        conn.execute(
+            "INSERT INTO symbols (id, name, kind, file_path, parent, start_line, end_line)
+             VALUES ('hub_a', 'hub_a', 'function', 'z_hub/core.rs', NULL, 1, 50)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO symbols (id, name, kind, file_path, parent, start_line, end_line)
+             VALUES ('hub_b', 'hub_b', 'function', 'z_hub/core.rs', NULL, 51, 100)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO symbol_edges (source_id, target_id, edge_type, weight)
+             VALUES ('hub_a', 'hub_b', 'calls', 1.0)",
+            [],
+        )
+        .unwrap();
+
+        for i in 0..8 {
+            let sat_id = format!("sat_{i}");
+            conn.execute(
+                "INSERT INTO symbols (id, name, kind, file_path, parent, start_line, end_line)
+                 VALUES (?1, ?1, 'function', 'z_hub/sat.rs', NULL, 1, 10)",
+                rusqlite::params![sat_id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO symbol_edges (source_id, target_id, edge_type, weight)
+                 VALUES ('hub_a', ?1, 'calls', 0.8)",
+                rusqlite::params![sat_id],
+            )
+            .unwrap();
+        }
+
+        let result = load_connected_graph_data(&conn, 150).unwrap();
+        let has_hub_edge = result
+            .edges
+            .iter()
+            .any(|e| e["source"] == "hub_a" && e["target"] == "hub_b");
+        assert!(
+            has_hub_edge,
+            "edge_sql must order selected primary nodes by degree DESC so late-domain hubs keep their edges"
+        );
+        assert_eq!(result.edges.len(), 9);
+    }
 }

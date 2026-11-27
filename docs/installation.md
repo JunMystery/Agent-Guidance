@@ -60,7 +60,7 @@ Or start the native web usage dashboard server:
 
 ## Embedded Skills & Local Workspace Extension
 
-Agent Guidance compiles all 279 official skills and passage vectors directly into the native binary via `rust_embed`. No external corpus download is required.
+Agent Guidance compiles all 629 embedded skills and precomputed semantic passage vectors (`src/ml/precomputed_vectors.bin`) directly into the native binary via `rust_embed`. No external corpus download is required.
 
 To add custom skills for a specific project, create markdown skill capsules in:
 

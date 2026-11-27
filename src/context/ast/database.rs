@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 
 // SQL Regexes
 static SQL_TABLE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)create\s+(?:table|view|index|procedure|function|trigger)\s+(?:if\s+not\s+exists\s+)?([a-zA-Z0-9_"]+)"#).unwrap()
+    Regex::new(r#"(?i)create\s+(table|view|index|procedure|function|trigger)\s+(?:if\s+not\s+exists\s+)?([a-zA-Z0-9_"]+)"#).unwrap()
 });
 
 static SQL_REFERENCES_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -41,18 +41,14 @@ pub fn extract_symbols(content: &str, lang: AstLanguage) -> Vec<AstSymbol> {
             for (idx, line) in lines.iter().enumerate() {
                 let line_num = idx + 1;
                 if let Some(cap) = SQL_TABLE_RE.captures(line) {
-                    if let Some(m) = cap.get(1) {
-                        let name = clean_ident(m.as_str());
-                        let kind = if line.to_ascii_lowercase().contains("view") {
-                            "view"
-                        } else if line.to_ascii_lowercase().contains("index") {
-                            "index"
-                        } else if line.to_ascii_lowercase().contains("procedure") || line.to_ascii_lowercase().contains("function") {
-                            "function"
-                        } else if line.to_ascii_lowercase().contains("trigger") {
-                            "trigger"
-                        } else {
-                            "table"
+                    if let (Some(kind_m), Some(name_m)) = (cap.get(1), cap.get(2)) {
+                        let name = clean_ident(name_m.as_str());
+                        let kind = match kind_m.as_str().to_ascii_lowercase().as_str() {
+                            "view" => "view",
+                            "index" => "index",
+                            "procedure" | "function" => "function",
+                            "trigger" => "trigger",
+                            _ => "table",
                         };
                         symbols.push(build_sym(&name, kind, line_num, &lines, lang));
                     }
@@ -210,6 +206,15 @@ CREATE TABLE posts (
 
         let calls = extract_calls(sql, AstLanguage::Sql);
         assert!(calls.iter().any(|c| c.callee_name == "users"));
+    }
+
+    #[test]
+    fn test_sql_table_name_containing_kind_keyword_keeps_table_kind() {
+        let sql = "CREATE TABLE reviews (id INT);\nCREATE TABLE trigger_logs (id INT);\nCREATE VIEW active_tables AS SELECT 1;\n";
+        let syms = extract_symbols(sql, AstLanguage::Sql);
+        assert!(syms.iter().any(|s| s.name == "reviews" && s.kind == "table"));
+        assert!(syms.iter().any(|s| s.name == "trigger_logs" && s.kind == "table"));
+        assert!(syms.iter().any(|s| s.name == "active_tables" && s.kind == "view"));
     }
 
     #[test]

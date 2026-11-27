@@ -1,6 +1,7 @@
 // SVG string builders for Glass Stream Wave & Heatmap Ribbon chart.
 
 import { fmtTokens, fmtPct } from '../../format.js';
+import { escapeHtml } from '../../dom.js';
 import { slotCenter, CHART_W, PAD } from './scale.js';
 import { buildSplinePath, buildSplineAreaPath } from './spline.js';
 import { t } from '../../i18n/index.js';
@@ -120,7 +121,9 @@ export function buildXLabels(hours, box) {
       const hourStr = formatHour(h, i);
       const text = (isLast && h.is_current) ? (t('chart.now') || 'NOW') : hourStr;
       const cls = (isLast && h.is_current) ? 'chart-xlabel font-bold is-now' : 'chart-xlabel';
-      labels += '<text x="' + x.toFixed(1) + '" y="' + (box.yMax + 28) + '" class="' + cls + '" data-hour="' + hourStr + '">' + text + '</text>';
+      const safeHour = escapeHtml(hourStr);
+      const safeText = escapeHtml(text);
+      labels += '<text x="' + x.toFixed(1) + '" y="' + (box.yMax + 28) + '" class="' + cls + '" data-hour="' + safeHour + '">' + safeText + '</text>';
     }
   });
   return labels;
@@ -130,7 +133,7 @@ export function buildHoverOverlay(hours, box, yCalls, yLatency) {
   const n = hours.length;
   const slotW = box.w / Math.max(1, n - 1);
   let overlay = '<g class="chart-interactive-layer">';
-  overlay += '<line id="crosshair-line" x1="0" y1="' + box.y0 + '" x2="' + (box.yMax + 14) + '" class="chart-crosshair hidden" />';
+  overlay += '<line id="crosshair-line" x1="0" y1="' + box.y0 + '" x2="0" y2="' + (box.yMax + 14) + '" class="chart-crosshair hidden" />';
   overlay += '<circle id="crosshair-dot-payload" cx="0" cy="0" r="5" class="crosshair-dot dot-payload hidden" />';
   overlay += '<circle id="crosshair-dot-opt" cx="0" cy="0" r="3.5" class="crosshair-dot dot-opt hidden" />';
 

@@ -2,6 +2,13 @@ import { fetchSkillContent, saveSkillContent, revertSkillContent } from '../skil
 import { showAlert, showConfirm } from '../dialog.js';
 
 let activeCallback = null;
+let closeActiveModal = null;
+
+function escapeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, m => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[m]));
+}
 
 export async function openSkillEditorModal(skillName = '', onSaved = null) {
   activeCallback = onSaved;
@@ -29,7 +36,7 @@ export async function openSkillEditorModal(skillName = '', onSaved = null) {
 
       <div style="padding:12px 20px;border-bottom:1px solid var(--border-color);background:var(--bg-secondary);display:flex;gap:10px;align-items:center">
         <label style="font-size:12px;font-weight:600;color:var(--text-secondary);min-width:70px">Skill Slug:</label>
-        <input type="text" id="editor-skill-name" value="${skillName}" placeholder="e.g. my-custom-skill"
+        <input type="text" id="editor-skill-name" value="${escapeHtml(skillName)}" placeholder="e.g. my-custom-skill"
           ${isNew ? '' : 'readonly'} style="flex:1;padding:6px 10px;font-family:var(--font-mono);font-size:13px;border-radius:4px;border:1px solid var(--border-color);background:${isNew ? 'var(--bg-primary)' : 'var(--bg-tertiary)'};color:var(--text-primary)">
       </div>
 
@@ -110,13 +117,18 @@ function bindModalEvents(modal, isNew) {
   const revertBtn = document.getElementById('btn-editor-revert');
   const textarea = document.getElementById('editor-skill-content');
 
+  if (closeActiveModal) {
+    closeActiveModal();
+  }
   const onKey = (e) => {
     if (e.key === 'Escape') closeModal();
   };
   const closeModal = () => {
     modal.style.display = 'none';
     window.removeEventListener('keydown', onKey);
+    if (closeActiveModal === closeModal) closeActiveModal = null;
   };
+  closeActiveModal = closeModal;
 
   modal.onclick = (e) => {
     if (e.target === modal) closeModal();
@@ -162,7 +174,8 @@ async function onSaveClick(modal, isNew) {
   saveBtn.disabled = true;
   try {
     await saveSkillContent(name, content);
-    modal.style.display = 'none';
+    if (closeActiveModal) closeActiveModal();
+    else modal.style.display = 'none';
     showAlert({ title: 'Skill Saved', message: `Skill '${name}' saved to global staging override. Use 'Compile Staging to Binary' when ready to re-index.`, variant: 'success' });
     if (activeCallback) activeCallback(name);
   } catch (err) {
@@ -186,7 +199,8 @@ async function onRevertClick(modal) {
 
   try {
     await revertSkillContent(name);
-    modal.style.display = 'none';
+    if (closeActiveModal) closeActiveModal();
+    else modal.style.display = 'none';
     showAlert({ title: 'Skill Reverted', message: `'${name}' has been reverted to embedded default.`, variant: 'success' });
     if (activeCallback) activeCallback(name);
   } catch (err) {

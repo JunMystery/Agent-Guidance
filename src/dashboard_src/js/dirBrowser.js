@@ -1,6 +1,6 @@
 // Directory browser modal component for changing tracked project paths.
-import { el } from './dom.js';
-import { fetchData } from './api.js';
+import { el, escapeHtml } from './dom.js';
+import { apiFetch, fetchData } from './api.js';
 import { showAlert } from './dialog.js';
 import { t } from './i18n/index.js';
 
@@ -8,10 +8,10 @@ let currentBrowserPath = '.';
 
 export async function changeProjectPath() {
   try {
-    const resp = await fetch('/api/dirs/choose', { method: 'POST' });
+    const resp = await apiFetch('/api/dirs/choose', { method: 'POST' });
     const data = await resp.json();
     if (data.success && data.path) {
-      fetchData();
+      fetchData({ force: true });
     } else {
       openDirBrowser();
     }
@@ -28,7 +28,7 @@ export async function openDirBrowser(path = '.') {
 
 export async function renderDirBrowser(path) {
   try {
-    const resp = await fetch('/api/dirs?path=' + encodeURIComponent(path));
+    const resp = await apiFetch('/api/dirs?path=' + encodeURIComponent(path));
     const data = await resp.json();
     const curEl = el('dir-current');
     if (curEl) curEl.textContent = data.current || path;
@@ -50,16 +50,16 @@ export async function renderDirBrowser(path) {
       data.dirs.forEach(d => {
         const ddiv = document.createElement('div');
         ddiv.className = 'dir-item';
-        ddiv.textContent = '📁 ' + d.name;
+        ddiv.textContent = d.name;
         ddiv.onclick = () => renderDirBrowser(d.path);
         list.appendChild(ddiv);
       });
     } else if (!data.parent) {
-      list.innerHTML = `<div class="dir-empty">${t('dir_browser.empty')}</div>`;
+      list.innerHTML = `<div class="dir-empty">${escapeHtml(t('dir_browser.empty'))}</div>`;
     }
   } catch (e) {
     const list = el('dir-list');
-    if (list) list.innerHTML = `<div class="dir-error">${t('dir_browser.error')}</div>`;
+    if (list) list.innerHTML = `<div class="dir-error">${escapeHtml(t('dir_browser.error'))}</div>`;
   }
 }
 
@@ -69,11 +69,11 @@ export function closeDirBrowser() {
 
 export async function selectDirPath() {
   try {
-    const resp = await fetch('/api/dirs/select?path=' + encodeURIComponent(currentBrowserPath), { method: 'POST' });
+    const resp = await apiFetch('/api/dirs/select?path=' + encodeURIComponent(currentBrowserPath), { method: 'POST' });
     const data = await resp.json();
     if (data.success) {
       closeDirBrowser();
-      fetchData();
+      fetchData({ force: true });
     } else {
       await showAlert({
         title: t('dir_browser.select_failed'),

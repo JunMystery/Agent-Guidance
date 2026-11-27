@@ -1,10 +1,10 @@
-use anyhow::Result;
-use serde_json::{Value, json};
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::mcp::templates::*;
 
+use super::clients::{atomic_write_text, parse_existing_json_object};
 use super::rules_cleaner::{remove_global_rules, remove_skills_enforcer};
 
 pub fn run_uninstall() -> Result<()> {
@@ -106,12 +106,15 @@ pub fn run_uninstall() -> Result<()> {
 
     for (path, key) in &mcp_targets {
         if path.exists() {
-            if !key.is_empty() {
-                remove_mcp_entry(path, SERVER_ID, key)?;
+            let res = if !key.is_empty() {
+                remove_mcp_entry(path, SERVER_ID, key)
             } else {
-                remove_codex_entry(path)?;
+                remove_codex_entry(path)
+            };
+            match res {
+                Ok(()) => println!("  Removed from: {}", path.display()),
+                Err(e) => println!("  Skipped {} ({})", path.display(), e),
             }
-            println!("  Removed from: {}", path.display());
         }
     }
 
@@ -123,33 +126,37 @@ pub fn run_uninstall() -> Result<()> {
 }
 
 fn remove_mcp_entry(config_path: &Path, server_id: &str, key: &str) -> Result<()> {
-    let content = fs::read_to_string(config_path)?;
-    let mut root: Value = serde_json::from_str(&content).unwrap_or_else(|_| json!({}));
-    if !root.is_object() {
-        return Ok(());
-    }
+    let mut root = parse_existing_json_object(config_path)?;
+    let _ = fs::copy(config_path, config_path.with_extension("json.bak"));
     if let Some(obj) = root.as_object_mut() {
         if let Some(servers) = obj.get_mut(key).and_then(|v| v.as_object_mut()) {
             servers.remove(server_id);
             servers.remove(crate::mcp::templates::OLD_SERVER_ID);
         }
     }
-    fs::write(config_path, serde_json::to_string_pretty(&root)?)?;
+    atomic_write_text(config_path, &serde_json::to_string_pretty(&root)?)?;
     Ok(())
 }
 
 fn remove_codex_entry(config_path: &Path) -> Result<()> {
     let content = fs::read_to_string(config_path)?;
-    let mut value: toml::Value = content
-        .parse::<toml::Value>()
-        .unwrap_or_else(|_| toml::Value::Table(toml::map::Map::new()));
+    if content.trim().is_empty() {
+        return Ok(());
+    }
+    let mut value: toml::Value = content.parse::<toml::Value>().with_context(|| {
+        format!(
+            "Refusing to overwrite invalid TOML config at {}",
+            config_path.display()
+        )
+    })?;
+    let _ = fs::copy(config_path, config_path.with_extension("toml.bak"));
     if let Some(table) = value.as_table_mut() {
         if let Some(servers) = table.get_mut("mcp_servers").and_then(|v| v.as_table_mut()) {
             servers.remove(SERVER_ID);
             servers.remove(OLD_SERVER_ID);
         }
     }
-    fs::write(config_path, toml::to_string_pretty(&value)?)?;
+    atomic_write_text(config_path, &toml::to_string_pretty(&value)?)?;
     Ok(())
 }
 

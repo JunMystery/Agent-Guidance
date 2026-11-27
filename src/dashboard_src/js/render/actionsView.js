@@ -1,4 +1,4 @@
-import { el, qsa, setText, emptyState } from '../dom.js';
+import { el, qsa, setText, emptyState, escapeHtml } from '../dom.js';
 import { fmtTokens, savingsBadge } from '../format.js';
 import { filterRows, bindFilter, makeSortable } from '../interactions.js';
 import { paginate, renderPagination, resetPage } from '../pagination.js';
@@ -47,6 +47,8 @@ export function renderActionsView(data) {
 
   drawKpis(data.totals || {}, store.tool_breakdown);
   bindActionsControls();
+  makeSortable('actions-body', store.tool_breakdown, drawBreakdownTable);
+  makeSortable('actions-stream-body', store.recent_actions, () => drawStreamTable(store, activeCategory, activeEff));
   refreshCurrentView();
 }
 
@@ -113,21 +115,21 @@ function drawBreakdownTable() {
     tr.innerHTML = `
       <td>
         <div class="tool-cell">
-          <span class="tool-tag ${r.meta.cls}">${r.meta.label}</span>
-          <span class="tool-name">${r.tool_name}</span>
+          <span class="tool-tag ${escapeHtml(r.meta.cls)}">${escapeHtml(r.meta.label)}</span>
+          <span class="tool-name">${escapeHtml(r.tool_name)}</span>
         </div>
       </td>
-      <td><span class="badge op-badge">${op}</span></td>
-      <td class="num-cell"><strong>${r.cnt}</strong></td>
+      <td><span class="badge op-badge">${escapeHtml(op)}</span></td>
+      <td class="num-cell"><strong>${Number(r.cnt) || 0}</strong></td>
       <td class="num-cell muted-cell">${fmtTokens(r.tok_orig)}</td>
       <td class="num-cell font-mono">${fmtTokens(r.tok_opt)}</td>
       <td>
         <div class="eff-cell">
-          <div class="eff-bar-bg" title="${t('actions.compression_title', { pct })}">
+          <div class="eff-bar-bg" title="${escapeHtml(t('actions.compression_title', { pct }))}">
             <div class="eff-bar-fill" style="width:${pctNum}%"></div>
           </div>
           <span class="${badgeClass}">${pct}%</span>
-          <button class="btn-inspect" title="${t('actions.inspect_traces_title')}">${isExp ? '▲' : '▼'}</button>
+          <button class="btn-inspect" title="${escapeHtml(t('actions.inspect_traces_title'))}">${isExp ? '▲' : '▼'}</button>
         </div>
       </td>
     `;
@@ -159,17 +161,17 @@ function drawBreakdownTable() {
         ? traceMatches.map(tItem => `
             <div class="trace-chip">
               <span class="font-mono">${fmtTokens(tItem.tokens_original)} &rarr; ${fmtTokens(tItem.tokens_optimized)}</span>
-              ${tItem.target ? `<span class="target-inline" title="${tItem.target.replace(/"/g, '&quot;')}">${tItem.target.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>` : ''}
-              <span class="badge ${tItem.error_message ? 'red' : 'green'}">${tItem.error_message ? t('status.failed') : t('status.success')}</span>
+              ${tItem.target ? `<span class="target-inline" title="${escapeHtml(tItem.target)}">${escapeHtml(tItem.target)}</span>` : ''}
+              <span class="badge ${tItem.error_message ? 'red' : 'green'}">${escapeHtml(tItem.error_message ? t('status.failed') : t('status.success'))}</span>
             </div>
           `).join('')
-        : `<span class="text-muted">${t('actions.no_live_samples')}</span>`;
+        : `<span class="text-muted">${escapeHtml(t('actions.drilldown_empty'))}</span>`;
 
       expTr.innerHTML = `
         <td colspan="6">
           <div class="expanded-panel">
             <div class="panel-header">
-              <strong>${t('actions.traces_breakdown', { tool: r.tool_name, op })}</strong>
+              <strong>${escapeHtml(t('actions.drilldown_inspector', { tool: r.tool_name, op }))}</strong>
             </div>
             <div class="traces-list">${tracesHtml}</div>
           </div>

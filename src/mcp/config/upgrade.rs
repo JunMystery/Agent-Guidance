@@ -1,11 +1,57 @@
 use anyhow::Result;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use super::setup::run_setup;
 
 const REPO: &str = "JunMystery/Agent-Guidance";
+const MAX_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
+
+fn is_agent_guidance_process_name(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "agent-guidance" | "agent-guidance.exe"
+    )
+}
+
+fn escape_ps_single_quoted(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+fn parse_sha256_file(text: &str) -> Option<String> {
+    let token = text.split_whitespace().next()?.trim().to_ascii_lowercase();
+    if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(token)
+    } else {
+        None
+    }
+}
+
+fn download_bytes_bounded(url: &str, timeout_secs: u64, max_bytes: u64) -> Result<Vec<u8>> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build();
+    let resp = agent.get(url).call()?;
+    let mut reader = resp.into_reader().take(max_bytes + 1);
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf)?;
+    if buf.len() as u64 > max_bytes {
+        anyhow::bail!("Downloaded payload from {} exceeds size limit", url);
+    }
+    Ok(buf)
+}
+
+fn download_to_file(url: &str, dest: &Path) -> Result<()> {
+    let bytes = download_bytes_bounded(url, 120, MAX_DOWNLOAD_BYTES)?;
+    if bytes.is_empty() {
+        anyhow::bail!("Downloaded file from {} is empty", url);
+    }
+    fs::write(dest, bytes)?;
+    Ok(())
+}
 
 fn get_release_asset_name() -> Option<&'static str> {
     if cfg!(target_os = "windows") {
@@ -49,8 +95,8 @@ fn stop_other_agent_guidance_processes() {
     let mut killed_any = false;
     for (pid, proc_) in sys.processes() {
         if pid.as_u32() != my_pid {
-            let name = proc_.name().to_lowercase();
-            if name.contains("agent-guidance") {
+            let name = proc_.name().to_string();
+            if is_agent_guidance_process_name(&name) {
                 let _ = proc_.kill();
                 killed_any = true;
             }
@@ -79,46 +125,55 @@ pub fn run_upgrade() -> Result<()> {
     fs::create_dir_all(&tmp_dir)?;
 
     let download_url = format!("https://github.com/{}/releases/latest/download/{}", REPO, asset_name);
+    let sha_url = format!("{}.sha256", download_url);
     let archive_path = tmp_dir.join(asset_name);
 
     println!("  Downloading {}...", download_url);
+    if let Err(e) = download_to_file(&download_url, &archive_path) {
+        let _ = fs::remove_dir_all(&tmp_dir);
+        anyhow::bail!("Failed to download release archive from {}: {}", download_url, e);
+    }
 
-    let downloaded = if cfg!(windows) {
-        let ps_cmd = format!(
-            "$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing",
-            download_url,
-            archive_path.to_string_lossy().replace('\\', "/")
-        );
-        let status = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
-            .status();
-        matches!(status, Ok(s) if s.success())
-    } else {
-        let status = std::process::Command::new("curl")
-            .args(["-sSL", &download_url, "-o", &archive_path.to_string_lossy()])
-            .status();
-        match status {
-            Ok(s) if s.success() => true,
-            _ => {
-                let wget_status = std::process::Command::new("wget")
-                    .args(["-q", &download_url, "-O", &archive_path.to_string_lossy()])
-                    .status();
-                matches!(wget_status, Ok(s) if s.success())
-            }
+    let sha_bytes = match download_bytes_bounded(&sha_url, 30, 4096) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&tmp_dir);
+            anyhow::bail!("Failed to download SHA-256 checksum from {}: {}", sha_url, e);
         }
     };
-
-    if !downloaded || !archive_path.exists() || fs::metadata(&archive_path)?.len() == 0 {
+    let sha_text = String::from_utf8_lossy(&sha_bytes);
+    let expected_sha = match parse_sha256_file(&sha_text) {
+        Some(h) => h,
+        None => {
+            let _ = fs::remove_dir_all(&tmp_dir);
+            anyhow::bail!("Invalid SHA-256 checksum file from {}", sha_url);
+        }
+    };
+    let actual_sha = match crate::mcp::fingerprint::compute_file_sha256(&archive_path) {
+        Ok(h) => h.to_ascii_lowercase(),
+        Err(e) => {
+            let _ = fs::remove_dir_all(&tmp_dir);
+            anyhow::bail!("Failed to hash downloaded archive: {}", e);
+        }
+    };
+    if actual_sha != expected_sha {
         let _ = fs::remove_dir_all(&tmp_dir);
-        anyhow::bail!("Failed to download release archive from {}", download_url);
+        anyhow::bail!(
+            "SHA-256 checksum mismatch for {}: expected {}, got {}",
+            asset_name,
+            expected_sha,
+            actual_sha
+        );
     }
+    println!("  SHA-256 checksum verified.");
 
     println!("  Download complete. Extracting binary...");
     let extracted_bin = if cfg!(windows) {
+        let escaped_archive = escape_ps_single_quoted(&archive_path.to_string_lossy().replace('\\', "/"));
+        let escaped_dest = escape_ps_single_quoted(&tmp_dir.to_string_lossy().replace('\\', "/"));
         let ps_cmd = format!(
             "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
-            archive_path.to_string_lossy().replace('\\', "/"),
-            tmp_dir.to_string_lossy().replace('\\', "/")
+            escaped_archive, escaped_dest
         );
         let status = std::process::Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
@@ -194,4 +249,33 @@ pub fn run_upgrade() -> Result<()> {
 
     println!("Agent Guidance successfully upgraded to the latest version!");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_name_exact_match() {
+        assert!(is_agent_guidance_process_name("agent-guidance"));
+        assert!(is_agent_guidance_process_name("Agent-Guidance.EXE"));
+        assert!(!is_agent_guidance_process_name("agent-guidance-helper"));
+        assert!(!is_agent_guidance_process_name("not-agent-guidance.exe"));
+    }
+
+    #[test]
+    fn test_escape_ps_single_quoted() {
+        assert_eq!(escape_ps_single_quoted("C:/Users/O'Brien/file.zip"), "C:/Users/O''Brien/file.zip");
+    }
+
+    #[test]
+    fn test_parse_sha256_file() {
+        let valid = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  agent-guidance-windows-x86_64.zip\n";
+        assert_eq!(
+            parse_sha256_file(valid).as_deref(),
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        );
+        assert!(parse_sha256_file("short  file.zip").is_none());
+        assert!(parse_sha256_file("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz  f").is_none());
+    }
 }

@@ -153,7 +153,7 @@ impl GraphRagEngine {
         let mut callees = Vec::new();
 
         let mut in_stmt = db.conn.prepare(
-            "SELECT s.name FROM symbol_edges e JOIN symbols s ON e.source_id = s.id WHERE e.target_id IN (SELECT id FROM symbols WHERE name = ?1) LIMIT 10",
+            "SELECT DISTINCT s.name FROM symbol_edges e JOIN symbols s ON e.source_id = s.id WHERE e.target_id IN (SELECT id FROM symbols WHERE name = ?1) LIMIT 10",
         )?;
         let in_iter = in_stmt.query_map([symbol_name], |row| row.get(0))?;
         for caller in in_iter.flatten() {
@@ -161,7 +161,7 @@ impl GraphRagEngine {
         }
 
         let mut out_stmt = db.conn.prepare(
-            "SELECT s.name FROM symbol_edges e JOIN symbols s ON e.target_id = s.id WHERE e.source_id IN (SELECT id FROM symbols WHERE name = ?1) LIMIT 10",
+            "SELECT DISTINCT s.name FROM symbol_edges e JOIN symbols s ON e.target_id = s.id WHERE e.source_id IN (SELECT id FROM symbols WHERE name = ?1) LIMIT 10",
         )?;
         let out_iter = out_stmt.query_map([symbol_name], |row| row.get(0))?;
         for callee in out_iter.flatten() {

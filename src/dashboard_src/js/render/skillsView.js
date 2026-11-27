@@ -5,6 +5,7 @@ import {
   compileSkillsBinary,
 } from '../api.js';
 import { showAlert, showConfirm } from '../dialog.js';
+import { escapeHtml } from '../dom.js';
 import { openSkillEditorModal } from './skillEditorModal.js';
 
 let skillsCache = [];
@@ -23,46 +24,46 @@ export async function renderSkillsView() {
           <div class="terminal-dot dot-yellow"></div>
           <div class="terminal-dot dot-green"></div>
         </div>
-        <div class="terminal-title">Centralized Skill Registry &amp; Binary Compactor</div>
+        <div class="terminal-title">Skill Registry</div>
       </div>
       <div class="terminal-body-raw" style="padding:20px">
         <div id="skills-binary-stats-card" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:12px;margin-bottom:20px">
           <div style="background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:6px;padding:12px">
-            <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase">skills.bin Size</div>
+            <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase">Skills Bundle Size</div>
             <div id="metric-skills-bin" style="font-size:18px;font-weight:700;margin-top:4px">--</div>
           </div>
           <div style="background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:6px;padding:12px">
-            <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase">vectors.bin Size</div>
+            <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase">Vector Index Size</div>
             <div id="metric-vectors-bin" style="font-size:18px;font-weight:700;margin-top:4px">--</div>
           </div>
           <div style="background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:6px;padding:12px">
-            <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase">Total Skills / Sections</div>
+            <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase">Total Skills</div>
             <div id="metric-skills-count" style="font-size:18px;font-weight:700;margin-top:4px">--</div>
           </div>
           <div style="background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:6px;padding:12px">
-            <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase">Catalog Hash / Tombstones</div>
+            <div style="font-size:11px;color:var(--text-secondary);text-transform:uppercase">Catalog Version / Removed</div>
             <div id="metric-catalog-hash" style="font-size:14px;font-family:var(--font-mono);margin-top:6px;overflow:hidden;text-overflow:ellipsis">--</div>
           </div>
         </div>
 
         <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px;justify-content:space-between">
           <div style="display:flex;gap:10px;align-items:center;flex:1;max-width:380px">
-            <input type="text" id="skills-search-input" placeholder="Filter skills by name..."
+            <input type="text" id="skills-search-input" value="${escapeHtml(searchQuery)}" placeholder="Filter skills by name..."
               style="width:100%;padding:8px 12px;border-radius:var(--border-radius-sm);background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);font-size:13px">
           </div>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
             <button id="btn-new-skill" class="btn-primary" style="padding:7px 14px;cursor:pointer">
-              ➕ New Skill
+              New Skill
             </button>
             <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);cursor:pointer">
               <input type="checkbox" id="skills-purge-staging-toggle" checked style="cursor:pointer">
-              <span>Purge staging</span>
+              <span>Purge custom drafts</span>
             </label>
-            <button id="btn-compile-staging" class="btn-secondary" style="padding:7px 14px;cursor:pointer" title="Compile staging skills to binary">
-              ⚡ Compile to Binary
+            <button id="btn-compile-staging" class="btn-secondary" style="padding:7px 14px;cursor:pointer" title="Compile updated skills into index">
+              Compile Updates
             </button>
             <button id="btn-delete-selected-skills" class="btn-accent" style="padding:7px 14px;background:#ef4444;border-color:#dc2626;cursor:pointer" disabled>
-              🗑️ Delete (<span id="delete-count-badge">0</span>)
+              Delete (<span id="delete-count-badge">0</span>)
             </button>
           </div>
         </div>
@@ -157,7 +158,8 @@ function renderSkillsStats(stats, total) {
   if (cHash) {
     const hash = stats.catalog_hash || 'none';
     const tombs = stats.tombstones_count || 0;
-    cHash.innerHTML = `<span title="${hash}">${hash.substring(0, 10)}...</span> · ${tombs} tombs`;
+    const safeHash = escapeHtml(hash);
+    cHash.innerHTML = `<span title="${safeHash}">${escapeHtml(hash.substring(0, 10))}...</span> · ${Number(tombs)} removed`;
   }
 }
 
@@ -172,20 +174,21 @@ function renderSkillsTable() {
 
   const filtered = getFilteredSkills();
   if (filtered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text-secondary)">No skills match "${searchQuery}"</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text-secondary)">No skills match "${escapeHtml(searchQuery)}"</td></tr>`;
     return;
   }
 
   tbody.innerHTML = filtered.map(skill => {
+    const safeName = escapeHtml(skill.name);
     const isSelected = selectedNames.has(skill.name);
     const sourceBadge = skill.source === 'staged_override'
-      ? '<span style="background:rgba(168,85,247,0.15);color:#a855f7;padding:2px 6px;border-radius:4px;font-size:11px">Staged Override</span>'
+      ? '<span style="background:rgba(168,85,247,0.15);color:#a855f7;padding:2px 6px;border-radius:4px;font-size:11px">Custom Override</span>'
       : skill.source === 'staging_only'
-      ? '<span style="background:rgba(234,179,8,0.15);color:#eab308;padding:2px 6px;border-radius:4px;font-size:11px">Staging Only</span>'
-      : '<span style="background:rgba(59,130,246,0.15);color:#3b82f6;padding:2px 6px;border-radius:4px;font-size:11px">Binary AGV1</span>';
+      ? '<span style="background:rgba(234,179,8,0.15);color:#eab308;padding:2px 6px;border-radius:4px;font-size:11px">Custom Draft</span>'
+      : '<span style="background:rgba(59,130,246,0.15);color:#3b82f6;padding:2px 6px;border-radius:4px;font-size:11px">Built-in</span>';
 
     const statusBadge = skill.tombstoned
-      ? '<span style="background:rgba(239,68,68,0.15);color:#ef4444;padding:2px 6px;border-radius:4px;font-size:11px">Tombstoned</span>'
+      ? '<span style="background:rgba(239,68,68,0.15);color:#ef4444;padding:2px 6px;border-radius:4px;font-size:11px">Removed</span>'
       : '<span style="background:rgba(16,185,129,0.15);color:#10b981;padding:2px 6px;border-radius:4px;font-size:11px">Active</span>';
 
     const lenKb = skill.content_len ? `${(skill.content_len / 1024).toFixed(1)} KB` : '--';
@@ -193,15 +196,15 @@ function renderSkillsTable() {
     return `
       <tr style="border-bottom:1px solid var(--border-color);background:${isSelected ? 'rgba(59,130,246,0.06)' : 'transparent'}">
         <td style="padding:10px 14px">
-          <input type="checkbox" class="skill-row-checkbox" data-name="${skill.name}" ${isSelected ? 'checked' : ''} style="cursor:pointer">
+          <input type="checkbox" class="skill-row-checkbox" data-name="${safeName}" ${isSelected ? 'checked' : ''} style="cursor:pointer">
         </td>
-        <td style="padding:10px 14px;font-weight:600;font-family:var(--font-mono)">${skill.name}</td>
-        <td style="padding:10px 14px">${skill.sections || 1} sections</td>
+        <td style="padding:10px 14px;font-weight:600;font-family:var(--font-mono)">${safeName}</td>
+        <td style="padding:10px 14px">${Number(skill.sections) || 1} sections</td>
         <td style="padding:10px 14px">${sourceBadge}</td>
         <td style="padding:10px 14px">${statusBadge}</td>
         <td style="padding:10px 14px;color:var(--text-secondary)">${lenKb}</td>
         <td style="padding:10px 14px;text-align:right">
-          <button class="btn-edit-skill btn-secondary" data-name="${skill.name}" style="padding:3px 10px;font-size:12px;cursor:pointer">✏️ Edit</button>
+          <button class="btn-edit-skill btn-secondary" data-name="${safeName}" style="padding:3px 10px;font-size:12px;cursor:pointer">Edit</button>
         </td>
       </tr>
     `;
@@ -236,8 +239,8 @@ function updateSelectionUI() {
   if (btnDelete) btnDelete.disabled = count === 0;
 
   const visible = getFilteredSkills();
-  if (selectAll && visible.length > 0) {
-    selectAll.checked = visible.every(s => selectedNames.has(s.name));
+  if (selectAll) {
+    selectAll.checked = visible.length > 0 && visible.every(s => selectedNames.has(s.name));
   }
 }
 
@@ -254,6 +257,12 @@ async function onCompileClick() {
         variant: 'success',
       });
       await refreshSkillsData();
+    } else {
+      await showAlert({
+        title: 'Compilation Failed',
+        message: res.message || res.error || 'Compilation did not succeed.',
+        variant: 'danger',
+      });
     }
   } catch (e) {
     await showAlert({ title: 'Compilation Failed', message: e.message, variant: 'danger' });
@@ -290,6 +299,12 @@ async function onDeleteClick() {
         variant: 'success',
       });
       await refreshSkillsData();
+    } else {
+      await showAlert({
+        title: 'Deletion Failed',
+        message: res.message || res.error || 'Failed to delete selected skills.',
+        variant: 'danger',
+      });
     }
   } catch (e) {
     await showAlert({ title: 'Deletion Failed', message: e.message, variant: 'danger' });

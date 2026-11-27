@@ -28,6 +28,7 @@ pub(crate) fn handle(
     let had_prior_plan_turn = state.workflow_stage == "Plan"
         && (state.user_intent_summary.is_some() || !state.recent_tasks.is_empty());
     state.update_project_path(&proj_path);
+    state.priority_gate_pass();
     if state.workflow_stage == "Context" {
         state.workflow_stage = "Plan".to_string();
     }
@@ -187,7 +188,7 @@ pub(crate) fn handle(
         ""
     };
 
-    state.record_call(800, 300);
+    state.last_raw_baseline_tokens = Some(800);
     Ok(format!(
         "# Task Pipeline Activated\n\nTask: {}\nActive Phase: {}\nProject: {} ({} files scanned{}){}{}\n\n## Architecture Guidance\n- Active Pattern: {}\n- Enforce: Organize modules by domain/feature, keep functions focused (<= 60 LOC), and treat 300 LOC as a soft cohesion threshold\n\n{}{}\n\nPriority Gate: PASSED\nStatus: Ready for execution.\n\n{}",
         task,

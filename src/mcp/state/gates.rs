@@ -57,7 +57,8 @@ impl ServerState {
             "timestamp": self.last_session_start,
             "project_path": self.project_path
         });
-        let _ = fs::write(&path, serde_json::to_string(&sentinel).unwrap_or_default());
+        let payload = serde_json::to_string(&sentinel).unwrap_or_default();
+        let _ = super::persistence::atomic_write_file(&path, payload.as_bytes());
     }
 
     pub fn priority_gate_check(&mut self) -> Result<(), String> {
@@ -168,7 +169,8 @@ impl ServerState {
             "updated_at": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
         });
         let content = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
-        fs::write(&arch_file, content).map_err(|e| e.to_string())?;
+        super::persistence::atomic_write_file(&arch_file, content.as_bytes())
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
 

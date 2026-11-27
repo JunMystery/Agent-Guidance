@@ -1,8 +1,33 @@
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use super::ServerState;
+
+static TMP_FILE_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Atomically writes `content` to `path` via a unique sibling temp file and rename.
+pub(crate) fn atomic_write_file(path: &Path, content: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("state");
+    let seq = TMP_FILE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = path.with_file_name(format!("{}.tmp.{}.{}", file_name, std::process::id(), seq));
+    if let Err(e) = fs::write(&tmp_path, content) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    Ok(())
+}
 
 impl ServerState {
     pub fn cleanup_stale_sessions(proj_path: &Path) {
@@ -45,6 +70,7 @@ impl ServerState {
         !id.is_empty()
             && id.len() <= 128
             && !id.starts_with('.')
+            && !id.ends_with('.')
             && !id.contains("..")
             && id
                 .bytes()
@@ -63,17 +89,12 @@ impl ServerState {
         let file_path = dir.join(format!("{}.json", self.session_id));
         let content = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
 
-        // Atomic write via temp file
-        let tmp_file = dir.join(format!("{}.json.tmp.{}", self.session_id, std::process::id()));
-        fs::write(&tmp_file, &content).map_err(|e| e.to_string())?;
-        if let Err(_e) = fs::rename(&tmp_file, &file_path) {
-            let _ = fs::write(&file_path, &content);
-            let _ = fs::remove_file(&tmp_file);
-        }
+        // Atomic write via unique temp file + rename
+        atomic_write_file(&file_path, content.as_bytes()).map_err(|e| e.to_string())?;
 
-        // Also write atomic link pointer for legacy single-session tools
+        // Also atomically update legacy single-session pointer
         let legacy_file = proj_path.join(".agent-context").join("session.json");
-        let _ = fs::write(legacy_file, content);
+        let _ = atomic_write_file(&legacy_file, content.as_bytes());
         Ok(())
     }
 
@@ -104,7 +125,7 @@ impl ServerState {
                     .collect();
 
                 session_files.sort_by_key(|(mtime, _)| *mtime);
-                if let Some((_, newest_path)) = session_files.last() {
+                for (_, newest_path) in session_files.iter().rev() {
                     if let Ok(content) = fs::read_to_string(newest_path) {
                         if let Ok(loaded) = serde_json::from_str::<Self>(&content) {
                             return Ok(loaded);
@@ -175,7 +196,12 @@ impl ServerState {
 
     pub fn global_project_path_file() -> std::path::PathBuf {
         if cfg!(test) {
-            std::env::temp_dir().join(format!("last_project_path_test_{}", std::process::id()))
+            let tid = format!("{:?}", std::thread::current().id()).replace(['(', ')'], "");
+            std::env::temp_dir().join(format!(
+                "last_project_path_test_{}_{}",
+                std::process::id(),
+                tid
+            ))
         } else {
             dirs::home_dir()
                 .map(|h| h.join(".agent-guidance").join("last_project_path"))
@@ -217,9 +243,55 @@ impl ServerState {
         self.project_path = Some(path_str.clone());
 
         let global_file = Self::global_project_path_file();
-        if let Some(parent) = global_file.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let _ = fs::write(global_file, &path_str);
+        let _ = atomic_write_file(&global_file, path_str.as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_id_rejects_trailing_dot() {
+        assert!(!ServerState::is_valid_session_id("session."));
+        assert!(!ServerState::is_valid_session_id(".session"));
+        assert!(ServerState::is_valid_session_id("session_v1.2"));
+    }
+
+    #[test]
+    fn test_load_from_dir_skips_corrupted_newest_session() {
+        let dir = std::env::temp_dir().join(format!(
+            "ag_corrupt_fallback_{}_{}",
+            std::process::id(),
+            TMP_FILE_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut valid = ServerState::new();
+        valid.session_id = "valid_session".to_string();
+        valid.workflow_stage = "Build".to_string();
+        valid.save_to_dir(&dir).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let corrupt_path = dir
+            .join(".agent-context")
+            .join("sessions")
+            .join("zzz_corrupt.json");
+        fs::write(&corrupt_path, "{ invalid json").unwrap();
+
+        let loaded = ServerState::load_from_dir(&dir).unwrap();
+        assert_eq!(loaded.session_id, "valid_session");
+        assert_eq!(loaded.workflow_stage, "Build");
+
+        // Ensure no leftover .tmp.* files remain in sessions/
+        let leftovers: Vec<_> = fs::read_dir(dir.join(".agent-context").join("sessions"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(leftovers.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

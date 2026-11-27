@@ -1,15 +1,20 @@
+use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use super::{SkillItem, SkillSource};
+
+const MAX_SCAN_DEPTH: usize = 12;
 
 pub fn scan_workspace_skills(proj_path: &Path) -> Vec<SkillItem> {
     let mut results = Vec::new();
+    #[allow(unused_mut)]
     let mut search_dirs = vec![
         proj_path.join(".agents").join("skills"),
         proj_path.join(".opencode").join("skills"),
         proj_path.join(".claude").join("skills"),
     ];
 
+    #[cfg(not(test))]
     if let Some(home) = dirs::home_dir() {
         search_dirs.push(home.join(".agents").join("skills"));
         search_dirs.push(home.join(".agent-guidance").join("skills"));
@@ -63,13 +68,33 @@ fn is_ignored_doc_file(filename: &str) -> bool {
 }
 
 pub(crate) fn scan_skill_dir_recursive(root_dir: &Path, current_dir: &Path, results: &mut Vec<SkillItem>) {
+    let mut visited = HashSet::new();
+    scan_skill_dir_inner(root_dir, current_dir, 0, &mut visited, results);
+}
+
+fn scan_skill_dir_inner(
+    root_dir: &Path,
+    current_dir: &Path,
+    depth: usize,
+    visited: &mut HashSet<PathBuf>,
+    results: &mut Vec<SkillItem>,
+) {
+    if depth > MAX_SCAN_DEPTH {
+        return;
+    }
+
+    let canonical = fs::canonicalize(current_dir).unwrap_or_else(|_| current_dir.to_path_buf());
+    if !visited.insert(canonical) {
+        return;
+    }
+
     let dir_name = current_dir
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_lowercase();
 
-    if is_ignored_dir(&dir_name) {
+    if depth > 0 && is_ignored_dir(&dir_name) {
         return;
     }
 
@@ -103,7 +128,12 @@ pub(crate) fn scan_skill_dir_recursive(root_dir: &Path, current_dir: &Path, resu
         if let Ok(entries) = fs::read_dir(current_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
+                let is_md = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("md"))
+                    .unwrap_or(false);
+                if path.is_file() && is_md {
                     let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
                     if is_ignored_doc_file(filename) {
                         continue;
@@ -139,20 +169,32 @@ pub(crate) fn scan_skill_dir_recursive(root_dir: &Path, current_dir: &Path, resu
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                scan_skill_dir_recursive(root_dir, &path, results);
+                scan_skill_dir_inner(root_dir, &path, depth + 1, visited, results);
             }
         }
     }
 }
 
 pub(crate) fn extract_frontmatter_name(content: &str) -> Option<String> {
-    for line in content.lines() {
+    let clean = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let mut lines = clean.lines();
+    let first = lines.find(|l| !l.trim().is_empty())?;
+    if first.trim() != "---" {
+        return None;
+    }
+    let mut found_name: Option<String> = None;
+    for line in lines {
         let trimmed = line.trim();
-        if trimmed.starts_with("name:") {
-            let val = trimmed.trim_start_matches("name:").trim();
-            let cleaned = val.trim_matches('"').trim_matches('\'').trim();
+        if trimmed == "---" {
+            return found_name;
+        }
+        if found_name.is_none() && !line.starts_with([' ', '\t']) {
+            let Some(rest) = trimmed.strip_prefix("name:") else {
+                continue;
+            };
+            let cleaned = rest.trim().trim_matches('"').trim_matches('\'').trim();
             if !cleaned.is_empty() {
-                return Some(cleaned.to_string());
+                found_name = Some(cleaned.to_string());
             }
         }
     }
@@ -163,10 +205,14 @@ pub(crate) fn extract_skill_name(content: &str, fallback: &str) -> String {
     if let Some(fm_name) = extract_frontmatter_name(content) {
         return fm_name;
     }
+    let mut open_fence: Option<(char, usize)> = None;
     for line in content.lines() {
+        if crate::optimizer::compressor::update_code_fence(line, &mut open_fence) || open_fence.is_some() {
+            continue;
+        }
         let trimmed = line.trim();
-        if trimmed.starts_with("# ") {
-            let title = trimmed.trim_start_matches("# ").trim();
+        if let Some(rest) = trimmed.strip_prefix("# ") {
+            let title = rest.trim();
             if !title.is_empty() {
                 let slug: String = title
                     .to_lowercase()

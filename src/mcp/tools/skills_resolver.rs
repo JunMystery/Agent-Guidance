@@ -52,9 +52,14 @@ pub(crate) fn resolve_skill(
         return Some((clean_name, c, " [Embedded Catalog]"));
     }
 
-    // 4. Fallback to direct file path lookup
+    // 4. Fallback to direct file path lookup (strictly markdown/rule assets)
     if let Ok(full_path) = validate_path(proj_path, &clean_name) {
-        if let Ok(c) = std::fs::read_to_string(&full_path) {
+        let is_skill_doc = full_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| matches!(e.to_ascii_lowercase().as_str(), "md" | "markdown" | "mdc"))
+            .unwrap_or(false);
+        if is_skill_doc && let Ok(c) = std::fs::read_to_string(&full_path) {
             let name = crate::catalog::store::scanner::extract_frontmatter_name(&c)
                 .unwrap_or_else(|| {
                     full_path

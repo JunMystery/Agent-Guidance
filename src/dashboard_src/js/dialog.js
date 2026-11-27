@@ -3,12 +3,13 @@ import { el } from './dom.js';
 import { t } from './i18n/index.js';
 
 let activeResolver = null;
+let activeCleanup = null;
 
 const ICONS = {
-  danger: '⚠️',
-  info: 'ℹ️',
+  danger: '!',
+  info: 'i',
   success: '✓',
-  warning: '⚡',
+  warning: '!',
 };
 
 export function showConfirm({
@@ -67,7 +68,7 @@ function openDialog({ title, message, subtext, confirmText, cancelText, variant,
   const btnCancel = el('dialog-btn-cancel');
 
   if (titleEl) titleEl.textContent = title;
-  if (iconEl) iconEl.textContent = ICONS[variant] || 'ℹ️';
+  if (iconEl) iconEl.textContent = ICONS[variant] || 'i';
   if (msgEl) msgEl.textContent = message;
   if (subEl) {
     subEl.textContent = subtext || '';
@@ -89,13 +90,23 @@ function openDialog({ title, message, subtext, confirmText, cancelText, variant,
 
   return new Promise(resolve => {
     activeResolver = resolve;
+    let focusTimer = null;
 
     const cleanup = () => {
+      if (focusTimer !== null) {
+        clearTimeout(focusTimer);
+        focusTimer = null;
+      }
       window.removeEventListener('keydown', onKeyDown);
+      if (btnConfirm) btnConfirm.onclick = null;
+      if (btnCancel) btnCancel.onclick = null;
       modal.classList.remove('open');
       modal.setAttribute('aria-hidden', 'true');
-      activeResolver = null;
+      if (activeCleanup === cleanup) activeCleanup = null;
+      if (activeResolver === resolve) activeResolver = null;
     };
+
+    activeCleanup = cleanup;
 
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {
@@ -116,7 +127,10 @@ function openDialog({ title, message, subtext, confirmText, cancelText, variant,
         cleanup();
         resolve(true);
       };
-      setTimeout(() => btnConfirm.focus(), 50);
+      focusTimer = setTimeout(() => {
+        focusTimer = null;
+        btnConfirm.focus();
+      }, 50);
     }
 
     if (btnCancel) {
@@ -129,13 +143,20 @@ function openDialog({ title, message, subtext, confirmText, cancelText, variant,
 }
 
 function closeDialog(result = false) {
-  if (activeResolver) {
-    activeResolver(result);
-    activeResolver = null;
+  const resolver = activeResolver;
+  const cleanup = activeCleanup;
+  activeResolver = null;
+  activeCleanup = null;
+  if (cleanup) {
+    cleanup();
+  } else {
+    const modal = el('dialog-modal');
+    if (modal) {
+      modal.classList.remove('open');
+      modal.setAttribute('aria-hidden', 'true');
+    }
   }
-  const modal = el('dialog-modal');
-  if (modal) {
-    modal.classList.remove('open');
-    modal.setAttribute('aria-hidden', 'true');
+  if (resolver) {
+    resolver(result);
   }
 }

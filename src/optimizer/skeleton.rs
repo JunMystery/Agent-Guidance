@@ -92,8 +92,12 @@ pub fn generate_code_skeleton(content: &str, file_path: &str) -> String {
             let mut sig_lines = Vec::new();
             sig_lines.push(line);
 
-            // If signature spans multiple lines up to `{` or `:`
-            while !lines[i].contains('{') && !lines[i].trim().ends_with(':') && i + 1 < total_lines {
+            // If signature spans multiple lines up to `{`, `:`, or `;`
+            while !lines[i].contains('{')
+                && !lines[i].trim().ends_with(':')
+                && !lines[i].trim().ends_with(';')
+                && i + 1 < total_lines
+            {
                 i += 1;
                 sig_lines.push(lines[i]);
             }
@@ -102,20 +106,24 @@ pub fn generate_code_skeleton(content: &str, file_path: &str) -> String {
             let fn_sig = sig_lines.join(" ");
 
             if open_bracket {
-                // Find matching closing bracket for block
-                let mut depth = 0;
-                let body_start = i + 1;
+                // Find matching closing bracket for block (including single-line `{ ... }` bodies)
+                let mut depth = 0i32;
+                let mut saw_open = false;
                 while i < total_lines {
                     let cur = lines[i];
-                    depth += cur.matches('{').count() as i32;
+                    let opens = cur.matches('{').count() as i32;
+                    if opens > 0 {
+                        saw_open = true;
+                    }
+                    depth += opens;
                     depth -= cur.matches('}').count() as i32;
-                    if depth <= 0 && i >= body_start {
+                    if saw_open && depth <= 0 {
                         break;
                     }
                     i += 1;
                 }
-                let end_line = i + 1;
-                let span = (end_line - start_line + 1).max(1);
+                let end_line = (i + 1).min(total_lines);
+                let span = end_line.saturating_sub(start_line) + 1;
 
                 let indent = line.chars().take_while(|c| c.is_whitespace()).collect::<String>();
                 if let Some(prefix) = fn_sig.split('{').next() {
@@ -170,5 +178,36 @@ pub struct Item;
         let out = generate_code_skeleton(rs_code, "math.rs");
         assert!(out.contains("pub fn add(a: i32, b: i32) -> i32 { /* L13-16: 4 lines */ }"));
         assert!(out.contains("pub struct Item;"));
+    }
+
+    #[test]
+    fn test_heuristic_skeleton_single_line_brace_and_prototype_and_unclosed() {
+        let code = "\
+// 1
+// 2
+// 3
+// 4
+// 5
+// 6
+// 7
+// 8
+// 9
+// 10
+// 11
+// 12
+public void declare(int x);
+fun singleLine(): Int { return 1 }
+fun multiLine(): Int {
+    val x = 2
+    return x
+}
+fun unclosed(): Int {
+    val y = 3
+";
+        let out = generate_code_skeleton(code, "sample.pseudo");
+        assert!(out.contains("public void declare(int x);"), "prototype lost: {}", out);
+        assert!(out.contains("fun singleLine(): Int { /* L14-14: 1 lines */ }"), "single-line brace swallowed next fn: {}", out);
+        assert!(out.contains("fun multiLine(): Int { /* L15-18: 4 lines */ }"), "following fn missing: {}", out);
+        assert!(out.contains("fun unclosed(): Int { /* L19-20: 2 lines */ }"), "unclosed EOF line out of bounds: {}", out);
     }
 }

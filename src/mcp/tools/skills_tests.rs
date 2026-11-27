@@ -217,3 +217,29 @@ fn test_select_skills_incremental_implementation_delivers_instructions() {
     assert!(text.contains("Increment Checklist"), "Must contain increment checklist: {}", text);
     assert!(!text.contains("#### Incremental Implementation\n---"), "Must not have hollow header");
 }
+
+#[test]
+fn test_select_skills_rejects_non_markdown_and_counts_single_call() {
+    let temp_dir = std::env::temp_dir().join(format!("select_skill_sec_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::create_dir_all(&temp_dir);
+    std::fs::write(temp_dir.join("Cargo.toml"), "[package]\nname = \"secret\"\n").unwrap();
+
+    let mut state = ServerState::new();
+    let res = handle_tool_call(
+        "select_skills",
+        json!({
+            "skills": ["Cargo.toml"],
+            "project_path": temp_dir.to_str().unwrap(),
+            "user_confirmed": true
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let text = res["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Skills not found"), "Expected Cargo.toml rejection, got: {}", text);
+    assert!(!text.contains("name = \"secret\""));
+    assert_eq!(state.tool_calls, 1);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

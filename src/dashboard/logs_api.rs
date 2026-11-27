@@ -1,7 +1,7 @@
 // Dashboard REST API Handler for MCP Logs and System Diagnostics
 use serde_json::json;
 use std::collections::HashMap;
-use tiny_http::{Request, Response, StatusCode};
+use tiny_http::Request;
 
 pub fn handle_api_logs(request: Request) {
     let url = request.url().to_string();
@@ -24,11 +24,11 @@ pub fn handle_api_logs(request: Request) {
                     "cleared_count": deleted,
                     "message": format!("Successfully cleared {} log entries", deleted)
                 });
-                json_response(request, 200, &body);
+                super::router::json_response(request, 200, &body);
             }
             Err(e) => {
                 let err = json!({ "status": "error", "message": e.to_string() });
-                json_response(request, 500, &err);
+                super::router::json_response(request, 500, &err);
             }
         }
         return;
@@ -62,18 +62,18 @@ pub fn handle_api_logs(request: Request) {
                         "max_entries": crate::mcp::mcp_logger::MAX_SQLITE_LOGS
                     }
                 });
-                json_response(request, 200, &body);
+                super::router::json_response(request, 200, &body);
             }
             Err(e) => {
                 let err = json!({ "status": "error", "message": e.to_string() });
-                json_response(request, 500, &err);
+                super::router::json_response(request, 500, &err);
             }
         }
         return;
     }
 
     let err = json!({ "status": "error", "message": "Method not allowed" });
-    json_response(request, 405, &err);
+    super::router::json_response(request, 405, &err);
 }
 
 fn parse_query_params(query_str: &str) -> HashMap<String, String> {
@@ -90,17 +90,6 @@ fn parse_query_params(query_str: &str) -> HashMap<String, String> {
         }
     }
     params
-}
-
-fn json_response(request: Request, status_code: u16, data: &serde_json::Value) {
-    let body = serde_json::to_string(data).unwrap_or_else(|_| "{}".to_string());
-    let header_ct = tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..]).unwrap();
-    let header_cors = tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap();
-    let response = Response::from_string(body)
-        .with_header(header_ct)
-        .with_header(header_cors)
-        .with_status_code(StatusCode(status_code));
-    let _ = request.respond(response);
 }
 
 #[cfg(test)]

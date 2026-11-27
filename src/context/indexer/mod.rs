@@ -47,6 +47,38 @@ pub fn compute_hash(content: &str) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+struct BatchTxGuard<'a> {
+    conn: &'a rusqlite::Connection,
+    committed: bool,
+}
+
+impl<'a> BatchTxGuard<'a> {
+    fn new(conn: &'a rusqlite::Connection) -> Self {
+        batch::begin_batch(conn);
+        Self {
+            conn,
+            committed: false,
+        }
+    }
+
+    fn checkpoint(&self) {
+        batch::checkpoint_batch(self.conn);
+    }
+
+    fn commit(mut self) {
+        batch::commit_batch(self.conn);
+        self.committed = true;
+    }
+}
+
+impl Drop for BatchTxGuard<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = self.conn.execute_batch("ROLLBACK;");
+        }
+    }
+}
+
 impl IncrementalIndexer {
     pub fn new(project_path: &Path) -> Result<Self> {
         let db = CodeGraphDb::open_for_project(project_path)?;
@@ -65,18 +97,20 @@ impl IncrementalIndexer {
             ..Default::default()
         };
 
-        batch::begin_batch(&self.db.conn);
-        for file in files.iter().filter(|f| f.file_type == "file") {
-            if self.index_file(&file.path, &mut report)? {
-                report.files_indexed += 1;
-                if report.files_indexed % 50 == 0 {
-                    batch::checkpoint_batch(&self.db.conn);
+        {
+            let tx = BatchTxGuard::new(&self.db.conn);
+            for file in files.iter().filter(|f| f.file_type == "file") {
+                if self.index_file(&file.path, &mut report)? {
+                    report.files_indexed += 1;
+                    if report.files_indexed % 50 == 0 {
+                        tx.checkpoint();
+                    }
+                } else {
+                    report.files_skipped += 1;
                 }
-            } else {
-                report.files_skipped += 1;
             }
+            tx.commit();
         }
-        batch::commit_batch(&self.db.conn);
         let _ = self.db.prune_orphaned_files(&self.project_path);
 
         if let Ok(cross_count) = cross_edges::resolve_all_cross_edges(&mut self.db.conn, &self.project_path) {
@@ -96,46 +130,52 @@ impl IncrementalIndexer {
             ..Default::default()
         };
 
-        batch::begin_batch(&self.db.conn);
-        for file in files.iter().filter(|f| f.file_type == "file") {
-            let full_path = self.project_path.join(&file.path);
-            let metadata = match std::fs::metadata(&full_path) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            let disk_size = metadata.len();
-            let disk_modified = metadata
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
+        {
+            let tx = BatchTxGuard::new(&self.db.conn);
+            for file in files.iter().filter(|f| f.file_type == "file") {
+                let full_path = self.project_path.join(&file.path);
+                let metadata = match std::fs::metadata(&full_path) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                let disk_size = metadata.len();
+                let disk_modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
 
-            // Fast path: if size and modified_at match cached SQLite record, skip reading disk!
-            if let Ok(Some((_cached_hash, cached_size, cached_mod))) = self.db.get_file_metadata(&file.path) {
-                if cached_size == disk_size && cached_mod == disk_modified {
-                    report.files_skipped += 1;
-                    continue;
-                }
-            }
-
-            if let Ok(content) = std::fs::read_to_string(&full_path) {
-                let current_hash = compute_hash(&content);
-                if let Ok(Some((cached_hash, _, _))) = self.db.get_file_metadata(&file.path) {
-                    if cached_hash == current_hash {
+                // Fast path: if size and modified_at match cached SQLite record, skip reading disk!
+                if let Ok(Some((_cached_hash, cached_size, cached_mod))) = self.db.get_file_metadata(&file.path) {
+                    if cached_size == disk_size && cached_mod == disk_modified {
                         report.files_skipped += 1;
                         continue;
                     }
                 }
-                if self.index_file_content(&file.path, &content, current_hash, &mut report)? {
-                    report.files_indexed += 1;
-                    if report.files_indexed % 50 == 0 {
-                        batch::checkpoint_batch(&self.db.conn);
+
+                if let Ok(content) = std::fs::read_to_string(&full_path) {
+                    let current_hash = compute_hash(&content);
+                    if let Ok(Some((cached_hash, _, _))) = self.db.get_file_metadata(&file.path) {
+                        if cached_hash == current_hash {
+                            self.db.upsert_file(&file.path, &current_hash, disk_size, disk_modified)?;
+                            report.files_skipped += 1;
+                            continue;
+                        }
+                    }
+                    if self.index_file_content(&file.path, &content, current_hash, &mut report)? {
+                        report.files_indexed += 1;
+                        if report.files_indexed % 50 == 0 {
+                            tx.checkpoint();
+                        }
                     }
                 }
             }
+            tx.commit();
         }
-        batch::commit_batch(&self.db.conn);
+        if files.iter().any(|f| f.file_type == "file") {
+            let _ = self.db.prune_orphaned_files(&self.project_path);
+        }
 
         if report.files_indexed > 0 {
             if let Ok(cross_count) = cross_edges::resolve_all_cross_edges(&mut self.db.conn, &self.project_path) {
@@ -190,7 +230,7 @@ impl IncrementalIndexer {
         Ok(report)
     }
 
-    fn index_file(&mut self, rel_path: &str, report: &mut IndexReport) -> Result<bool> {
+    fn index_file(&self, rel_path: &str, report: &mut IndexReport) -> Result<bool> {
         let full_path = self.project_path.join(rel_path);
         match std::fs::read_to_string(&full_path) {
             Ok(content) => {
@@ -202,7 +242,7 @@ impl IncrementalIndexer {
     }
 
     fn index_file_content(
-        &mut self,
+        &self,
         rel_path: &str,
         content: &str,
         current_hash: String,
@@ -272,3 +312,79 @@ mod dispatch_tests;
 mod dataflow_tests;
 #[cfg(test)]
 mod invalidator_tests;
+
+#[cfg(test)]
+mod batch_tx_guard_tests {
+    use super::*;
+
+    #[test]
+    fn test_batch_tx_guard_rolls_back_on_drop_and_commits_explicitly() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE items (id INT);").unwrap();
+
+        {
+            let _tx = BatchTxGuard::new(&conn);
+            conn.execute("INSERT INTO items VALUES (1);", []).unwrap();
+            // Drop without commit -> must roll back cleanly
+        }
+        let count_after_rollback: i64 = conn
+            .query_row("SELECT COUNT(*) FROM items;", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count_after_rollback, 0);
+
+        {
+            let tx = BatchTxGuard::new(&conn);
+            conn.execute("INSERT INTO items VALUES (2);", []).unwrap();
+            tx.commit();
+        }
+        let count_after_commit: i64 = conn
+            .query_row("SELECT COUNT(*) FROM items;", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count_after_commit, 1);
+    }
+
+    #[test]
+    fn test_incremental_index_prunes_orphans_and_updates_mtime_metadata() {
+        let dir = std::env::temp_dir().join(format!(
+            "ag_inc_prune_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let keep_path = dir.join("src").join("keep.rs");
+        let gone_path = dir.join("src").join("gone.rs");
+        std::fs::write(&keep_path, "pub fn keep() {}\n").unwrap();
+        std::fs::write(&gone_path, "pub fn gone() {}\n").unwrap();
+
+        let mut indexer = IncrementalIndexer::new(&dir).unwrap();
+        let r1 = indexer.incremental_index().unwrap();
+        assert!(r1.files_indexed >= 2);
+        assert!(indexer.db.get_file_metadata("src/keep.rs").unwrap().is_some());
+        assert!(indexer.db.get_file_metadata("src/gone.rs").unwrap().is_some());
+
+        // Simulate stale cached mtime with unchanged content hash
+        let (hash, size, real_mod) = indexer.db.get_file_metadata("src/keep.rs").unwrap().unwrap();
+        indexer.db.upsert_file("src/keep.rs", &hash, size, real_mod.saturating_sub(10)).unwrap();
+
+        // Delete gone.rs so incremental_index must prune it
+        std::fs::remove_file(&gone_path).unwrap();
+
+        let r2 = indexer.incremental_index().unwrap();
+        assert_eq!(r2.files_indexed, 0);
+        assert!(r2.files_skipped >= 1);
+
+        // Cached metadata for keep.rs must be refreshed to real_mod
+        let (_, _, updated_mod) = indexer.db.get_file_metadata("src/keep.rs").unwrap().unwrap();
+        assert_eq!(updated_mod, real_mod);
+
+        // Orphaned gone.rs must be pruned from files table
+        assert!(indexer.db.get_file_metadata("src/gone.rs").unwrap().is_none());
+
+        drop(indexer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

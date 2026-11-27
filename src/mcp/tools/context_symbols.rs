@@ -147,7 +147,14 @@ pub(crate) fn handle_learn_alias(
 
     if alias_term.is_empty() || rel_path.is_empty() {
         "Error: alias_term and relative_path are required for learn_alias. Example: project_context(operation=\"learn_alias\", project_path=\"...\", alias_term=\"login\", relative_path=\"src/auth/service.rs\")".to_string()
+    } else if rel_path.contains("..") || rel_path.contains('\0') {
+        "Security Error: Path traversal or null byte is strictly prohibited in relative_path.".to_string()
     } else {
+        if proj_path.exists()
+            && let Err(err_msg) = validate_path(proj_path, rel_path)
+        {
+            return format!("Security Error: {}", err_msg);
+        }
         match CodeGraphDb::open_for_project(proj_path) {
             Ok(db) => match db.upsert_alias(alias_term, rel_path, resolved_symbol, resolved_line) {
                 Ok(()) => {

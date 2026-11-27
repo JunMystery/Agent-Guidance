@@ -41,17 +41,18 @@ pub fn decode_message(buf: &[u8]) -> Option<(Value, usize)> {
 
     let mut content_length = None;
     for line in header_str.lines() {
-        if let Some(rest) = line.strip_prefix("Content-Length:") {
-            if let Ok(len) = rest.trim().parse::<usize>() {
-                content_length = Some(len);
-                break;
-            }
+        if let Some((name, val)) = line.split_once(':')
+            && name.trim().eq_ignore_ascii_case("content-length")
+            && let Ok(len) = val.trim().parse::<usize>()
+        {
+            content_length = Some(len);
+            break;
         }
     }
 
     let len = content_length?;
     let body_start = sep_pos + 4;
-    let body_end = body_start + len;
+    let body_end = body_start.checked_add(len)?;
 
     if buf.len() < body_end {
         return None; // Incomplete body
@@ -62,41 +63,133 @@ pub fn decode_message(buf: &[u8]) -> Option<(Value, usize)> {
     Some((val, body_end))
 }
 
+fn strip_windows_verbatim(path: &str) -> String {
+    if let Some(unc) = path
+        .strip_prefix("//?/UNC/")
+        .or_else(|| path.strip_prefix("//?/unc/"))
+    {
+        format!("//{}", unc)
+    } else if let Some(rest) = path.strip_prefix("//?/") {
+        rest.to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+fn percent_encode_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for &b in path.as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'/' | b':' | b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
+fn normalize_fs_path(path: &Path) -> String {
+    strip_windows_verbatim(&path.to_string_lossy().replace('\\', "/"))
+}
+
+fn strip_path_prefix(target: &str, base: &str) -> Option<String> {
+    if base == "/" {
+        return target.strip_prefix('/').map(str::to_string);
+    }
+    let base_trimmed = base.trim_end_matches('/');
+    if base_trimmed.is_empty() {
+        return None;
+    }
+    let matches_prefix = if cfg!(windows) {
+        target
+            .get(..base_trimmed.len())
+            .map(|prefix| prefix.eq_ignore_ascii_case(base_trimmed))
+            .unwrap_or(false)
+    } else {
+        target.starts_with(base_trimmed)
+    };
+    if !matches_prefix {
+        return None;
+    }
+    let rest = &target[base_trimmed.len()..];
+    if rest.is_empty() {
+        Some(String::new())
+    } else {
+        rest.strip_prefix('/').map(str::to_string)
+    }
+}
+
 /// Converts a standard file path to an LSP file URI (`file:///...`).
 pub fn path_to_uri(path: &Path) -> String {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let path_str = canonical.to_string_lossy().replace('\\', "/");
-    let clean_path = path_str.trim_start_matches('/');
-    if cfg!(windows) {
-        format!("file:///{}", clean_path)
-    } else {
-        format!("file:///{}", path_str.trim_start_matches('/'))
-    }
+    let normalized = normalize_fs_path(&canonical);
+    let encoded = percent_encode_path(normalized.trim_start_matches('/'));
+    format!("file:///{}", encoded)
 }
 
 /// Converts an LSP file URI back to a workspace relative path.
 pub fn uri_to_rel_path(uri: &str, proj_path: &Path) -> String {
-    let raw = uri.strip_prefix("file:///").unwrap_or(uri);
-    let decoded = raw.replace("%20", " ");
-    let target_buf;
-    let target_path = if !cfg!(windows) && !decoded.starts_with('/') {
-        target_buf = format!("/{}", decoded);
-        Path::new(&target_buf)
+    let raw = uri
+        .strip_prefix("file://localhost/")
+        .or_else(|| uri.strip_prefix("file:///"))
+        .unwrap_or(uri);
+    let decoded = strip_windows_verbatim(&percent_decode(raw).replace('\\', "/"));
+    let target_norm = if cfg!(windows) {
+        let trimmed = decoded.strip_prefix('/').unwrap_or(&decoded);
+        if trimmed.as_bytes().get(1) == Some(&b':') {
+            trimmed.to_string()
+        } else {
+            decoded
+        }
+    } else if !decoded.starts_with('/') && uri.starts_with("file://") {
+        format!("/{}", decoded)
     } else {
-        Path::new(&decoded)
+        decoded
     };
 
-    if let Ok(rel) = target_path.strip_prefix(proj_path) {
-        return rel.to_string_lossy().replace('\\', "/");
-    }
-
+    let mut bases = vec![normalize_fs_path(proj_path)];
     if let Ok(canon_proj) = proj_path.canonicalize() {
-        if let Ok(rel) = target_path.strip_prefix(&canon_proj) {
-            return rel.to_string_lossy().replace('\\', "/");
+        let canon_norm = normalize_fs_path(&canon_proj);
+        if !bases.contains(&canon_norm) {
+            bases.push(canon_norm);
         }
     }
 
-    decoded
+    for base in &bases {
+        if let Some(rel) = strip_path_prefix(&target_norm, base) {
+            return rel;
+        }
+    }
+
+    target_norm
 }
 
 /// Converts a 1-based editor line number to a 0-based LSP line number.

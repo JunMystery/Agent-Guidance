@@ -17,6 +17,7 @@ pub fn build_semantic_chunks(
     if total == 0 {
         return Vec::new();
     }
+    let window_size = window_size.max(1);
 
     let code_symbols: Vec<&ExtractedSymbol> = symbols
         .iter()
@@ -103,7 +104,7 @@ pub fn build_semantic_chunks(
                     break;
                 }
                 let step = if window_size > overlap { window_size - overlap } else { window_size };
-                sub_start += step;
+                sub_start += step.max(1);
             }
         }
 
@@ -143,11 +144,13 @@ pub fn build_sliding_window_chunks(
         return Vec::new();
     }
 
-    let step = if window_size > overlap {
+    let window_size = window_size.max(1);
+    let step = (if window_size > overlap {
         window_size - overlap
     } else {
         window_size
-    };
+    })
+    .max(1);
     let mut chunks = Vec::new();
     let mut start = 0;
 
@@ -171,4 +174,46 @@ pub fn build_sliding_window_chunks(
     }
 
     chunks
+}
+
+#[cfg(test)]
+mod zero_window_tests {
+    use super::*;
+
+    #[test]
+    fn test_window_size_zero_does_not_loop_or_underflow() {
+        let lines = vec!["a", "b", "c", "d"];
+        let sliding = build_sliding_window_chunks(&lines, 0, 0);
+        assert!(sliding.is_empty());
+
+        let sliding_with_overlap = build_sliding_window_chunks(&lines, 0, 5);
+        assert!(sliding_with_overlap.is_empty());
+
+        // Oversized symbol (>80 lines) with window_size = 0 must terminate cleanly
+        let mut src_lines = Vec::new();
+        src_lines.push("pub fn huge() {".to_string());
+        for i in 1..=90 {
+            src_lines.push(format!("    let v{} = {};", i, i));
+        }
+        src_lines.push("}".to_string());
+        let code = src_lines.join("\n");
+
+        let symbols = vec![ExtractedSymbol {
+            id: "demo.rs::function::huge::L1".to_string(),
+            name: "huge".to_string(),
+            kind: "function".to_string(),
+            parent: None,
+            start_line: 1,
+            end_line: 92,
+            signature: Some("pub fn huge()".to_string()),
+            language: None,
+            namespace: None,
+            receiver: None,
+        }];
+
+        let chunks = build_semantic_chunks("demo.rs", &code, &symbols, 0, 10);
+        assert_eq!(chunks.len(), 92);
+        assert_eq!(chunks.first().unwrap().start_line, 1);
+        assert_eq!(chunks.last().unwrap().end_line, 92);
+    }
 }

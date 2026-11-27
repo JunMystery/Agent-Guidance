@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::test_safety::{has_opt_out, SafetyFinding, SafetySeverity};
+use super::test_safety::{has_line_opt_out, has_opt_out, SafetyFinding, SafetySeverity};
 
 pub(super) fn analyze_test_file(
     content: &str,
@@ -95,7 +95,7 @@ fn check_python_mock_namespaces(content: &str, findings: &mut Vec<SafetyFinding>
             continue;
         }
         if let Some(full_mod) = qualified.get(head) {
-            if !has_opt_out(content, t, "mock-namespace") {
+            if !has_line_opt_out(content, t, "mock-namespace") {
                 let suffix = target.strip_prefix(head).unwrap_or("");
                 findings.push(SafetyFinding {
                     code: "TEST_MOCK_NAMESPACE_MISMATCH",
@@ -156,7 +156,7 @@ fn check_js_mock_paths(content: &str, findings: &mut Vec<SafetyFinding>) {
             norm_imp.rsplit('/').next().unwrap_or("") == stem && norm_imp != norm_mock
         });
         if let Some(actual_imp) = mismatch {
-            if !has_opt_out(content, t, "mock-namespace") {
+            if !has_line_opt_out(content, t, "mock-namespace") {
                 findings.push(SafetyFinding {
                     code: "TEST_MOCK_NAMESPACE_MISMATCH",
                     severity: SafetySeverity::Block,
@@ -179,7 +179,10 @@ fn check_unverified_side_effect_mocks(content: &str, findings: &mut Vec<SafetyFi
         "assert_called", "assert_not_called", "assert_any_call", "assert_has_calls",
         "call_count", "mock_calls", "toHaveBeenCalled", "toHaveBeenNthCalled", ".called", "verify(",
     ];
-    if assertions.iter().any(|kw| content.contains(kw)) {
+    if content.lines().any(|l| {
+        let lt = l.trim();
+        !lt.starts_with('#') && !lt.starts_with("//") && assertions.iter().any(|kw| lt.contains(kw))
+    }) {
         return;
     }
     let side_effects = [

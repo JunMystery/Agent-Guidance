@@ -58,21 +58,16 @@ pub(crate) fn handle_get(
             crate::mcp::db::log_skill_load(id);
         }
         Ok(format_skill(&content))
-    } else if let Ok(full_path) = validate_path(&proj_path, id) {
-        let is_md = full_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| matches!(e.to_ascii_lowercase().as_str(), "md" | "markdown" | "mdc"))
-            .unwrap_or(false);
-        if is_md {
-            if let Ok(content) = std::fs::read_to_string(&full_path) {
-                if !id.is_empty() {
-                    crate::mcp::db::log_skill_load(id);
-                }
-                return Ok(format_skill(&content));
-            }
+    } else if let Some((_, content, _)) = crate::mcp::tools::skills_resolver::resolve_skill(
+        id,
+        &[],
+        &load_all_skills(&proj_path),
+        &proj_path,
+    ) {
+        if !id.is_empty() {
+            crate::mcp::db::log_skill_load(id);
         }
-        Ok(format!("Skill asset not found: {}", id))
+        Ok(format_skill(&content))
     } else {
         Ok(format!("Skill asset not found: {}", id))
     }

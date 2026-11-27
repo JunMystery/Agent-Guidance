@@ -7,6 +7,31 @@ import { t } from './i18n/index.js';
 
 let selectedProject = 'all';
 
+function isLoopbackHost() {
+  if (typeof window === 'undefined' || !window.location) return true;
+  const host = (window.location.hostname || '').toLowerCase();
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+}
+
+export async function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const token = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('ag_api_token') : null;
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  let resp = await fetch(url, { ...options, headers });
+  if (resp.status === 401 && !isLoopbackHost() && typeof window !== 'undefined' && typeof window.prompt === 'function') {
+    const entered = window.prompt('Enter API Bearer token for remote dashboard access:');
+    if (entered && entered.trim()) {
+      const clean = entered.trim();
+      if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('ag_api_token', clean);
+      headers.set('Authorization', `Bearer ${clean}`);
+      resp = await fetch(url, { ...options, headers });
+    }
+  }
+  return resp;
+}
+
 export function setSelectedProject(proj) {
   selectedProject = proj;
 }
@@ -19,7 +44,7 @@ async function fetchStats() {
   const projParam = selectedProject ? `&project=${encodeURIComponent(selectedProject)}` : '&project=all';
   const tf = getActiveTimeframe ? getActiveTimeframe() : 'past_24h';
   const tfParam = tf ? `&timeframe=${encodeURIComponent(tf)}` : '';
-  const resp = await fetch(`/api/stats?window=24h${projParam}${tfParam}`);
+  const resp = await apiFetch(`/api/stats?window=24h${projParam}${tfParam}`);
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   return resp.json();
 }
@@ -45,7 +70,7 @@ export async function fetchGraphData(optionsOrProj) {
 
   const qs = params.toString() ? `?${params.toString()}` : '';
   try {
-    const resp = await fetch(`/api/graph${qs}`);
+    const resp = await apiFetch(`/api/graph${qs}`);
     if (!resp.ok) return { graph_available: false, message: `HTTP ${resp.status}` };
     return resp.json();
   } catch (e) {
@@ -55,7 +80,7 @@ export async function fetchGraphData(optionsOrProj) {
 
 export async function fetchProjects() {
   try {
-    const resp = await fetch('/api/projects');
+    const resp = await apiFetch('/api/projects');
     if (!resp.ok) return [];
     const data = await resp.json();
     return data.projects || [];
@@ -66,7 +91,7 @@ export async function fetchProjects() {
 
 export async function pruneProjects() {
   try {
-    const resp = await fetch('/api/projects/prune', { method: 'POST' });
+    const resp = await apiFetch('/api/projects/prune', { method: 'POST' });
     return resp.json();
   } catch (e) {
     return { success: false, error: e.message };
@@ -75,7 +100,7 @@ export async function pruneProjects() {
 
 export async function deleteProject(projectPath, deleteIndex = true) {
   try {
-    const resp = await fetch('/api/projects/delete', {
+    const resp = await apiFetch('/api/projects/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: projectPath, delete_index: deleteIndex }),
@@ -88,7 +113,7 @@ export async function deleteProject(projectPath, deleteIndex = true) {
 
 export async function triggerAutoCleanup() {
   try {
-    const resp = await fetch('/api/cleanup', { method: 'POST' });
+    const resp = await apiFetch('/api/cleanup', { method: 'POST' });
     return resp.json();
   } catch (e) {
     return { success: false, error: e.message };
@@ -97,7 +122,7 @@ export async function triggerAutoCleanup() {
 
 export async function cleanDashboardMetrics(project = 'all') {
   try {
-    const resp = await fetch('/api/dashboard/clean', {
+    const resp = await apiFetch('/api/dashboard/clean', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project }),
@@ -109,7 +134,7 @@ export async function cleanDashboardMetrics(project = 'all') {
 }
 
 async function fetchHealth() {
-  const resp = await fetch('/health');
+  const resp = await apiFetch('/health');
   return resp.json();
 }
 
@@ -179,7 +204,7 @@ export async function fetchData(options = {}) {
 
 export async function refreshEmbedEngine() {
   try {
-    const resp = await fetch('/api/engine/refresh', { method: 'POST' });
+    const resp = await apiFetch('/api/engine/refresh', { method: 'POST' });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     return await resp.json();
   } catch (e) {
@@ -223,26 +248,26 @@ export async function fetchLogs({ level = 'all', search = '', limit = 50, offset
   if (limit) query.set('limit', limit);
   if (offset) query.set('offset', offset);
 
-  const res = await fetch('/api/logs?' + query.toString());
+  const res = await apiFetch('/api/logs?' + query.toString());
   if (!res.ok) throw new Error('Failed to fetch logs: ' + res.statusText);
   return res.json();
 }
 
 export async function clearLogs(level = 'all') {
   const query = level && level !== 'all' ? `?level=${encodeURIComponent(level)}` : '';
-  const res = await fetch('/api/logs/clear' + query, { method: 'POST' });
+  const res = await apiFetch('/api/logs/clear' + query, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to clear logs: ' + res.statusText);
   return res.json();
 }
 
 export async function fetchServerConfig() {
-  const resp = await fetch('/api/config/server');
+  const resp = await apiFetch('/api/config/server');
   if (!resp.ok) throw new Error('Failed to fetch server config: ' + resp.statusText);
   return resp.json();
 }
 
 export async function saveServerConfig(payload) {
-  const resp = await fetch('/api/config/server', {
+  const resp = await apiFetch('/api/config/server', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -252,7 +277,7 @@ export async function saveServerConfig(payload) {
 }
 
 export async function testServerConnection(payload) {
-  const resp = await fetch('/api/config/test', {
+  const resp = await apiFetch('/api/config/test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -262,19 +287,19 @@ export async function testServerConnection(payload) {
 }
 
 export async function fetchSkillsRegistry() {
-  const resp = await fetch('/api/skills/registry');
+  const resp = await apiFetch('/api/skills/registry');
   if (!resp.ok) throw new Error('Failed to fetch skill registry: ' + resp.statusText);
   return resp.json();
 }
 
 export async function fetchSkillsBinaryStats() {
-  const resp = await fetch('/api/skills/binary_stats');
+  const resp = await apiFetch('/api/skills/binary_stats');
   if (!resp.ok) throw new Error('Failed to fetch binary stats: ' + resp.statusText);
   return resp.json();
 }
 
 export async function deleteBulkSkills(names, purgeStaging = true) {
-  const resp = await fetch('/api/skills/delete_bulk', {
+  const resp = await apiFetch('/api/skills/delete_bulk', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ names, purge_staging: purgeStaging }),
@@ -284,7 +309,7 @@ export async function deleteBulkSkills(names, purgeStaging = true) {
 }
 
 export async function compileSkillsBinary(force = false) {
-  const resp = await fetch('/api/skills/compile', {
+  const resp = await apiFetch('/api/skills/compile', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ force }),

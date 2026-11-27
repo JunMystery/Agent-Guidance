@@ -1,9 +1,5 @@
+import { escapeHtml } from '../dom.js';
 import { t } from '../i18n/index.js';
-
-function escapeHtml(str) {
-  if (!str) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
 
 export function renderFunctionInspector(container, node, edges = [], allNodes = [], onJumpNode) {
   if (!container) return;
@@ -51,14 +47,14 @@ export function renderFunctionInspector(container, node, edges = [], allNodes = 
           ${escapeHtml(fnName)}()
         </h4>
         <div style="font-size: 11px; color: #94a3b8; font-family: var(--font-mono); word-break: break-all; margin-top: 4px;">
-          📁 ${escapeHtml(filePath)}
+          ${escapeHtml(filePath)}
         </div>
         <div style="font-size: 10px; color: #64748b; font-family: var(--font-mono); margin-top: 2px;">
           ${t('graph.lines_range', { start: startLine, end: endLine })} (${loc} LOC)
         </div>
       </div>
-      <button id="btn-copy-fn-id" title="${t('inspector.copy_id_title')}" style="background: var(--bg-tertiary); border: 1px solid var(--border-color); color: #94a3b8; border-radius: 4px; padding: 4px 8px; font-size: 11px; cursor: pointer;">
-        📋
+      <button id="btn-copy-fn-id" title="${escapeHtml(t('inspector.copy_id_title'))}" style="background: var(--bg-tertiary); border: 1px solid var(--border-color); color: #94a3b8; border-radius: 4px; padding: 4px 8px; font-size: 11px; cursor: pointer;">
+        Copy
       </button>
     </div>
 
@@ -104,10 +100,10 @@ export function renderFunctionInspector(container, node, edges = [], allNodes = 
   const copyBtn = container.querySelector('#btn-copy-fn-id');
   if (copyBtn) {
     copyBtn.onclick = () => {
-      navigator.clipboard.writeText(fnName).then(() => {
-        copyBtn.textContent = '✅';
-        setTimeout(() => { copyBtn.textContent = '📋'; }, 1500);
-      });
+      navigator.clipboard?.writeText(fnName)?.then(() => {
+        copyBtn.textContent = 'Copied';
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+      })?.catch(() => {});
     };
   }
 

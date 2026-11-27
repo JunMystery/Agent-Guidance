@@ -6,7 +6,10 @@ use super::dataflow_def::{CallArgDetail, FormalParam};
 use super::types::AstLanguage;
 
 fn node_text<'a>(node: &Node, source: &'a [u8]) -> &'a str {
-    std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
+    source
+        .get(node.start_byte()..node.end_byte())
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .unwrap_or("")
 }
 
 /// Extracts all function definitions along with their formal parameters and outgoing call arguments.
@@ -34,10 +37,10 @@ fn collect_function_dataflow(
             if k == "function_declaration" || k == "method_definition" || k == "generator_function_declaration" {
                 (true, node.child_by_field_name("name").map(|n| node_text(&n, source).to_string()), node, node.child_by_field_name("body"))
             } else if k == "variable_declarator" {
-                let val_opt = node.child_by_field_name("value");
-                let is_arrow = val_opt.as_ref().map(|v| v.kind() == "arrow_function" || v.kind() == "function_expression").unwrap_or(false);
-                if is_arrow {
-                    let v = val_opt.unwrap();
+                if let Some(v) = node
+                    .child_by_field_name("value")
+                    .filter(|v| v.kind() == "arrow_function" || v.kind() == "function_expression")
+                {
                     let name = node.child_by_field_name("name").map(|n| node_text(&n, source).to_string());
                     let b = v.child_by_field_name("body").or(Some(v));
                     (true, name, v, b)

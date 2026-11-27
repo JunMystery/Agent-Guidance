@@ -14,12 +14,62 @@ use crate::mcp::state::ServerState;
 const MAX_REQUEST_WORKERS: usize = 32;
 static REQUEST_WORKERS: std::sync::OnceLock<Arc<Semaphore>> = std::sync::OnceLock::new();
 
+async fn read_bounded_line<R: AsyncBufReadExt + Unpin>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> std::io::Result<Option<Result<String, ()>>> {
+    let mut buf = Vec::new();
+    let mut oversized = false;
+    loop {
+        let avail = reader.fill_buf().await?;
+        if avail.is_empty() {
+            if buf.is_empty() && !oversized {
+                return Ok(None);
+            }
+            if oversized {
+                return Ok(Some(Err(())));
+            }
+            if buf.ends_with(b"\r") {
+                buf.pop();
+            }
+            let s = String::from_utf8(buf)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            return Ok(Some(Ok(s)));
+        }
+        if let Some(pos) = avail.iter().position(|&b| b == b'\n') {
+            if oversized || buf.len() + pos > max_bytes {
+                reader.consume(pos + 1);
+                return Ok(Some(Err(())));
+            }
+            buf.extend_from_slice(&avail[..pos]);
+            reader.consume(pos + 1);
+            if buf.ends_with(b"\r") {
+                buf.pop();
+            }
+            let s = String::from_utf8(buf)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            return Ok(Some(Ok(s)));
+        }
+        let len = avail.len();
+        if !oversized {
+            if buf.len() + len > max_bytes {
+                oversized = true;
+                buf.clear();
+                buf.shrink_to_fit();
+            } else {
+                buf.extend_from_slice(avail);
+            }
+        }
+        reader.consume(len);
+    }
+}
+
 pub async fn handle_mcp_lines<R, W>(reader: R, mut writer: W)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
     W: tokio::io::AsyncWrite + Unpin + Send,
 {
-    let mut reader = BufReader::new(reader).lines();
+    let mut reader = BufReader::new(reader);
     let client_name = std::env::var("AGENT_CLIENT_NAME").ok();
     let state = Arc::new(Mutex::new(ServerState::with_client_name(client_name)));
 
@@ -32,8 +82,29 @@ where
     const REQUEST_TIMEOUT_SECS: u64 = 60;
 
     loop {
-        let line = match reader.next_line().await {
-            Ok(Some(l)) => l,
+        let line = match read_bounded_line(&mut reader, MAX_LINE_BYTES).await {
+            Ok(Some(Ok(l))) => l,
+            Ok(Some(Err(()))) => {
+                error!(
+                    "Request line exceeded max limit of {} bytes",
+                    MAX_LINE_BYTES
+                );
+                let err_resp = JsonRpcResponse::error(
+                    serde_json::Value::Null,
+                    -32600,
+                    "Invalid Request: payload too large",
+                );
+                let out = serde_json::to_string(&err_resp).unwrap_or_default() + "\n";
+                if let Err(e) = writer.write_all(out.as_bytes()).await {
+                    error!("Write error: {}", e);
+                    break;
+                }
+                if let Err(e) = writer.flush().await {
+                    error!("Flush error: {}", e);
+                    break;
+                }
+                continue;
+            }
             Ok(None) => {
                 crate::mcp::mcp_logger::log_mcp(
                     crate::mcp::mcp_logger::LogLevel::Warn,
@@ -58,28 +129,6 @@ where
         };
 
         if line.trim().is_empty() {
-            continue;
-        }
-
-        if line.len() > MAX_LINE_BYTES {
-            error!(
-                "Request line exceeded max limit of {} bytes",
-                MAX_LINE_BYTES
-            );
-            let err_resp = JsonRpcResponse::error(
-                serde_json::Value::Null,
-                -32600,
-                "Invalid Request: payload too large",
-            );
-            let out = serde_json::to_string(&err_resp).unwrap_or_default() + "\n";
-            if let Err(e) = writer.write_all(out.as_bytes()).await {
-                error!("Write error: {}", e);
-                break;
-            }
-            if let Err(e) = writer.flush().await {
-                error!("Flush error: {}", e);
-                break;
-            }
             continue;
         }
 

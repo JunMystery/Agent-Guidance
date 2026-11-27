@@ -62,11 +62,11 @@ export function renderPagination(containerId, tableId, paged, onPageChange) {
           </select>
         </div>
         <div class="pagination-nav">
-          <button class="pagination-btn pg-first" title="${t('pagination.first_page')}" ${paged.page <= 1 ? 'disabled' : ''}>⏮</button>
-          <button class="pagination-btn pg-prev" title="${t('pagination.prev_page')}" ${paged.page <= 1 ? 'disabled' : ''}>◀</button>
+          <button class="pagination-btn pg-first" title="${t('pagination.first_page')}" ${paged.page <= 1 ? 'disabled' : ''}>&laquo;</button>
+          <button class="pagination-btn pg-prev" title="${t('pagination.prev_page')}" ${paged.page <= 1 ? 'disabled' : ''}>&lsaquo;</button>
           <span class="pagination-status">${t('pagination.page_status', { page: paged.page, totalPages: paged.totalPages })}</span>
-          <button class="pagination-btn pg-next" title="${t('pagination.next_page')}" ${paged.page >= paged.totalPages ? 'disabled' : ''}>▶</button>
-          <button class="pagination-btn pg-last" title="${t('pagination.last_page')}" ${paged.page >= paged.totalPages ? 'disabled' : ''}>⏭</button>
+          <button class="pagination-btn pg-next" title="${t('pagination.next_page')}" ${paged.page >= paged.totalPages ? 'disabled' : ''}>&rsaquo;</button>
+          <button class="pagination-btn pg-last" title="${t('pagination.last_page')}" ${paged.page >= paged.totalPages ? 'disabled' : ''}>&raquo;</button>
         </div>
       </div>
     </div>

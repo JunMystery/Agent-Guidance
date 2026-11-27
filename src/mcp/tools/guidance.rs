@@ -35,4 +35,4 @@ pub(crate) fn handle(
         }
         _ => Ok(format!("Guidance operation '{}' completed successfully.", op)),
     }
-}
+}

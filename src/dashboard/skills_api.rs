@@ -44,7 +44,7 @@ pub fn handle_api_skills_registry(request: Request) {
                     let name = rec.name;
                     let sections = rec.content.matches("\n## ").count() + 1;
                     let is_staged = staging_names.contains(&name);
-                    let is_tomb = tombstones.contains(&name);
+                    let is_tomb = tombstones.contains(&name.to_lowercase());
                     let source = if is_staged { "staged_override" } else { "binary" };
 
                     skill_items.push(json!({
@@ -63,7 +63,7 @@ pub fn handle_api_skills_registry(request: Request) {
     for staged in staging_skills {
         if !skill_items.iter().any(|s| s["name"].as_str() == Some(&staged.name)) {
             let sections = staged.content.matches("\n## ").count() + 1;
-            let is_tomb = tombstones.contains(&staged.name);
+            let is_tomb = tombstones.contains(&staged.name.to_lowercase());
             skill_items.push(json!({
                 "name": staged.name,
                 "sections": sections,
@@ -115,11 +115,13 @@ pub fn handle_api_skills_delete_bulk(mut request: Request) {
         return;
     }
 
-    let mut body = String::new();
-    if let Err(e) = request.as_reader().read_to_string(&mut body) {
-        super::router::json_response(request, 400, &json!({ "error": format!("Read error: {}", e) }));
-        return;
-    }
+    let body = match super::router::read_bounded_body(&mut request) {
+        Ok(b) => b,
+        Err((status, msg)) => {
+            super::router::json_response(request, status, &json!({ "error": msg }));
+            return;
+        }
+    };
 
     let req_data: DeleteBulkRequest = match serde_json::from_str(&body) {
         Ok(d) => d,
@@ -148,8 +150,13 @@ pub fn handle_api_skills_compile(mut request: Request) {
         return;
     }
 
-    let mut body = String::new();
-    let _ = request.as_reader().read_to_string(&mut body);
+    let body = match super::router::read_bounded_body(&mut request) {
+        Ok(b) => b,
+        Err((status, msg)) => {
+            super::router::json_response(request, status, &json!({ "error": msg }));
+            return;
+        }
+    };
     let req_data: CompileRequest = serde_json::from_str(&body).unwrap_or(CompileRequest { force: false });
 
     match compile_staging_to_binary(req_data.force) {

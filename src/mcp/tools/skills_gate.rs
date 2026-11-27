@@ -6,9 +6,7 @@ use super::validate_path;
 
 pub(crate) fn clean_skill_identifier(raw: &str) -> String {
     let mut s = raw.trim().trim_matches(|c| matches!(c, '`' | '*' | '\'' | '"')).trim();
-    while s.starts_with(['-', '*', '•']) {
-        s = s[1..].trim();
-    }
+    s = s.trim_start_matches(|c: char| matches!(c, '-' | '*' | '\u{2022}') || c.is_whitespace());
     if let Some(pos) = s.find(". ") {
         if pos > 0 && s[..pos].chars().all(|c| c.is_ascii_digit()) {
             s = s[pos + 2..].trim();
@@ -111,4 +109,22 @@ pub(crate) fn check_confirmation_gate(
         "# Skill Selection Gate: [select_skills]\n\nStatus: BLOCKED | Error: USER_CONFIRMATION_REQUIRED: You must NEVER auto-select skills on behalf of the user.\n\nTrigger the IDE tool `ask_question` with `is_multi_select: true` so the user selects skills.\n\nCRITICAL MULTILINGUAL MANDATE:\n1. Match User Language: Translate the question and each skill's description into the active conversational language used by the user (e.g. Vietnamese, Japanese, French, English, etc.).\n2. Accents & Diacritics: For languages with diacritics (like Vietnamese), MUST write natural accented text with full diacritics ('tiếng Việt có dấu đầy đủ'). NEVER strip accents or emit unaccented text ('tiếng Việt không dấu').\n3. Option Format: Format each option as `[(Recommended) ]{{name}} - {{translated_short_desc}}` (keep `{{name}}` exact, `{{translated_short_desc}}` <= 50 chars).\n\nSuggested template:\n```json\nask_question({})\n```\nOnce the user submits their choice, call `select_skills(skills=[...], user_confirmed=true)`.",
         serde_json::to_string_pretty(&question_json).unwrap_or_default()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clean_skill_identifier;
+
+    #[test]
+    fn test_clean_skill_identifier_utf8_bullets() {
+        assert_eq!(clean_skill_identifier("\u{2022} rust-async"), "rust-async");
+        assert_eq!(
+            clean_skill_identifier("\u{2022}   (Recommended) my-skill - desc"),
+            "my-skill"
+        );
+        assert_eq!(
+            clean_skill_identifier("  - * \u{2022}  `clean-code` : description"),
+            "clean-code"
+        );
+    }
 }

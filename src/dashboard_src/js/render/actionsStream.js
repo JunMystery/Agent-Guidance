@@ -1,4 +1,4 @@
-import { el, emptyState } from '../dom.js';
+import { el, emptyState, escapeHtml } from '../dom.js';
 import { timeAgo, savingsBadge } from '../format.js';
 import { filterRows } from '../interactions.js';
 import { paginate, renderPagination } from '../pagination.js';
@@ -28,29 +28,29 @@ export function drawStreamTable(store, activeCategory, activeEff) {
     return;
   }
 
-  paged.pagedRows.forEach(r => {
+  body.innerHTML = paged.pagedRows.map(r => {
     const { pct, badgeClass } = savingsBadge(r.savings, r.tokens_original);
     const op = r.operation || ((r.tool_name === 'select_skills' || r.tool_name === 'select_skill') ? 'load' : 'default');
     const isErr = !!r.error_message;
     const targetText = r.target
-      ? `<code class="target-badge" title="${r.target.replace(/"/g, '&quot;')}">${r.target.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>`
+      ? `<code class="target-badge" title="${escapeHtml(r.target)}">${escapeHtml(r.target)}</code>`
       : '<span class="text-muted">—</span>';
-    body.innerHTML += `
+    return `
       <tr>
-        <td class="time-col font-mono">${timeAgo(r.started_at)}</td>
+        <td class="time-col font-mono">${escapeHtml(timeAgo(r.started_at))}</td>
         <td>
           <div class="tool-cell">
-            <span class="tool-tag ${r.meta.cls}">${r.meta.label}</span>
-            <span class="tool-name">${r.tool_name}</span>
+            <span class="tool-tag ${escapeHtml(r.meta.cls)}">${escapeHtml(r.meta.label)}</span>
+            <span class="tool-name">${escapeHtml(r.tool_name)}</span>
           </div>
         </td>
-        <td><span class="badge op-badge">${op}</span></td>
+        <td><span class="badge op-badge">${escapeHtml(op)}</span></td>
         <td class="target-cell">${targetText}</td>
         <td class="num-cell"><span class="${badgeClass}">${pct}%</span></td>
-        <td><span class="badge ${isErr ? 'red' : 'green'}" title="${(r.error_message || '').replace(/"/g, '&quot;')}">${isErr ? t('status.failed') : t('status.success')}</span></td>
+        <td><span class="badge ${isErr ? 'red' : 'green'}" title="${escapeHtml(r.error_message || '')}">${escapeHtml(isErr ? t('status.failed') : t('status.success'))}</span></td>
       </tr>
     `;
-  });
+  }).join('');
 
   renderPagination('actions-stream-pagination', 'actions-stream-body', paged, () => drawStreamTable(store, activeCategory, activeEff));
 }

@@ -8,7 +8,9 @@ const LOGO_PNG: &[u8] = include_bytes!("../../docs/images/logo.png");
 pub fn run_windows_tray(port: u16) {
     use windows_sys::Win32::Foundation::*;
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows_sys::Win32::System::StationsAndDesktops::{OpenDesktopW, SetThreadDesktop};
+    use windows_sys::Win32::System::StationsAndDesktops::{
+        CloseDesktop, OpenDesktopW, SetThreadDesktop,
+    };
     use windows_sys::Win32::UI::Shell::*;
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -45,12 +47,16 @@ pub fn run_windows_tray(port: u16) {
 
         if hwnd == 0 {
             tracing::warn!("Failed to create tray hidden window: {}", GetLastError());
+            if hdesk != 0 {
+                CloseDesktop(hdesk);
+            }
             return;
         }
 
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, port as isize);
 
         let mut icon = LoadIconW(hinstance, 1 as *const u16);
+        let mut owns_icon = false;
         if icon == 0 {
             icon = CreateIconFromResourceEx(
                 LOGO_PNG.as_ptr() as *mut u8,
@@ -61,6 +67,9 @@ pub fn run_windows_tray(port: u16) {
                 32,
                 LR_DEFAULTCOLOR,
             );
+            if icon != 0 {
+                owns_icon = true;
+            }
         }
         if icon == 0 {
             icon = LoadIconW(0, IDI_APPLICATION);
@@ -82,6 +91,12 @@ pub fn run_windows_tray(port: u16) {
         if added == 0 {
             tracing::warn!("Shell_NotifyIconW failed: {}", GetLastError());
             DestroyWindow(hwnd);
+            if owns_icon && icon != 0 {
+                DestroyIcon(icon);
+            }
+            if hdesk != 0 {
+                CloseDesktop(hdesk);
+            }
             return;
         }
         tracing::info!("Tray icon successfully added to taskbar notification area!");
@@ -91,8 +106,20 @@ pub fn run_windows_tray(port: u16) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        let exit_requested = msg.message == WM_QUIT;
 
         Shell_NotifyIconW(NIM_DELETE, &nid);
+        DestroyWindow(hwnd);
+        if owns_icon && icon != 0 {
+            DestroyIcon(icon);
+        }
+        if hdesk != 0 {
+            CloseDesktop(hdesk);
+        }
+
+        if exit_requested {
+            std::process::exit(0);
+        }
     }
 }
 
@@ -158,7 +185,7 @@ unsafe extern "system" fn tray_wnd_proc(
                 } else if cmd == IDM_ABOUT {
                     show_about_dialog(hwnd as isize, env!("CARGO_PKG_VERSION"));
                 } else if cmd == IDM_EXIT {
-                    std::process::exit(0);
+                    PostQuitMessage(0);
                 }
             }
             return 0;

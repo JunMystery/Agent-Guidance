@@ -60,7 +60,7 @@ export function createProjectCombobox(options) {
             <span class="combobox-item-path">${escapeHtml(p.path)}</span>
           </div>
           ${isMissing ? `<span class="combobox-tag-missing">${t('sidebar.missing')}</span>` : ''}
-          <button type="button" class="combobox-delete-btn" data-project="${escapeHtml(p.path)}" data-name="${escapeHtml(p.name || p.path)}" title="${t('dialog.delete_project_title')}">🗑️</button>
+          <button type="button" class="combobox-delete-btn" data-project="${escapeHtml(p.path)}" data-name="${escapeHtml(p.name || p.path)}" title="${escapeHtml(t('dialog.delete_project_title'))}" aria-label="${escapeHtml(t('dialog.delete_project_title'))}">&times;</button>
         </div>`;
       });
     }
@@ -113,33 +113,33 @@ export function createProjectCombobox(options) {
 
   inputEl.value = getDisplayLabel(activeVal);
 
-  inputEl.addEventListener('focus', () => openDropdown());
-  inputEl.addEventListener('click', () => { if (!isOpen) openDropdown(); });
-  inputEl.addEventListener('input', () => {
+  const onFocus = () => openDropdown();
+  const onInputClick = () => { if (!isOpen) openDropdown(); };
+  const onInput = () => {
     if (!isOpen) openDropdown();
     renderList(inputEl.value);
-  });
-
-  if (arrowEl) {
-    arrowEl.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (isOpen) closeDropdown();
-      else { inputEl.focus(); openDropdown(); }
-    });
-  }
-
-  inputEl.addEventListener('keydown', (e) => {
+  };
+  const onArrowClick = (e) => {
+    e.stopPropagation();
+    if (isOpen) closeDropdown();
+    else { inputEl.focus(); openDropdown(); }
+  };
+  const onKeyDown = (e) => {
     const items = optionsEl.querySelectorAll('.combobox-item');
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (!isOpen) openDropdown();
-      focusedIndex = (focusedIndex + 1) % items.length;
-      updateFocus(items);
+      const updated = optionsEl.querySelectorAll('.combobox-item');
+      if (!updated.length) return;
+      focusedIndex = (focusedIndex + 1) % updated.length;
+      updateFocus(updated);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       if (!isOpen) openDropdown();
-      focusedIndex = (focusedIndex - 1 + items.length) % items.length;
-      updateFocus(items);
+      const updated = optionsEl.querySelectorAll('.combobox-item');
+      if (!updated.length) return;
+      focusedIndex = (focusedIndex - 1 + updated.length) % updated.length;
+      updateFocus(updated);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (focusedIndex >= 0 && items[focusedIndex]) {
@@ -150,7 +150,19 @@ export function createProjectCombobox(options) {
     } else if (e.key === 'Escape') {
       closeDropdown();
     }
-  });
+  };
+  const onDocClick = (e) => {
+    if (!inputEl.contains(e.target) && !dropdownEl.contains(e.target) && !(arrowEl && arrowEl.contains(e.target))) {
+      if (isOpen) closeDropdown();
+    }
+  };
+
+  inputEl.addEventListener('focus', onFocus);
+  inputEl.addEventListener('click', onInputClick);
+  inputEl.addEventListener('input', onInput);
+  inputEl.addEventListener('keydown', onKeyDown);
+  if (arrowEl) arrowEl.addEventListener('click', onArrowClick);
+  document.addEventListener('click', onDocClick);
 
   function updateFocus(items) {
     items.forEach((it, idx) => {
@@ -158,12 +170,6 @@ export function createProjectCombobox(options) {
       if (idx === focusedIndex) it.scrollIntoView({ block: 'nearest' });
     });
   }
-
-  document.addEventListener('click', (e) => {
-    if (!inputEl.contains(e.target) && !dropdownEl.contains(e.target) && !(arrowEl && arrowEl.contains(e.target))) {
-      if (isOpen) closeDropdown();
-    }
-  });
 
   return {
     setValue: (val) => {
@@ -174,6 +180,14 @@ export function createProjectCombobox(options) {
       currentProjects = [...newProjects];
       inputEl.value = getDisplayLabel(activeVal);
       if (isOpen) renderList(inputEl.value);
+    },
+    destroy: () => {
+      inputEl.removeEventListener('focus', onFocus);
+      inputEl.removeEventListener('click', onInputClick);
+      inputEl.removeEventListener('input', onInput);
+      inputEl.removeEventListener('keydown', onKeyDown);
+      if (arrowEl) arrowEl.removeEventListener('click', onArrowClick);
+      document.removeEventListener('click', onDocClick);
     },
   };
 }

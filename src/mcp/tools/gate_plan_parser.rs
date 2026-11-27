@@ -9,19 +9,56 @@ const KNOWN_EXTS: &[&str] = &[
     "sql", "yaml", "yml", "sh",
 ];
 
+fn is_markdown_plan_path(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_ascii_lowercase().as_str(), "md" | "markdown"))
+        .unwrap_or(false)
+}
+
+fn resolve_brain_dir() -> Option<PathBuf> {
+    match std::env::var("AGY_BRAIN_DIR") {
+        Ok(custom) if !custom.trim().is_empty() => Some(PathBuf::from(custom)),
+        _ => Some(dirs::home_dir()?.join(".gemini").join("antigravity").join("brain")),
+    }
+}
+
+fn strip_win_verbatim(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        p
+    }
+}
+
 pub(crate) fn find_plan_artifact(
     proj_path: &Path,
     custom_path: Option<&str>,
     session_id: Option<&str>,
 ) -> Option<PathBuf> {
-    if let Some(custom) = custom_path {
+    if let Some(custom) = custom_path.map(str::trim).filter(|s| !s.is_empty() && !s.contains("..")) {
         let p = PathBuf::from(custom);
-        if p.is_absolute() && p.exists() {
-            return Some(p);
-        }
-        let rel = proj_path.join(custom);
-        if rel.exists() {
-            return Some(rel);
+        if is_markdown_plan_path(&p) {
+            if p.is_absolute() {
+                if let Ok(can_p) = p.canonicalize() {
+                    let in_proj = proj_path
+                        .canonicalize()
+                        .map(|cp| can_p.starts_with(&cp))
+                        .unwrap_or(false);
+                    let in_brain = resolve_brain_dir()
+                        .and_then(|b| b.canonicalize().ok())
+                        .map(|cb| can_p.starts_with(&cb))
+                        .unwrap_or(false);
+                    if (in_proj || in_brain) && can_p.exists() {
+                        return Some(strip_win_verbatim(can_p));
+                    }
+                }
+            } else if let Ok(rel) = super::helpers::validate_path(proj_path, custom) {
+                if rel.exists() {
+                    return Some(strip_win_verbatim(rel));
+                }
+            }
         }
     }
 
@@ -41,10 +78,7 @@ pub(crate) fn find_plan_artifact(
 }
 
 fn find_in_brain_dir(session_id: Option<&str>) -> Option<PathBuf> {
-    let brain = match std::env::var("AGY_BRAIN_DIR") {
-        Ok(custom) if !custom.trim().is_empty() => PathBuf::from(custom),
-        _ => dirs::home_dir()?.join(".gemini").join("antigravity").join("brain"),
-    };
+    let brain = resolve_brain_dir()?;
     if !brain.is_dir() {
         return None;
     }
@@ -105,7 +139,9 @@ fn extract_candidates_from_line(line: &str, proj_path: &Path, res: &mut Vec<Stri
 fn sanitize_and_push(raw: &str, proj_path: &Path, results: &mut Vec<String>) {
     let mut cleaned = raw.trim()
         .trim_start_matches("file://")
-        .trim_matches(|c| matches!(c, '\'' | '"' | '(' | ')' | '[' | ']'));
+        .trim_matches(|c| matches!(c, '\'' | '"' | '(' | ')' | '[' | ']'))
+        .trim_start_matches(r"\\?\")
+        .trim_start_matches("//?/");
     if let Some(pos) = cleaned.find(['#', '?']) {
         cleaned = &cleaned[..pos];
     }
@@ -116,7 +152,10 @@ fn sanitize_and_push(raw: &str, proj_path: &Path, results: &mut Vec<String>) {
         return;
     }
     let norm = cleaned.replace('\\', "/");
-    let proj_norm = proj_path.to_string_lossy().replace('\\', "/");
+    let proj_norm = proj_path
+        .to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .replace('\\', "/");
     let candidate = if let Some(s) = norm.strip_prefix(&proj_norm) {
         s.trim_start_matches('/').to_string()
     } else if norm.len() >= proj_norm.len() && norm[..proj_norm.len()].eq_ignore_ascii_case(&proj_norm) {

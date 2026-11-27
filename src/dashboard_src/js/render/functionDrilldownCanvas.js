@@ -74,7 +74,7 @@ export function initFunctionDrilldownCanvas(canvasId, targetFile, rawNodes = [],
   let scale = 0.85, panX = 0, panY = 0;
   let isDragging = false, hasDragged = false, startX = 0, startY = 0, lastX = 0, lastY = 0;
   let selectedId = null, hoverId = null;
-  let pulseEnabled = true, animTime = 0, running = true;
+  let pulseEnabled = true, animTime = 0, running = true, rafId = null;
 
   function fitToView() {
     if (!nodeArr.length) return;
@@ -110,7 +110,7 @@ export function initFunctionDrilldownCanvas(canvasId, targetFile, rawNodes = [],
       ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(56, 189, 248, 0.5)'; ctx.setLineDash([6, 5]); ctx.stroke();
       ctx.setLineDash([]);
       ctx.font = '700 11px Inter, sans-serif'; ctx.fillStyle = '#38bdf8'; ctx.textAlign = 'left';
-      ctx.fillText(`📁 ${t('graph.file_label')}: ${(targetFile || 'FILE').split(/[/\\]/).pop()} (${intCount} functions)`, auraBox.x + 14, auraBox.y + 18);
+      ctx.fillText(`${t('graph.file_label')}: ${(targetFile || 'FILE').split(/[/\\]/).pop()} (${intCount} functions)`, auraBox.x + 14, auraBox.y + 18);
       ctx.restore();
     }
 
@@ -182,10 +182,10 @@ export function initFunctionDrilldownCanvas(canvasId, targetFile, rawNodes = [],
     });
 
     ctx.restore();
-    requestAnimationFrame(render);
+    rafId = requestAnimationFrame(render);
   }
 
-  requestAnimationFrame(render);
+  rafId = requestAnimationFrame(render);
 
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -205,7 +205,7 @@ export function initFunctionDrilldownCanvas(canvasId, targetFile, rawNodes = [],
     startX = e.clientX; startY = e.clientY; lastX = e.clientX; lastY = e.clientY;
   });
 
-  window.addEventListener('mousemove', (e) => {
+  const onMouseMove = (e) => {
     if (isDragging) {
       if (Math.hypot(e.clientX - startX, e.clientY - startY) > 4) hasDragged = true;
       panX += e.clientX - lastX; panY += e.clientY - lastY;
@@ -219,9 +219,11 @@ export function initFunctionDrilldownCanvas(canvasId, targetFile, rawNodes = [],
     }
     hoverId = found ? found.id : null;
     canvas.style.cursor = found ? 'pointer' : (isDragging ? 'grabbing' : 'grab');
-  });
+  };
 
-  window.addEventListener('mouseup', () => { isDragging = false; });
+  const onMouseUp = () => { isDragging = false; };
+  window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mouseup', onMouseUp);
 
   canvas.addEventListener('click', (e) => {
     if (hasDragged) return;
@@ -251,6 +253,14 @@ export function initFunctionDrilldownCanvas(canvasId, targetFile, rawNodes = [],
       if (n) { panX = W / 2 - n.x * scale; panY = H / 2 - n.y * scale; }
     },
     setPulse: (p) => { pulseEnabled = p; },
-    destroy: () => { running = false; }
+    destroy: () => {
+      running = false;
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    }
   };
 }

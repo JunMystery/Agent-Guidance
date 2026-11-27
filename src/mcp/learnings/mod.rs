@@ -1,7 +1,35 @@
 use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
+
+static ATOMIC_WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+pub(super) fn write_file_atomically(path: &Path, content: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file");
+    let seq = ATOMIC_WRITE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp_name = format!("{}.tmp.{}.{}", file_name, std::process::id(), seq);
+    let tmp_path = path.with_file_name(tmp_name);
+
+    if let Err(e) = fs::write(&tmp_path, content) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e.into());
+    }
+
+    if let Err(e) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e.into());
+    }
+
+    Ok(())
+}
 
 pub mod matching;
 pub use matching::{
@@ -48,7 +76,10 @@ pub(crate) fn parse_learnings_file(proj_path: &Path) -> Vec<LearningItem> {
         let trimmed = line.trim();
         if trimmed.starts_with("## [") && trimmed.ends_with(']') {
             let header = &trimmed[4..trimmed.len() - 1];
-            if header.to_uppercase().starts_with("PINNED:") {
+            if header.len() >= 7
+                && header.is_char_boundary(7)
+                && header[..7].eq_ignore_ascii_case("PINNED:")
+            {
                 current_pinned = true;
                 current_cat = header[7..].to_string();
             } else {
@@ -72,9 +103,6 @@ pub(crate) fn parse_learnings_file(proj_path: &Path) -> Vec<LearningItem> {
 
 fn write_learnings_file(proj_path: &Path, items: &[LearningItem]) -> Result<()> {
     let path = learnings_file_path(proj_path);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
 
     let mut output = String::from("# Project Memorized Learnings\n\n> Shared operational memory and distilled project rules.\n\n");
 
@@ -100,7 +128,7 @@ fn write_learnings_file(proj_path: &Path, items: &[LearningItem]) -> Result<()> 
         output.push_str(&format!("- {}\n", item.content));
     }
 
-    fs::write(&path, output)?;
+    write_file_atomically(&path, &output)?;
     Ok(())
 }
 

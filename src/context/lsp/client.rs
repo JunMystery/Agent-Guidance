@@ -35,6 +35,7 @@ impl LspClient {
         let mut stdout = child.stdout.take().ok_or("Failed to open child stdout")?;
 
         let (tx, rx) = channel::<Value>();
+        const MAX_STDOUT_BUF_BYTES: usize = 4 * 1024 * 1024;
         std::thread::spawn(move || {
             let mut buf = Vec::with_capacity(4096);
             let mut temp = [0u8; 2048];
@@ -42,6 +43,9 @@ impl LspClient {
                 match stdout.read(&mut temp) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
+                        if buf.len() + n > MAX_STDOUT_BUF_BYTES {
+                            break;
+                        }
                         buf.extend_from_slice(&temp[..n]);
                         while let Some((val, consumed)) = decode_message(&buf) {
                             let _ = tx.send(val);
@@ -107,12 +111,18 @@ impl LspClient {
         let deadline = std::time::Instant::now() + timeout;
         while std::time::Instant::now() < deadline {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if let Ok(msg) = self.rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
-                if msg.get("id").and_then(|id| id.as_u64()) == Some(req_id) {
-                    if let Some(err) = msg.get("error") {
-                        return Err(format!("LSP error: {}", err));
+            match self.rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
+                Ok(msg) => {
+                    if msg.get("id").and_then(|id| id.as_u64()) == Some(req_id) {
+                        if let Some(err) = msg.get("error") {
+                            return Err(format!("LSP error: {}", err));
+                        }
+                        return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
                     }
-                    return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(format!("LSP server '{}' exited unexpectedly", self.server_name));
                 }
             }
         }
@@ -158,6 +168,7 @@ impl LspClient {
 impl Drop for LspClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

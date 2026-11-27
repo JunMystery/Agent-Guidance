@@ -32,7 +32,8 @@ Guides for configuring the MCP server with specific AI coding clients.
 | Doc | Summary |
 |---|---|
 | [MCP Surface](reference/mcp-surface.md) | All tools, prompts, and resources |
-| [Project Context Tools](reference/project-context-tools.md) | Tree, search, read, snapshot, symbols |
+| [Project Context Tools](reference/project-context-tools.md) | Tree, search, read, snapshot, symbols, data flow |
+| [Auto Skill Discovery](reference/auto-skill-discovery.md) | Hybrid vector search and cross-encoder skill matching pipeline |
 | [Agents](reference/agents.md) | Agent persona specifications |
 | [Rules Generation](reference/rules-generation.md) | Auto-generating IDE rule files |
 | [Repo Map For Agents](reference/repo-map-for-agents.md) | Repository orientation for AI agents |
@@ -50,10 +51,11 @@ Guides for configuring the MCP server with specific AI coding clients.
 | Doc | Summary |
 |---|---|
 | [Integrated Repositories](integrations/integrated-repositories.md) | Current third-party repos in the codebase |
-| [Potential Integrations](integrations/potential-integrations.md) | Candidates evaluated for future inclusion |
+| [Multi-IDE Support](integrations/multi-ide.md) | Cross-IDE setup and configuration comparison |
 
 ## Development
 
 | Doc | Summary |
 |---|---|
+| [Architecture](ARCHITECTURE.md) | Daemon topology, GraphRAG, ML pipeline, and CLI reference |
 | [Development Guide](development.md) | Tests, project structure, maintainer notes |

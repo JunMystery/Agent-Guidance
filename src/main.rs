@@ -86,9 +86,7 @@ async fn main() -> Result<()> {
     }
 
     if args.contains(&"--prune-missing".to_string()) {
-        let db_path = dirs::home_dir()
-            .map(|h| h.join(".agent-guidance").join("usage.db"))
-            .unwrap_or_else(|| std::path::PathBuf::from("usage.db"));
+        let db_path = crate::mcp::db::get_db_path();
         let count = dashboard::projects::prune_missing_projects(&db_path)?;
         println!("[OK] Pruned {} missing/deleted projects from registry.", count);
         if !args.contains(&"--dashboard".to_string()) {

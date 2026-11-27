@@ -195,4 +195,20 @@ def test_intentional():
 "#;
     let report = analyze_file_safety(src, "tests/test_tray.py");
     assert!(!report.has_blockers());
+
+    // Inline opt-out on one line must NOT suppress a second unannotated mismatch in the same file
+    let mixed = r#"
+from launcher.launcher_window_state import hide_window_to_tray
+from unittest.mock import patch
+
+def test_mixed():
+    with patch("launcher_window_state.save_data") as m1:  # test-safety-allow: mock-namespace
+        m1()
+        m1.assert_called_once()
+    with patch("launcher_window_state.other_fn") as m2:
+        m2()
+        m2.assert_called_once()
+"#;
+    let mixed_report = analyze_file_safety(mixed, "tests/test_tray.py");
+    assert!(mixed_report.has_blockers());
 }

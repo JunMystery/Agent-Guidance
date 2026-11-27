@@ -25,13 +25,13 @@ task_pipeline(
 
 **Returns formatted markdown containing:**
 - `Task`, `Active Phase`, and `Project` summary (with total indexed file count).
-- `💡 Project Memorized Learnings` — semantically relevant past session learnings from `.agent-context/learnings.md`.
+- `Project Memorized Learnings` — semantically relevant past session learnings from `.agent-context/learnings.md`.
 - `Dynamic Split Blueprint` — upfront domain/feature blueprint tailored to detected architecture (Clean Architecture, Layered Architecture, Package by Feature, CLI Pipeline, Flat Library, Orchestrator) and review candidates (`> 300 LOC`).
 - `Architecture Guidance` & `Core Phase Rules` — targeted execution mandates for active phase.
 - `Priority Gate: PASSED` — confirms unlock for subsequent MCP tool calls.
 - `-> NEXT STEP` — clear directive guiding next tool execution.
 
-**⚡ Minor Task Fast-Path Exemption:**
+**Minor Task Fast-Path Exemption:**
 If `is_minor: true` (or if the task description matches minor task heuristics such as typos, comments, docs, readme, or small single-file patches), `task_pipeline` automatically bypasses skill proposal modals (`ask_question`) and formal `implementation_plan.md` artifact generation. It auto-advances the workflow stage directly to `Build` (`plan_approved = true`, `is_fast_path = true`), allowing immediate inspection and editing. Enforces a Strict Boundary Guard of at most 1 code file or 3 doc/config files.
 
 **Auto-Plan-Approval Feature:**
@@ -63,8 +63,8 @@ select_skills(
 **Returns formatted markdown containing:**
 - `Skill Selection Confirmed (<N>)` or `Skill Selection: No skills selected. Proceeding directly to task execution.`
 - Sliced, compressed skill markdown bodies (`### Skill: <name>`).
-- `🛡️ Language Safety Rules` — micro-guidelines detected for the project tech stack (< 1ms).
-- Dynamic token accounting recorded in `.agent-context/usage.db`.
+- `Language Safety Rules` — micro-guidelines detected for the project tech stack (< 1ms).
+- Dynamic token accounting recorded in `~/.agent-guidance/usage.db`.
 
 **Aliases:** Tool alias `select_skill`; argument alias `skill` (string or comma-separated).
 
@@ -81,7 +81,7 @@ select_skills(
 
 ### 3. `guidance` -- Standards & Skill Catalog
 
-Standards catalog, 2-stage vector search, 604 embedded skills, pre-code architecture blueprints, and empirical verification contracts. Supports 9 operations.
+Standards catalog, 2-stage vector search, 629 embedded skills, pre-code architecture blueprints, and empirical verification contracts. Supports 9 operations.
 
 ```python
 guidance(
@@ -100,14 +100,14 @@ guidance(
 | Operation | Required Args | Description |
 |---|---|---|
 | `search` | `query` | 2-stage Candle BERT vector search + Cross-Encoder re-ranking across skills catalog. Fast shallow language profile matching (< 2ms). |
-| `get` | `identifier` \| `topic` | Retrieve compressed body of an embedded skill or local workspace markdown skill (`.md`/`.markdown`/`.mdc`). |
+| `get` | `identifier` \| `topic` | Retrieve compressed body of an embedded, staged (`~/.agent-guidance/staging/skills/`), or local workspace skill (`.agents/skills`) via `resolve_skill` with markdown path/slug lookup. |
 | `list` | -- | List all registered skills in embedded catalog and workspace (`.agents/skills`). |
 | `docs` | `query` \| `identifier` | Search technical documentation cheat-sheets with token-bounded markdown slicing (< 400 tokens). |
 | `workflow` | `identifier` (stage) | Load stage workflow guide (`plan`, `context`, `build`, `test`, `review`). |
 | `precode` | `query` | Structured pre-code checklist (Domain Cohesion, 300 LOC Soft Limit, AST Complexity Targets & Static Linter Hints, Language Rules, Symbol Grounding, Error Boundaries). |
 | `verify` | `verification_command`, `expected_output_keyword` | Register empirical verification contract to satisfy anti-hallucination mandate. |
 | `ui_ux` | `query` | Retrieve UI/UX guidelines and modern design standards. |
-| `reindex_skills` | -- | Force refresh semantic vector index for skills and clear passage caches. (Alias: `reindex`). |
+| `reindex_skills` | -- | Force refresh semantic vector index for skills and rebuild local passage cache (`~/.agent-guidance/passage_vectors.bin`). (Alias: `reindex`). |
 
 **Examples:**
 ```python
@@ -155,7 +155,7 @@ project_context(
 | Operation | Required Args | Description |
 |---|---|---|
 | `search` | `query` | 6-Phase Instant Cascade (<100ms): Alias Cache (<1ms) → Symbol FTS5 (<5ms) → Content FTS5 (<5ms) → Symbol Vectors (<50ms) → RAG Content Vectors (<100ms) → Linked Sibling Projects. Blends multi-result hits across cascade, bypasses alias cache short-circuiting on code syntax queries, and restricts auto-learning to natural multi-word phrases. |
-| `subgraph_bundle` | `target_symbol` (or `query` / `symbol`) | Single-turn multi-file context pack: Target symbol definition + 1-hop caller snippets + 1-hop callee snippets under token budget (default 250 LOC, clamped 50..=500). Supports URI spec syntax (`path#symbol`), direct/deferred edit authorization (`authorize=True`), and full dependency authorization (`authorize_all=True`). (Alias: `context_bundle`). |
+| `subgraph_bundle` | `target_symbol` (or `query` / `symbol`) | Single-turn multi-file context pack: Target symbol definition + 1-hop caller snippets + 1-hop callee snippets under token budget (default 250 LOC, clamped 50..=500). Supports URI spec syntax (`path#symbol`), direct/deferred edit authorization (`authorize=True`), and full dependency authorization (`authorize_all=True`). (Alias: `bundle`). |
 | `tree` | -- | Repository directory tree scan. Accepts `max_depth` (default: 3, range: 1..=5). |
 | `read` | `relative_path` \| `relative_paths` | Bounded file read enforcing a 300-line token read budget (distinct from the file-size soft limit), bypassing markdown compression to preserve source formatting, and blocking external absolute paths by default (`allow_cross_workspace=False`). In single-file or multi-file cluster mode, supports universal Target Path Specs (`path#symbol`, `path:start-end`), pending new file declarations (`[NEW FILE - Pending Creation]`), direct/deferred edit authorization (`authorize=True`), and Session-Bounded AST Response Caching (30s TTL + disk `mtime` invalidation). Supports dedicated aliases `cluster_read`, `read_cluster`, `read_and_authorize`, and `read_auth`. |
 | `symbols` | `relative_path` | Extract functions, structs, enums, classes, and traits across 6+ languages (Alias: `structure`). |
@@ -173,6 +173,7 @@ project_context(
 | `reindex` | -- | Force full AST re-parse and queue background Multilingual-E5 vector embedding for symbols and chunks. |
 | `enrich_graph` | `edges` \| `summaries` | Push agent-discovered semantic edges and domain summaries into `.agent-context/code_graph.db` (Alias: `enrich`). |
 | `semantic_query`| `query` | Query agent domain summaries and semantic edges via vector search (Alias: `semantic`). |
+| `data_flow` | `query` | Bidirectional intra-procedural taint flow and dynamic dispatch trace backed by read-only `code_graph.db` queries (Aliases: `dataflow`, `taint`, `flow`). |
 
 **Examples:**
 ```python
@@ -197,7 +198,7 @@ Manage active workflow stages, authorize file edits (AST complexity & 300 LOC so
 
 ```python
 workflow_gate(
-    action: str,                       # required — check|status|set_stage|set_architecture|authorize_edit|advance|rollback|approve_plan|pass_verification
+    action: str,                       # required — check|status|set_stage|set_architecture|authorize_edit|advance|rollback|approve_plan|pass_verification|invalidate|sync_file
     project_path: str | None = None,   # working repository path
     relative_path: str | None = None,  # specific file to authorize edit on (required for authorize_edit)
     relative_paths: list[str] | None = None, # batch files to pre-authorize during approve_plan or authorize_edit
@@ -225,7 +226,8 @@ workflow_gate(
 | `advance` | Composite check, approval, and stage transition in a single call. Emits non-blocking post-edit quality and AST complexity advisories with static linter hints when advancing to `Proposal`/`Review`. (Alias: `advance_stage`). |
 | `approve_plan` | Record explicit plan approval (requires `user_confirmed=True` or approval keyword), clear Fast-Path flags, and transition to `Build`. Supports **Server-Side Auto-Auth**: automatically extracts target files from `implementation_plan.md` (or custom `artifact_path`), combines them with `relative_paths` and queued `deferred_authorized_paths`, and batch pre-authorizes them in 1 turn with soft domain cohesion and AST quality advisories. (Alias: `approve`). |
 | `pass_verification` | Validate `verification_output` against registered `expected_output_keyword` (when set), record empirical verification pass, and reset fix attempt counter. |
-| `rollback` | Restore pre-edit file snapshot from `.agent-context/snapshots/{session_id}/` and reset `verification_passed` and `modified_files`. |
+| `invalidate` | Write-through AST re-index for a specific `relative_path` after modification (rejecting `..` or NUL paths). (Alias: `sync_file`). |
+| `rollback` | Restore pre-edit file snapshots from `.agent-context/snapshots/{session_id}/<rel_path>` (preserving relative directory structure, no `.snapshot` suffix) and reset `verification_passed` and `modified_files`. |
 
 #### Stage Lifecycle
 $$\text{Context} \longrightarrow \text{Plan} \longrightarrow \text{Ask\_Revise} \longrightarrow \text{Build} \longrightarrow \text{Test\_Recheck} \longrightarrow \text{Fix} \longrightarrow \text{Proposal / Review}$$
@@ -242,7 +244,7 @@ $$\text{Context} \longrightarrow \text{Plan} \longrightarrow \text{Ask\_Revise} 
 workflow_gate(action="status", project_path="E:/Github/MyApp")
 workflow_gate(action="approve_plan", project_path="E:/Github/MyApp", user_confirmed=True)
 workflow_gate(action="authorize_edit", project_path="E:/Github/MyApp", relative_path="src/auth.rs", risk_level="LOW", justification="Add JWT token parser")
-workflow_gate(action="set_stage", project_path="E:/Github/MyApp", target_stage="Test")
+workflow_gate(action="set_stage", project_path="E:/Github/MyApp", target_stage="Test_Recheck")
 workflow_gate(action="pass_verification", project_path="E:/Github/MyApp")
 workflow_gate(action="rollback", project_path="E:/Github/MyApp")
 ```
@@ -273,9 +275,9 @@ session_continuity(
 | `load` | Load a specific session by `session_id`. Resets all authorization, verification, fast-path, and architecture flags to Zero-Trust state. |
 | `switch` | Atomic handoff to an existing session (preserving active session if target is missing) with Zero-Trust permission, verification, and fast-path flag reset. |
 | `list` | List all saved session checkpoints with timestamps, stage, notes, and pinned status (Alias: `sessions`). |
-| `diff` | Generate unified git-style change summary of files modified during the active session (Alias: `changes`). |
-| `learn` | Record permanent cross-session project rule or architectural instinct into `.agent-context/learnings.md` with category and optional pinned status. |
-| `handoff` | Create structured session handoff document summarizing changes, test status, and `next_action`. |
+| `diff` | Generate unified change summary with accurate line deltas by comparing modified files against pre-edit snapshots in `.agent-context/snapshots/{session_id}/<rel_path>` (Alias: `changes`). |
+| `learn` | Atomically record permanent cross-session project rule or architectural instinct into `.agent-context/learnings.md` with category and optional pinned status. |
+| `handoff` | Atomically write structured session handoff document summarizing modified files, snapshot deltas, test status, and `next_action`. |
 | `clear` | Remove unpinned session checkpoints and purge rollback snapshots. |
 
 **Examples:**

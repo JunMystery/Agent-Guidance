@@ -42,33 +42,37 @@ pub(crate) async fn monitor_client_lifecycle_with_checker<F>(
     F: FnMut() -> bool,
 {
     let mut has_connected = false;
-    let mut startup_elapsed = Duration::ZERO;
-    let mut zero_ide_ticks = 0u64;
-    let mut zero_client_ticks = 0u64;
+    let startup_started = tokio::time::Instant::now();
+    let mut zero_clients_since: Option<tokio::time::Instant> = None;
+    let mut zero_ides_since: Option<tokio::time::Instant> = None;
     let tick_interval = Duration::from_millis(500);
+    let mut next_sleep = tick_interval;
     let mut last_ide_log = tokio::time::Instant::now();
 
     loop {
         tokio::select! {
-            _ = tokio::time::sleep(tick_interval) => {},
+            _ = tokio::time::sleep(next_sleep) => {},
             _ = CLIENT_NOTIFY.notified() => {},
         }
 
         let active = ACTIVE_CLIENTS.load(Ordering::SeqCst);
         if active > 0 {
             has_connected = true;
-            zero_ide_ticks = 0;
-            zero_client_ticks = 0;
+            zero_clients_since = None;
+            zero_ides_since = None;
+            next_sleep = tick_interval;
             continue;
         }
 
+        let now = tokio::time::Instant::now();
         if has_connected {
-            zero_client_ticks += 1;
-            let secs_without_clients = zero_client_ticks / 2;
+            let clients_idle_start = *zero_clients_since.get_or_insert(now);
+            let idle_without_clients = now.saturating_duration_since(clients_idle_start);
+            let max_idle_limit = Duration::from_secs(max_idle_cooldown_secs);
 
             if has_ides_fn() {
-                zero_ide_ticks = 0;
-                if secs_without_clients >= max_idle_cooldown_secs {
+                zero_ides_since = None;
+                if idle_without_clients >= max_idle_limit {
                     info!(
                         "Max idle cooldown reached ({}s with 0 active client connections despite running IDE process). Shutting down daemon cleanly.",
                         max_idle_cooldown_secs
@@ -78,30 +82,38 @@ pub(crate) async fn monitor_client_lifecycle_with_checker<F>(
                 if last_ide_log.elapsed() >= Duration::from_secs(30) {
                     info!(
                         "0 active MCP client connections (idle {}s / max {}s), IDE process(es) still detected. Keeping daemon temporarily resident.",
-                        secs_without_clients, max_idle_cooldown_secs
+                        idle_without_clients.as_secs(), max_idle_cooldown_secs
                     );
-                    last_ide_log = tokio::time::Instant::now();
+                    last_ide_log = now;
                 }
+                let remaining = max_idle_limit.saturating_sub(idle_without_clients);
+                next_sleep = tick_interval.min(remaining);
             } else {
-                zero_ide_ticks += 1;
-                let secs_without_ides = zero_ide_ticks / 2;
-                if secs_without_ides >= idle_cooldown_secs {
+                let ides_idle_start = *zero_ides_since.get_or_insert(now);
+                let idle_without_ides = now.saturating_duration_since(ides_idle_start);
+                let idle_limit = Duration::from_secs(idle_cooldown_secs);
+                if idle_without_ides >= idle_limit {
                     info!(
                         "No IDEs detected for {}s (cooldown reached). Shutting down daemon cleanly.",
                         idle_cooldown_secs
                     );
                     break;
                 }
+                let remaining = idle_limit.saturating_sub(idle_without_ides);
+                next_sleep = tick_interval.min(remaining);
             }
         } else {
-            startup_elapsed += tick_interval;
-            if startup_elapsed.as_secs() >= startup_timeout_secs {
+            let startup_elapsed = now.saturating_duration_since(startup_started);
+            let startup_limit = Duration::from_secs(startup_timeout_secs);
+            if startup_elapsed >= startup_limit {
                 info!(
                     "No IDE client connected within startup window ({}s). Shutting down daemon cleanly.",
                     startup_timeout_secs
                 );
                 break;
             }
+            let remaining = startup_limit.saturating_sub(startup_elapsed);
+            next_sleep = tick_interval.min(remaining);
         }
     }
 }
@@ -113,11 +125,11 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[tokio::test]
     async fn test_daemon_stays_alive_while_ide_is_running() {
-        let _guard = TEST_MUTEX.lock().unwrap();
+        let _guard = TEST_MUTEX.lock().await;
         ACTIVE_CLIENTS.store(0, Ordering::SeqCst);
         let ide_running = Arc::new(AtomicBool::new(true));
         let ide_flag = ide_running.clone();
@@ -152,7 +164,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_daemon_multi_client_lifecycle() {
-        let _guard = TEST_MUTEX.lock().unwrap();
+        let _guard = TEST_MUTEX.lock().await;
         ACTIVE_CLIENTS.store(0, Ordering::SeqCst);
 
         let monitor_handle = tokio::spawn(async {
@@ -186,7 +198,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_daemon_max_idle_cooldown_triggers_shutdown_despite_ide_running() {
-        let _guard = TEST_MUTEX.lock().unwrap();
+        let _guard = TEST_MUTEX.lock().await;
         ACTIVE_CLIENTS.store(0, Ordering::SeqCst);
 
         // max_idle_cooldown_secs set to 1s: even if has_ides returns true, after 1s of 0 clients it must exit!
@@ -203,5 +215,28 @@ mod tests {
         // Monitor must exit after 1s max idle despite IDE process returning true
         let completed = tokio::time::timeout(Duration::from_millis(2000), monitor_handle).await;
         assert!(completed.is_ok(), "Daemon MUST shut down after max_idle_cooldown_secs even if IDE process is running");
+    }
+
+    #[tokio::test]
+    async fn test_rapid_client_notify_does_not_accelerate_timeouts() {
+        let _guard = TEST_MUTEX.lock().await;
+        ACTIVE_CLIENTS.store(0, Ordering::SeqCst);
+
+        let monitor_handle = tokio::spawn(async {
+            monitor_client_lifecycle_with_checker(2, 2, 2, || false).await;
+        });
+
+        for _ in 0..10 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            CLIENT_NOTIFY.notify_waiters();
+        }
+
+        // Only ~100ms elapsed; with 2s startup_timeout, monitor must still be running.
+        assert!(
+            !monitor_handle.is_finished(),
+            "Rapid CLIENT_NOTIFY wakeups must not prematurely trigger startup timeout"
+        );
+
+        monitor_handle.abort();
     }
 }

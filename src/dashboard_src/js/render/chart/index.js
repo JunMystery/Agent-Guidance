@@ -8,7 +8,7 @@ import {
 } from './builders.js';
 import { buildKpi, buildLegend } from './kpi.js';
 import { bindChartTooltip } from './tooltip.js';
-import { t } from '../../i18n/index.js';
+import { t, getLanguage } from '../../i18n/index.js';
 
 let lastChartFingerprint = '';
 
@@ -18,7 +18,7 @@ export function renderHourlyChart(data, totals) {
 
   const rawHours = (data.hourly_savings || []);
   const tf = data.timeframe || '';
-  const fingerprint = `${tf}|` + rawHours.map(h => `${h.calls || 0}:${h.avg_duration_ms || 0}:${h.optimized || h.tokens_optimized || 0}`).join('|');
+  const fingerprint = `${getLanguage()}|${tf}|` + rawHours.map(h => `${h.calls || 0}:${h.avg_duration_ms || 0}:${h.optimized || h.tokens_optimized || 0}`).join('|');
   if (fingerprint && fingerprint === lastChartFingerprint && chart.children.length > 0) {
     return;
   }

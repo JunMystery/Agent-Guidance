@@ -25,15 +25,19 @@ pub struct SkillItem {
     pub content: String,
 }
 
-static SEMANTIC_DOC_CACHE: OnceLock<RwLock<HashMap<String, Arc<super::indexer::SkillSemanticDocument>>>> =
-    OnceLock::new();
+type SemanticDocCacheMap =
+    HashMap<(String, String), Arc<super::indexer::SkillSemanticDocument>>;
+
+static SEMANTIC_DOC_CACHE: OnceLock<RwLock<SemanticDocCacheMap>> = OnceLock::new();
 
 impl SkillItem {
     /// Returns a shared reference to the cached semantic document, extracting and memoizing it on first access.
     pub fn get_semantic_doc(&self) -> Arc<super::indexer::SkillSemanticDocument> {
+        let content_hash = super::checksum::compute_sha256(self.content.as_bytes());
+        let key = (self.name.clone(), content_hash);
         let cache = SEMANTIC_DOC_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
         if let Ok(guard) = cache.read() {
-            if let Some(doc) = guard.get(&self.name) {
+            if let Some(doc) = guard.get(&key) {
                 return doc.clone();
             }
         }
@@ -42,7 +46,7 @@ impl SkillItem {
             &self.content,
         ));
         if let Ok(mut guard) = cache.write() {
-            guard.insert(self.name.clone(), doc.clone());
+            guard.insert(key, doc.clone());
         }
         doc
     }
@@ -66,12 +70,13 @@ pub fn list_embedded_skills() -> Vec<String> {
 }
 
 pub fn get_embedded_skill(path: &str) -> Option<String> {
-    if let Some(file) = SkillAssets::get(path) {
+    let normalized = path.replace('\\', "/");
+    if let Some(file) = SkillAssets::get(&normalized) {
         return std::str::from_utf8(file.data.as_ref())
             .ok()
             .map(|s| s.to_string());
     }
-    let trimmed = path.trim_start_matches("skills/").trim_start_matches('/');
+    let trimmed = normalized.trim_start_matches("skills/").trim_start_matches('/');
     let variations = [
         format!("{}/SKILL.md", trimmed),
         format!("skills/{}/SKILL.md", trimmed),
@@ -134,11 +139,48 @@ mod tests {
     fn test_extract_frontmatter_name() {
         let content = "---\nname: my-skill\ndescription: test\n---";
         assert_eq!(extract_frontmatter_name(content), Some("my-skill".to_string()));
+
+        let body_yaml = "# Guide\n\n```yaml\nname: docker-app\n```\n";
+        assert_eq!(extract_frontmatter_name(body_yaml), None);
+
+        let nested = "\u{feff}---\nauthor:\n  name: Alice\nname: real-skill\n---\n";
+        assert_eq!(extract_frontmatter_name(nested), Some("real-skill".to_string()));
+
+        let unclosed = "---\n# Rule\nname: not-frontmatter\n";
+        assert_eq!(extract_frontmatter_name(unclosed), None);
+    }
+
+    #[test]
+    fn test_extract_skill_name_ignores_code_fence_comments() {
+        let md = "```bash\n# Fake Comment Title\necho hi\n```\n# Real Skill Title\n";
+        assert_eq!(scanner::extract_skill_name(md, "fallback"), "real-skill-title");
+    }
+
+    #[test]
+    fn test_semantic_doc_cache_invalidates_on_content_change() {
+        let item_v1 = SkillItem {
+            name: "cache-test-skill".to_string(),
+            relative_path: "skills/cache-test-skill/SKILL.md".to_string(),
+            source: SkillSource::Embedded,
+            content: "---\nname: cache-test-skill\ndescription: First version.\n---\n# V1".to_string(),
+        };
+        let item_v2 = SkillItem {
+            name: "cache-test-skill".to_string(),
+            relative_path: "skills/cache-test-skill/SKILL.md".to_string(),
+            source: SkillSource::Embedded,
+            content: "---\nname: cache-test-skill\ndescription: Second version.\n---\n# V2".to_string(),
+        };
+        assert_eq!(item_v1.get_semantic_doc().description, "First version.");
+        assert_eq!(item_v2.get_semantic_doc().description, "Second version.");
     }
 
     #[test]
     fn test_scan_workspace_skills() {
-        let tmp_dir = std::env::temp_dir().join("test_agent_skills");
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "test_agent_skills_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let skill_dir = tmp_dir.join(".agents").join("skills").join("test-skill");
         let _ = fs::create_dir_all(&skill_dir);
         let skill_file = skill_dir.join("SKILL.md");

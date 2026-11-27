@@ -92,7 +92,7 @@ pub(crate) fn handle_cluster_read(
                         let e = end.max(s).min(total_lines);
                         let slice = &lines[s - 1..e];
                         total_lines_read += slice.len();
-                        let rendered = render_lines(slice, s, show_line_numbers || true);
+                        let rendered = render_lines(slice, s, show_line_numbers);
                         sections.push(format!(
                             "### [{}/{}] File: `{}` (Lines {}-{} of {})\n\n```{}\n{}\n```",
                             idx + 1, max_files, spec.clean_path, s, e, total_lines, lang_str, rendered

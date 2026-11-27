@@ -53,7 +53,13 @@ impl VectorBinary {
             (count, dim, 8)
         };
 
-        let expected_len = offset + (count as usize) * (dim as usize) * 4;
+        let payload_bytes = (count as usize)
+            .checked_mul(dim as usize)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or_else(|| anyhow::anyhow!("Vector binary dimensions overflow"))?;
+        let expected_len = offset
+            .checked_add(payload_bytes)
+            .ok_or_else(|| anyhow::anyhow!("Vector binary length overflow"))?;
         if data.len() < expected_len {
             bail!("Vector binary data payload truncated: expected {} got {}", expected_len, data.len());
         }
@@ -138,12 +144,19 @@ impl SkillsBinary {
         let table_offset = u32::from_le_bytes(data[12..16].try_into()?) as usize;
         let entry_size = 24usize;
 
+        let table_bytes = count
+            .checked_mul(entry_size)
+            .ok_or_else(|| anyhow::anyhow!("AGS1 entry count overflow"))?;
+        let table_end = table_offset
+            .checked_add(table_bytes)
+            .ok_or_else(|| anyhow::anyhow!("AGS1 table offset overflow"))?;
+        if table_end > data.len() {
+            bail!("Corrupt AGS1 table: exceeds binary bounds ({} > {})", table_end, data.len());
+        }
+
         let mut skills = Vec::with_capacity(count);
         for i in 0..count {
             let off = table_offset + i * entry_size;
-            if off + entry_size > data.len() {
-                bail!("Corrupt AGS1 table at index {}", i);
-            }
             let name_off = u32::from_le_bytes(data[off..off + 4].try_into()?) as usize;
             let name_len = u32::from_le_bytes(data[off + 4..off + 8].try_into()?) as usize;
             let rel_off = u32::from_le_bytes(data[off + 8..off + 12].try_into()?) as usize;
@@ -151,13 +164,26 @@ impl SkillsBinary {
             let cont_off = u32::from_le_bytes(data[off + 16..off + 20].try_into()?) as usize;
             let cont_len = u32::from_le_bytes(data[off + 20..off + 24].try_into()?) as usize;
 
-            let name = std::str::from_utf8(&data[name_off..name_off + name_len])
+            let name_end = name_off
+                .checked_add(name_len)
+                .filter(|&end| end <= data.len())
+                .ok_or_else(|| anyhow::anyhow!("Corrupt AGS1 name bounds at index {}", i))?;
+            let rel_end = rel_off
+                .checked_add(rel_len)
+                .filter(|&end| end <= data.len())
+                .ok_or_else(|| anyhow::anyhow!("Corrupt AGS1 path bounds at index {}", i))?;
+            let cont_end = cont_off
+                .checked_add(cont_len)
+                .filter(|&end| end <= data.len())
+                .ok_or_else(|| anyhow::anyhow!("Corrupt AGS1 content bounds at index {}", i))?;
+
+            let name = std::str::from_utf8(&data[name_off..name_end])
                 .context("Invalid UTF-8 in skill name")?
                 .to_string();
-            let relative_path = std::str::from_utf8(&data[rel_off..rel_off + rel_len])
+            let relative_path = std::str::from_utf8(&data[rel_off..rel_end])
                 .context("Invalid UTF-8 in relative_path")?
                 .to_string();
-            let content = std::str::from_utf8(&data[cont_off..cont_off + cont_len])
+            let content = std::str::from_utf8(&data[cont_off..cont_end])
                 .context("Invalid UTF-8 in content")?
                 .to_string();
 
@@ -207,5 +233,24 @@ mod tests {
 
         let decoded = SkillsBinary::deserialize(&bytes).unwrap();
         assert_eq!(decoded.skills, skills);
+    }
+
+    #[test]
+    fn test_binary_rejects_overflow_and_out_of_bounds_headers() {
+        let mut huge_vec = Vec::from(*AGV1_MAGIC);
+        huge_vec.extend_from_slice(&BINARY_VERSION.to_le_bytes());
+        huge_vec.extend_from_slice(&u32::MAX.to_le_bytes());
+        huge_vec.extend_from_slice(&u32::MAX.to_le_bytes());
+        huge_vec.resize(VECTOR_DATA_OFFSET, 0);
+        assert!(VectorBinary::deserialize(&huge_vec).is_err());
+
+        let mut oob_skills = Vec::from(*AGS1_MAGIC);
+        oob_skills.extend_from_slice(&BINARY_VERSION.to_le_bytes());
+        oob_skills.extend_from_slice(&1u32.to_le_bytes());
+        oob_skills.extend_from_slice(&16u32.to_le_bytes());
+        oob_skills.extend_from_slice(&9999u32.to_le_bytes());
+        oob_skills.extend_from_slice(&10u32.to_le_bytes());
+        oob_skills.extend_from_slice(&[0u8; 16]);
+        assert!(SkillsBinary::deserialize(&oob_skills).is_err());
     }
 }

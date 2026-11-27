@@ -48,6 +48,7 @@ fn open_conn() -> Result<Connection> {
             | OpenFlags::SQLITE_OPEN_CREATE
             | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     )?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(2000));
     ensure_cache_tables(&conn)?;
     Ok(conn)
 }

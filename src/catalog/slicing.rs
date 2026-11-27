@@ -9,11 +9,19 @@ pub struct MarkdownSection {
 
 /// Strips YAML frontmatter (`---\n...\n---`) from the beginning of markdown content.
 pub fn strip_yaml_frontmatter(md: &str) -> &str {
-    let trimmed = md.trim_start();
-    if let Some(after_first) = trimmed.strip_prefix("---") {
+    let trimmed = md.strip_prefix('\u{feff}').unwrap_or(md).trim_start();
+    if let Some(after_open) = trimmed.strip_prefix("---") {
+        let after_open = after_open.trim_start_matches([' ', '\t']);
+        let after_first = match after_open
+            .strip_prefix("\r\n")
+            .or_else(|| after_open.strip_prefix('\n'))
+        {
+            Some(rest) => rest,
+            None => return md,
+        };
         for (idx, _) in after_first.match_indices("---") {
             let before = &after_first[..idx];
-            let after = &after_first[idx + 3..];
+            let after = after_first[idx + 3..].trim_start_matches([' ', '\t']);
             let valid_before = before.ends_with('\n') || before.ends_with("\r\n") || idx == 0;
             let valid_after = after.starts_with('\n') || after.starts_with("\r\n") || after.is_empty();
             if valid_before && valid_after {
@@ -30,8 +38,15 @@ pub fn split_markdown_into_sections(md: &str) -> Vec<MarkdownSection> {
     let mut sections = Vec::new();
     let mut current_title = String::new();
     let mut current_lines: Vec<&str> = Vec::new();
+    let mut open_fence: Option<(char, usize)> = None;
 
     for line in clean_md.lines() {
+        let is_fence = crate::optimizer::compressor::update_code_fence(line, &mut open_fence);
+        if is_fence || open_fence.is_some() {
+            current_lines.push(line);
+            continue;
+        }
+
         let trimmed = line.trim();
         if trimmed.starts_with("# ") || trimmed.starts_with("## ") || trimmed.starts_with("### ") {
             let has_content = current_lines.iter().any(|l| !l.trim().is_empty());
@@ -248,5 +263,31 @@ mod tests {
         assert!(result.contains("Build slices."));
         assert!(result.contains("Rule 0: Simplicity."));
         assert!(!result.contains("name: inc"));
+    }
+
+    #[test]
+    fn test_strip_yaml_frontmatter_rejects_non_frontmatter_dashes_and_handles_bom() {
+        let rule_line = "------\n# Heading\nBody";
+        assert_eq!(strip_yaml_frontmatter(rule_line), rule_line);
+
+        let not_yaml = "---not-frontmatter\nfoo\n---\nbar";
+        assert_eq!(strip_yaml_frontmatter(not_yaml), not_yaml);
+
+        let with_bom = "\u{feff}---\nname: bom-skill\n---\n# Title\nBody";
+        assert_eq!(strip_yaml_frontmatter(with_bom), "# Title\nBody");
+
+        let empty_fm = "---\n---\n# Body";
+        assert_eq!(strip_yaml_frontmatter(empty_fm), "# Body");
+    }
+
+    #[test]
+    fn test_split_markdown_ignores_headings_inside_code_fences() {
+        let md = "# Deploy\n```bash\n# Build image\ndocker build .\n## Push image\ndocker push app\n```\nDone.\n\n## Next\nOther";
+        let sections = split_markdown_into_sections(md);
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].title, "Deploy");
+        assert!(sections[0].content.contains("# Build image"));
+        assert!(sections[0].content.contains("## Push image"));
+        assert_eq!(sections[1].title, "Next");
     }
 }

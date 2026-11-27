@@ -11,8 +11,13 @@ pub(crate) fn handle_api_dashboard_clean(mut request: Request, cache: &Arc<Mutex
         return;
     }
 
-    let mut content = String::new();
-    let _ = request.as_reader().read_to_string(&mut content);
+    let content = match super::router::read_bounded_body(&mut request) {
+        Ok(b) => b,
+        Err((status, msg)) => {
+            json_response(request, status, &json!({ "success": false, "error": msg }));
+            return;
+        }
+    };
     let payload: serde_json::Value = serde_json::from_str(&content).unwrap_or(json!({}));
     let project_raw = payload
         .get("project")
@@ -26,11 +31,27 @@ pub(crate) fn handle_api_dashboard_clean(mut request: Request, cache: &Arc<Mutex
     };
 
     let db_path = crate::mcp::db::get_db_path();
+    if !db_path.exists() {
+        json_response(
+            request,
+            200,
+            &json!({
+                "success": true,
+                "cleaned_records": 0,
+                "project": project_raw,
+                "message": "No dashboard metrics database found; 0 records cleaned"
+            }),
+        );
+        return;
+    }
     let conn = match Connection::open_with_flags(
         &db_path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
     ) {
-        Ok(c) => c,
+        Ok(c) => {
+            let _ = c.busy_timeout(std::time::Duration::from_millis(2000));
+            c
+        }
         Err(e) => {
             json_response(request, 500, &json!({ "success": false, "error": e.to_string() }));
             return;

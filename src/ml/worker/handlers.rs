@@ -1,4 +1,12 @@
 use anyhow::{Context, Result};
+use std::sync::Mutex;
+
+static CATALOG_MUTATION_LOCK: Mutex<()> = Mutex::new(());
+const MAX_EMBED_BATCH_ITEMS: usize = 256;
+
+fn sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
+}
 
 use super::state::WorkerState;
 use super::types::*;
@@ -82,33 +90,48 @@ pub fn handle_search(state: &WorkerState, req: SearchRequest) -> Result<SearchRe
     let candidate_k = std::cmp::max(max_k * 3, 10);
     let hits = state.search_top_k(&query_vec, candidate_k, threshold);
 
-    let guard = state.catalog.read().map_err(|_| anyhow::anyhow!("Catalog poisoned"))?;
-    let mut candidate_items = Vec::with_capacity(hits.len());
-    for (idx, score) in hits {
-        if let Some(skill) = guard.skills.get(idx) {
-            candidate_items.push((score, skill));
-        }
+    struct OwnedCandidate {
+        score: f32,
+        name: String,
+        excerpt: String,
+        sections: usize,
     }
 
-    // Stage 2: Cross-Encoder Reranking if available
-    if let Ok(ce) = crate::ml::cross_encoder::cached_cross_encoder() {
-        for item in &mut candidate_items {
-            let excerpt: String = item.1.content.chars().take(350).collect();
-            if let Ok(ce_score) = ce.score(&req.query, &excerpt) {
-                item.0 = item.0 * 0.4 + ce_score * 0.6;
+    let mut candidate_items = {
+        let guard = state.catalog.read().map_err(|_| anyhow::anyhow!("Catalog poisoned"))?;
+        let mut items = Vec::with_capacity(hits.len());
+        for (idx, score) in hits {
+            if let Some(skill) = guard.skills.get(idx) {
+                items.push(OwnedCandidate {
+                    score,
+                    name: skill.name.clone(),
+                    excerpt: skill.content.chars().take(350).collect(),
+                    sections: skill.content.matches("\n## ").count() + 1,
+                });
             }
         }
-        candidate_items.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        items
+    };
+
+    // Stage 2: Cross-Encoder Reranking (normalized via sigmoid to match cosine range)
+    if let Ok(ce) = crate::ml::cross_encoder::cached_cross_encoder() {
+        for item in &mut candidate_items {
+            if let Ok(ce_logit) = ce.score(&req.query, &item.excerpt) {
+                let ce_prob = sigmoid(ce_logit);
+                item.score = item.score * 0.4 + ce_prob * 0.6;
+            }
+        }
+        candidate_items.sort_by(|a, b| b.score.total_cmp(&a.score));
     }
 
     let mut results = Vec::with_capacity(std::cmp::min(candidate_items.len(), max_k));
-    for (score, skill) in candidate_items.into_iter().take(max_k) {
+    for item in candidate_items.into_iter().take(max_k) {
         results.push(SkillHit {
-            name: skill.name.clone(),
-            score,
-            title: skill.name.replace('-', " "),
-            intent: format!("Skill for {}", skill.name),
-            sections: skill.content.matches("\n## ").count() + 1,
+            title: item.name.replace('-', " "),
+            intent: format!("Skill for {}", item.name),
+            name: item.name,
+            score: item.score,
+            sections: item.sections,
         });
     }
     let total_found = results.len();
@@ -116,24 +139,26 @@ pub fn handle_search(state: &WorkerState, req: SearchRequest) -> Result<SearchRe
 }
 
 pub fn handle_slice(state: &WorkerState, req: SliceRequest) -> Result<SliceResponse> {
-    let guard = state.catalog.read().map_err(|_| anyhow::anyhow!("Catalog poisoned"))?;
-    let idx = guard
-        .name_to_idx
-        .get(&req.skill.to_lowercase())
-        .copied()
-        .ok_or_else(|| anyhow::anyhow!("Skill not found: {}", req.skill))?;
-    let skill = guard.skills.get(idx).context("Corrupt skill index")?;
+    let skill_content = {
+        let guard = state.catalog.read().map_err(|_| anyhow::anyhow!("Catalog poisoned"))?;
+        let idx = guard
+            .name_to_idx
+            .get(&req.skill.to_lowercase())
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("Skill not found: {}", req.skill))?;
+        guard.skills.get(idx).context("Corrupt skill index")?.content.clone()
+    };
 
-    let original_token_count = estimate_tokens(&skill.content, false);
+    let original_token_count = estimate_tokens(&skill_content, false);
     let top_k = req.max_sections.unwrap_or(3);
 
     let sliced = if !req.task.trim().is_empty() {
-        match slice_sections_neural(&skill.content, &req.task, top_k) {
+        match slice_sections_neural(&skill_content, &req.task, top_k) {
             Ok(res) => res,
-            Err(_) => slice_skill_markdown(&skill.content, &req.task, top_k),
+            Err(_) => slice_skill_markdown(&skill_content, &req.task, top_k),
         }
     } else {
-        slice_skill_markdown(&skill.content, &req.task, top_k)
+        slice_skill_markdown(&skill_content, &req.task, top_k)
     };
 
     let token_count = estimate_tokens(&sliced, false);
@@ -183,6 +208,7 @@ fn slice_sections_neural(content: &str, task: &str, top_k: usize) -> Result<Stri
 }
 
 pub fn handle_delete(state: &WorkerState, req: DeleteRequest) -> Result<CompactionResult> {
+    let _mutation_guard = CATALOG_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let purge = req.purge_staging.unwrap_or(true);
     let res = delete_skills_and_compact(&req.names, purge)?;
     // Reload state after compaction
@@ -195,6 +221,7 @@ pub fn handle_delete(state: &WorkerState, req: DeleteRequest) -> Result<Compacti
 }
 
 pub fn handle_reindex(state: &WorkerState, req: ReindexRequest) -> Result<CompilationStats> {
+    let _mutation_guard = CATALOG_MUTATION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let force = req.force.unwrap_or(false);
     let stats = compile_staging_to_binary(force)?;
     // Reload state after reindexing
@@ -209,6 +236,9 @@ pub fn handle_reindex(state: &WorkerState, req: ReindexRequest) -> Result<Compil
 pub fn handle_embed(req: EmbedRequest) -> Result<EmbedResponse> {
     if req.texts.is_empty() {
         return Ok(EmbedResponse { embeddings: Vec::new() });
+    }
+    if req.texts.len() > MAX_EMBED_BATCH_ITEMS {
+        anyhow::bail!("Embed batch size {} exceeds maximum of {}", req.texts.len(), MAX_EMBED_BATCH_ITEMS);
     }
     let model = cached_model().map_err(|e| anyhow::anyhow!("Model load error: {}", e))?;
     let refs: Vec<&str> = req.texts.iter().map(|s| s.as_str()).collect();

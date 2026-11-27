@@ -21,16 +21,21 @@ pub(crate) fn handle_verify(
         )
     };
 
-    let v_cmd = arguments
+    let v_cmd_raw = arguments
         .get("verification_command")
         .and_then(|v| v.as_str());
-    let v_kw = arguments
+    let v_kw_raw = arguments
         .get("expected_output_keyword")
         .and_then(|k| k.as_str());
 
     let (mut safety_blockers, mut safety_advisories) =
         super::gate_stage::collect_post_edit_safety_findings(&proj_path, state);
-    if let Some(cmd) = v_cmd {
+    if let Some(cmd) = v_cmd_raw {
+        if cmd.contains('\0') {
+            safety_blockers.push(
+                "- [BLOCKER] **VERIFY_COMMAND_INVALID_INPUT** (`verification_command`): Verification command contains null bytes.".to_string(),
+            );
+        }
         let cmd_report = crate::context::ast::analyze_verification_command(cmd);
         if let Some(blk) = cmd_report.format_blockers("verification_command") {
             safety_blockers.push(blk);
@@ -47,6 +52,9 @@ pub(crate) fn handle_verify(
             safety_blockers.join("\n")
         ));
     }
+
+    let v_cmd = v_cmd_raw.map(str::trim).filter(|s| !s.is_empty());
+    let v_kw = v_kw_raw.map(str::trim).filter(|s| !s.is_empty());
 
     let touches_test_or_persistence = state.modified_files.iter().any(|f| {
         let lower = f.to_lowercase();
@@ -83,5 +91,45 @@ pub(crate) fn handle_verify(
             "# Anti-Hallucination Post-Code Verification Checklist\n\n1. **Empirical Verification Required**: Trigger IDE/CLI `ask_question` tool to let user select verification test command (or confirm manual testing), then pass `verification_command` (e.g. 'cargo test') and `expected_output_keyword` (e.g. 'PASSED').\n2. **User Requirement Alignment**: Re-read the original user prompt and verify all explicitly requested features exist.\n3. **Zero Unverified Assumptions**: Base success strictly on empirical evidence, not speculative assumptions.{}{}",
             advisory_section, safety_section
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_verify_rejects_null_byte_and_ignores_blank_keyword_registration() {
+        let dir = std::env::temp_dir().join(format!("ag_verify_unit_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+
+        let mut state = ServerState::new();
+        let blocked = handle_verify(
+            &json!({
+                "project_path": dir.to_string_lossy(),
+                "verification_command": "cargo test\0evil",
+                "expected_output_keyword": "ok"
+            }),
+            &mut state,
+        )
+        .unwrap();
+        assert!(blocked.contains("VERIFY_COMMAND_INVALID_INPUT"));
+        assert!(state.verification_command.is_none());
+
+        let blank_kw = handle_verify(
+            &json!({
+                "project_path": dir.to_string_lossy(),
+                "verification_command": "cargo test",
+                "expected_output_keyword": "   "
+            }),
+            &mut state,
+        )
+        .unwrap();
+        assert!(blank_kw.contains("Post-Code Verification Checklist"));
+        assert!(state.verification_command.is_none());
+        assert!(state.expected_output_keyword.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

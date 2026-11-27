@@ -45,7 +45,13 @@ pub(crate) fn handle_load(state: &mut ServerState, proj_path: &Path) -> String {
     };
 
     match result {
-        Ok(loaded) => {
+        Ok(mut loaded) => {
+            let prev_cancel = state.cancellation.clone();
+            let prev_roots = state.workspace_roots.clone();
+            if loaded.workspace_roots.is_empty() {
+                loaded.workspace_roots = prev_roots;
+            }
+            loaded.cancellation = prev_cancel;
             *state = loaded;
             apply_zero_trust_reset(state, true);
             format!(
@@ -62,8 +68,18 @@ pub(crate) fn handle_clear(state: &mut ServerState, proj_path: &Path) -> String 
     if dir.exists() {
         let _ = std::fs::remove_dir_all(&dir);
     }
+    let legacy_file = proj_path.join(".agent-context").join("session.json");
+    if legacy_file.exists() {
+        let _ = std::fs::remove_file(&legacy_file);
+    }
     let _ = crate::mcp::snapshots::clear_all_snapshots(proj_path);
-    *state = ServerState::new();
+    let prev_cancel = state.cancellation.clone();
+    let prev_roots = state.workspace_roots.clone();
+    let prev_client = state.agent_client_name.clone();
+    let mut fresh = ServerState::with_client_name(prev_client);
+    fresh.workspace_roots = prev_roots;
+    fresh.cancellation = prev_cancel;
+    *state = fresh;
     "# Session Continuity: [clear]\n\nSession state and rollback snapshots cleared successfully. Active session state reset.".to_string()
 }
 
@@ -113,6 +129,12 @@ pub(crate) fn handle_switch(
             Ok(mut loaded) => {
                 apply_zero_trust_reset(&mut loaded, false);
                 let prev_id = state.session_id.clone();
+                let prev_cancel = state.cancellation.clone();
+                let prev_roots = state.workspace_roots.clone();
+                if loaded.workspace_roots.is_empty() {
+                    loaded.workspace_roots = prev_roots;
+                }
+                loaded.cancellation = prev_cancel;
                 *state = loaded;
 
                 format!(
@@ -127,5 +149,47 @@ pub(crate) fn handle_switch(
             }
             Err(err) => format!("# Session Continuity: [switch]\n\nFailed to switch session: {}", err),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    static TEST_SEQ: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn test_clear_removes_legacy_session_and_preserves_runtime_context() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ag_clear_legacy_{}_{}",
+            std::process::id(),
+            TEST_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut state = ServerState::with_client_name(Some("antigravity".to_string()));
+        state.workspace_roots = vec![temp_dir.to_string_lossy().to_string()];
+        state.set_cancellation(flag.clone());
+        state.tool_calls = 42;
+        state.save_to_dir(&temp_dir).unwrap();
+
+        let legacy_file = temp_dir.join(".agent-context").join("session.json");
+        assert!(legacy_file.exists());
+
+        handle_clear(&mut state, &temp_dir);
+        assert!(!legacy_file.exists(), "Legacy session.json must be deleted on clear");
+        assert_eq!(state.workspace_roots, vec![temp_dir.to_string_lossy().to_string()]);
+        assert!(state.cancellation.is_some());
+
+        // Subsequent load must not resurrect the cleared session
+        handle_load(&mut state, &temp_dir);
+        assert_eq!(state.tool_calls, 0);
+        assert!(state.cancellation.is_some());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

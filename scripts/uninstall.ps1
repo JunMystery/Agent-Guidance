@@ -15,7 +15,15 @@ try {
     Write-Host "  OK Removed Windows Scheduled Task 'AgentGuidanceServer'" -ForegroundColor Green
 } catch {}
 
-cmd /c "taskkill /F /IM agent-guidance* >nul 2>&1"
+foreach ($bin in @("$HOME\.local\bin\agent-guidance.exe", "$HOME\.cargo\bin\agent-guidance.exe", "$env:LOCALAPPDATA\Programs\agent-guidance\bin\agent-guidance.exe")) {
+    if (Test-Path $bin) {
+        try { & $bin --uninstall 2>$null | Out-Null } catch {}
+        break
+    }
+}
+
+cmd /c "taskkill /F /IM agent-guidance.exe >nul 2>&1"
+cmd /c "taskkill /F /IM agent-guidance-mcp.exe >nul 2>&1"
 
 if (Get-Command "uv" -ErrorAction SilentlyContinue) {
     cmd /c "uv tool uninstall agent-guidance-mcp >nul 2>&1"

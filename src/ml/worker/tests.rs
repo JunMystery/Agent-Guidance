@@ -76,3 +76,14 @@ fn test_worker_stats_serialization() {
     assert_eq!(decoded.total_skills, 280);
     assert_eq!(decoded.catalog_hash, "abcd1234efgh");
 }
+
+#[test]
+fn test_worker_loopback_bind_and_auth_requirement() {
+    assert!(super::is_loopback_bind("127.0.0.1"));
+    assert!(super::is_loopback_bind("localhost"));
+    assert!(super::is_loopback_bind("[::1]"));
+    assert!(!super::is_loopback_bind("0.0.0.0"));
+
+    let err = super::run_worker_server("0.0.0.0", 0, String::new()).unwrap_err();
+    assert!(err.to_string().contains("non-loopback"));
+}

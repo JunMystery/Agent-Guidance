@@ -56,3 +56,25 @@ Defense in depth against SQL injection attacks in web applications.
     assert!(doc.action_triggers.contains(&"query".to_string()) || doc.action_triggers.contains(&"database".to_string()));
     assert!(!doc.micro_rules.is_empty());
 }
+
+#[test]
+fn test_inference_avoids_substring_false_positives() {
+    let sample = "---\nname: django-catalog-format\ndescription: Improve format and logic feedback for rapid catalog views.\n---\n# Django Catalog\n";
+    let doc = SkillSemanticDocument::extract("django-catalog-format", sample);
+    assert!(doc.file_patterns.contains(&"*.py".to_string()));
+    assert!(!doc.file_patterns.contains(&"*.go".to_string()), "django falsely matched *.go: {:?}", doc.file_patterns);
+    assert!(!doc.action_triggers.contains(&"orm".to_string()), "format falsely matched orm: {:?}", doc.action_triggers);
+    assert!(!doc.action_triggers.contains(&"telemetry".to_string()), "catalog/logic falsely matched log: {:?}", doc.action_triggers);
+    assert!(!doc.action_triggers.contains(&"database".to_string()), "feedback falsely matched db: {:?}", doc.action_triggers);
+    assert!(!doc.action_triggers.contains(&"endpoint".to_string()), "rapid falsely matched api: {:?}", doc.action_triggers);
+
+    let go_doc = SkillSemanticDocument::extract(
+        "go-orm-logging",
+        "---\nname: go-orm-logging\ndescription: Structured logging and ORM db queries for API endpoints.\n---\n",
+    );
+    assert!(go_doc.file_patterns.contains(&"*.go".to_string()));
+    assert!(go_doc.action_triggers.contains(&"orm".to_string()));
+    assert!(go_doc.action_triggers.contains(&"telemetry".to_string()));
+    assert!(go_doc.action_triggers.contains(&"database".to_string()));
+    assert!(go_doc.action_triggers.contains(&"endpoint".to_string()));
+}

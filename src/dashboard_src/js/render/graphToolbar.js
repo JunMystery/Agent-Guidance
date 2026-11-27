@@ -1,9 +1,14 @@
-import { el } from '../dom.js';
+import { escapeHtml } from '../dom.js';
 import { t } from '../i18n/index.js';
 import { initFileCombobox } from './fileCombobox.js';
 
 export function renderGraphToolbar(container, options = {}) {
   if (!container) return;
+
+  if (typeof container._comboboxDestroy === 'function') {
+    container._comboboxDestroy();
+    container._comboboxDestroy = null;
+  }
 
   const {
     activeMode = 'files',
@@ -39,11 +44,11 @@ export function renderGraphToolbar(container, options = {}) {
     modeSpecificControls = `
       <div style="display: flex; gap: 8px; align-items: center;">
         <button id="btn-toggle-file-orphans" class="btn btn-sm ${hideOrph ? 'btn-primary' : 'btn-secondary'}" style="padding: 4px 10px; font-size: 11px;">
-          ${hideOrph ? `🔗 ${t('graph.connected')} (${connectedCount})` : `🌐 ${t('graph.all')} (${nodesCount})`}
+          ${hideOrph ? `${t('graph.connected')} (${connectedCount})` : `${t('graph.all')} (${nodesCount})`}
         </button>
         ${isIsolated && isolatedFileInfo ? `
           <div style="display: inline-flex; align-items: center; gap: 8px; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.4); padding: 3px 10px; border-radius: var(--border-radius-sm); font-size: 11px; color: #38bdf8;">
-            <span>🛡️ <strong>${isolatedFileInfo.file ? isolatedFileInfo.file.split(/[/\\]/).pop() : ''}</strong> (${isolatedFileInfo.depCount || 0} ${t('graph.deps_label')}, ${isolatedFileInfo.revCount || 0} ${t('graph.callers_label')})</span>
+            <span><strong>${escapeHtml(isolatedFileInfo.file ? isolatedFileInfo.file.split(/[/\\]/).pop() : '')}</strong> (${isolatedFileInfo.depCount || 0} ${t('graph.deps_label')}, ${isolatedFileInfo.revCount || 0} ${t('graph.callers_label')})</span>
             <button id="btn-reset-isolate" class="btn btn-sm btn-secondary" style="padding: 2px 6px; font-size: 10px; margin-left: 4px;">
               ${t('graph.reset_filter')}
             </button>
@@ -136,11 +141,14 @@ export function renderGraphToolbar(container, options = {}) {
 
   const comboboxMount = container.querySelector('#file-combobox-mount');
   if (comboboxMount) {
-    initFileCombobox(comboboxMount, {
+    const combobox = initFileCombobox(comboboxMount, {
       files: availableFiles,
       selectedFile,
       onSelect: onSelectFile
     });
+    if (combobox && typeof combobox.destroy === 'function') {
+      container._comboboxDestroy = combobox.destroy;
+    }
   }
 
   const resetIsolateBtn = container.querySelector('#btn-reset-isolate');

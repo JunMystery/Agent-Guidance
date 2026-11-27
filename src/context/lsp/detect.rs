@@ -17,20 +17,35 @@ pub fn detect_lsp_server(proj_path: &Path) -> Option<LspServerConfig> {
     let config_file = proj_path.join(".agent-context").join("lsp.json");
     if let Ok(content) = std::fs::read_to_string(&config_file) {
         if let Ok(val) = serde_json::from_str::<Value>(&content) {
-            let command = val.get("command").and_then(|c| c.as_str())?;
-            let name = val.get("name").and_then(|n| n.as_str()).unwrap_or(command);
-            let args: Vec<String> = val
-                .get("args")
-                .and_then(|a| a.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                .unwrap_or_default();
+            if let Some(command) = val
+                .get("command")
+                .and_then(|c| c.as_str())
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+            {
+                let name = val
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or(command);
+                let args: Vec<String> = val
+                    .get("args")
+                    .and_then(|a| a.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
 
-            if is_command_available(command) {
-                return Some(LspServerConfig {
-                    name: name.to_string(),
-                    command: command.to_string(),
-                    args,
-                });
+                if is_command_available(command) {
+                    return Some(LspServerConfig {
+                        name: name.to_string(),
+                        command: command.to_string(),
+                        args,
+                    });
+                }
             }
         }
     }
@@ -93,15 +108,35 @@ pub fn detect_lsp_server(proj_path: &Path) -> Option<LspServerConfig> {
 
 /// Checks whether an executable exists in system PATH without spawning processes.
 pub fn is_command_available(cmd: &str) -> bool {
-    let path_var = match std::env::var_os("PATH") {
-        Some(val) => val,
-        None => return false,
-    };
+    let cmd = cmd.trim();
+    if cmd.is_empty() {
+        return false;
+    }
 
     let extensions: &[&str] = if cfg!(windows) {
         &["", ".exe", ".cmd", ".bat"]
     } else {
         &[""]
+    };
+
+    let cmd_path = Path::new(cmd);
+    if cmd_path.is_absolute() || cmd_path.components().count() > 1 {
+        if cmd_path.is_file() {
+            return true;
+        }
+        if cfg!(windows) && cmd_path.extension().is_none() {
+            for ext in &extensions[1..] {
+                if Path::new(&format!("{}{}", cmd, ext)).is_file() {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    let path_var = match std::env::var_os("PATH") {
+        Some(val) => val,
+        None => return false,
     };
 
     for dir in std::env::split_paths(&path_var) {

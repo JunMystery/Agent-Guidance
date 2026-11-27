@@ -1,10 +1,10 @@
-# 📊 Agent Guidance Web Dashboard & Visual GraphRAG
+# Agent Guidance Web Dashboard & Visual GraphRAG
 
 Agent Guidance includes an embedded, high-performance telemetry dashboard and interactive GraphRAG architecture visualizer. The dashboard runs directly inside the singleton daemon process via `tiny_http` with zero external web server or Node.js runtime dependencies.
 
 ---
 
-## 🌐 Accessing the Dashboard
+## Accessing the Dashboard
 
 By default, the dashboard runs at:
 ```text
@@ -22,10 +22,10 @@ agent-guidance --dashboard
 # Specify a custom port (via flag or alias)
 agent-guidance --dashboard --port 12345
 agent-guidance --dashboard --dashboard-port 12345
-agent-guidance --dashboard -p 12345
 
-# Scope dashboard to a specific project
+# Scope dashboard to a specific project (alias: -p)
 agent-guidance --dashboard --project "e:\Github\MyProject"
+agent-guidance --dashboard -p "e:\Github\MyProject"
 ```
 
 ### Environment Variables
@@ -36,9 +36,9 @@ agent-guidance --dashboard --project "e:\Github\MyProject"
 
 ---
 
-## 🖥️ Views & Features
+## Views & Features
 
-The web dashboard is organized into 4 primary views accessible via the responsive sidebar:
+The web dashboard is organized into primary views accessible via the responsive sidebar:
 
 ### Performance & Zero-Freeze Telemetry Loop
 - **Adaptive 5s Polling Cadence**: Chained `setTimeout` execution (`scheduleNextPoll()`) replaces `setInterval` loops, guaranteeing zero overlapping requests and reducing telemetry network traffic by 80%.
@@ -89,20 +89,29 @@ The visualizer offers 3 specialized modes to explore and analyze codebase archit
   - In all visualizer modes, selecting a node dims all unrelated nodes and edges to exactly 10% opacity (`globalAlpha = 0.10`), keeping the active subgraph crisp at 100% brightness.
 
 - **Enforced Project Selection**:
-  - Graph visualizer strictly requires an explicit project selection from the Tracked Projects dropdown (`/api/graph?project=...`). When Global (All) is active, a friendly selection guide (`📂 Select a Project to View Graph`) is displayed until a project is chosen.
+  - Graph visualizer strictly requires an explicit project selection from the Tracked Projects dropdown (`/api/graph?project=...`). When Global (All) is active, a selection guide is displayed until a project is chosen.
 
 - **Bilingual Interface (i18n Parity)**:
   - Full localization support across toolbars, legends, inspector panels, search combobox, and metrics in both English and Vietnamese.
 
-### 4. Diagnostics
+### 4. Diagnostics (`#logs`)
 - **System Health & Runtime Info**: Daemon uptime, memory usage, CPU/GPU compute provider (`CPU`, `CUDA`, `DirectML`, `Metal`).
 - **IDE Process Detector**: Status of connected IDE client instances and detected IDE processes (monitoring 26 supported IDE binaries).
 - **ML Engine Status**: Candle BERT embeddings engine status, loaded ONNX models, and vector cache stats.
 - **Filesystem Watcher**: Active watches, debounce status, and queue depth for real-time AST re-indexing.
 
+### 5. Skill Registry (`#skills`)
+- **Searchable Catalog (629 Embedded + Staged)**: Browse embedded and staged skills (`~/.agent-guidance/staging/skills/`), preview rendered markdown, create/edit overrides, revert overrides to embedded defaults, delete skills cleanly with tombstone tracking, and trigger incremental binary reindexing.
+
+### 6. Tool Micro-Rules Editor (`#rules`)
+- **Per-Project & Global Rules**: Toggle or customize MCP tool micro-rules while automatically upgrading legacy hard-cap defaults to the 300 LOC soft cohesion + AST complexity guidance rules.
+
+### 7. Server & Connection Settings (`#settings`)
+- **Remote ML Worker Configuration**: Switch between local standalone and Remote ML Worker modes, test server latency/health (automatically reusing the stored server key when testing the saved URL), configure Bearer keys (`api_key_configured` status flag without exposing raw secrets), and clear saved keys cleanly (`clear_api_key`).
+
 ---
 
-## ⌨️ Sidebar & Navigation Shortcuts
+## Sidebar & Navigation Shortcuts
 
 - **Sidebar Toggle**: Click the sidebar hamburger toggle or press `Ctrl + B` to expand/collapse the navigation sidebar.
 - **Fixed Viewport Lock**: The sidebar is styled with fixed viewport height, preventing the footer or controls from jumping out of view on long content pages.
@@ -110,7 +119,16 @@ The visualizer offers 3 specialized modes to explore and analyze codebase archit
 
 ---
 
-## 🔌 REST API Reference
+## Security Policy
+
+- **Origin & CORS Enforcement**: Cross-origin requests to `/api/*` and `/health` from non-loopback, non-same-host `Origin` headers are rejected with `403 Forbidden`.
+- **Remote Bearer Authentication**: Non-loopback clients calling `/api/*` must present `Authorization: Bearer <api_key>` matching `server.api_key` or `AGENT_GUIDANCE_API_KEY`.
+- **Bounded API Payloads**: Request bodies are capped at 1 MB (`413 Payload Too Large`), and `/api/graph` rejects invalid project path traversals (`..` or NUL bytes).
+- **Read-Only Telemetry Reads & Safe Pruning**: `GET /api/stats` opens `usage.db` read-only after one-time schema initialization (with 5s `busy_timeout`) to avoid write contention with the MCP daemon, and `POST /api/projects/prune` uses exact OS temp directory / test prefix checks so legitimate project paths containing substrings like `template` are never deleted.
+
+---
+
+## REST API Reference
 
 The embedded HTTP server exposes a complete REST API for programmatic telemetry access, CI/CD integration, and dashboard automation:
 
@@ -122,8 +140,12 @@ The embedded HTTP server exposes a complete REST API for programmatic telemetry 
 | `POST` | `/api/projects/prune` | Remove stale, missing, or redundant child directory records from the registry. |
 | `GET` | `/api/graph` | Code graph data. Parameters: `project` (required), `view` (`symbols`, `files`, `file_functions`), `file` (relative path or `all` for `file_functions`). |
 | `POST` | `/api/cleanup` | Trigger database vacuuming, expired log pruning, and dead project cleanup. |
-| `GET` | `/api/logs` | Paginated action logs. Parameters: `page` (default 1), `limit` (default 10), `search` (optional keyword). |
-| `POST` | `/api/logs/clear` | Clear all execution action logs from the database. |
+| `GET` | `/api/logs` | Paginated action logs (`page`, `limit`, `search`, `level`). |
+| `POST` | `/api/logs/clear` | Clear diagnostic or execution action logs from the database. |
+| `GET` / `POST` | `/api/config` | Read sanitized server settings (`api_key_configured` flag) or update configuration (`clear_api_key` supported). |
+| `POST` | `/api/config/test` | Test Remote ML Worker health & latency (falls back to saved `server.api_key` when URL matches saved config). |
+| `GET` / `POST` | `/api/skills/*` | List, read, save staged overrides, revert, delete (with tombstones), and reindex skill catalog entries. |
+| `GET` / `POST` | `/api/rules/*` | Read, update, and auto-migrate tool micro-rules per project or globally. |
 | `POST` | `/api/engine/refresh` | Trigger immediate on-demand AST symbol indexing and GraphRAG re-clustering for active project. |
 
 ### Example API Request
@@ -138,7 +160,7 @@ curl "http://127.0.0.1:11997/api/logs?page=1&limit=20&search=workflow_gate"
 
 ---
 
-## 🛠️ Related Documentation
+## Related Documentation
 
 - [Getting Started](getting-started.md)
 - [Architecture & Daemon Design](ARCHITECTURE.md)

@@ -5,7 +5,7 @@ import { drawGraphEdges } from './graphEdges.js';
 
 export function initGraphCanvas(canvasId, nodes, edges, communities, onSelect, onZoom) {
   const canvas = document.getElementById(canvasId);
-  if (!canvas) return { setFilter: () => {}, setPulse: () => {}, toggleOrphans: () => {}, zoomIn: () => {}, zoomOut: () => {}, resetFit: () => {} };
+  if (!canvas) return { setFilter: () => {}, setPulse: () => {}, toggleOrphans: () => {}, zoomIn: () => {}, zoomOut: () => {}, resetFit: () => {}, selectNode: () => {}, destroy: () => {} };
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -32,7 +32,7 @@ export function initGraphCanvas(canvasId, nodes, edges, communities, onSelect, o
   let langFilter = 'all';
   let pulseEnabled = true;
   let hideOrphans = false;
-  let animTime = 0, running = true;
+  let animTime = 0, running = true, rafId = null;
 
   function fitToView() {
     const visibleNodes = nodeArr.filter(n => !(hideOrphans && n.isOrphan) && isFinite(n.x) && isFinite(n.y));
@@ -95,7 +95,7 @@ export function initGraphCanvas(canvasId, nodes, edges, communities, onSelect, o
       ctx.setLineDash([]);
       ctx.fillStyle = a.color;
       ctx.font = '600 9px Inter, sans-serif';
-      ctx.fillText(`${a.name.toUpperCase()} (${a.count})`, a.x - a.radius * 0.6, a.y - a.radius + 13);
+      ctx.fillText(`${String(a.name || '').toUpperCase()} (${a.count})`, a.x - a.radius * 0.6, a.y - a.radius + 13);
       ctx.restore();
     });
 
@@ -158,10 +158,10 @@ export function initGraphCanvas(canvasId, nodes, edges, communities, onSelect, o
     });
 
     ctx.restore();
-    requestAnimationFrame(render);
+    rafId = requestAnimationFrame(render);
   }
 
-  requestAnimationFrame(render);
+  rafId = requestAnimationFrame(render);
 
   // Pan & Zoom Event Listeners
   canvas.addEventListener('wheel', (e) => {
@@ -187,7 +187,7 @@ export function initGraphCanvas(canvasId, nodes, edges, communities, onSelect, o
     lastMouseY = e.clientY;
   });
 
-  window.addEventListener('mousemove', (e) => {
+  const onMouseMove = (e) => {
     if (isDragging) {
       if (Math.hypot(e.clientX - startX, e.clientY - startY) > 4) hasDragged = true;
       panX += e.clientX - lastMouseX;
@@ -213,9 +213,12 @@ export function initGraphCanvas(canvasId, nodes, edges, communities, onSelect, o
       hoverId = found ? found.id : null;
       canvas.style.cursor = found ? 'pointer' : (isDragging ? 'grabbing' : 'grab');
     }
-  });
+  };
 
-  window.addEventListener('mouseup', () => { isDragging = false; });
+  const onMouseUp = () => { isDragging = false; };
+
+  window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mouseup', onMouseUp);
 
   canvas.addEventListener('click', (e) => {
     if (hasDragged) return;
@@ -260,7 +263,15 @@ export function initGraphCanvas(canvasId, nodes, edges, communities, onSelect, o
         panY = H / 2 - n.y * scale;
       }
     },
-    destroy: () => { running = false; }
+    destroy: () => {
+      running = false;
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    }
   };
 }
 

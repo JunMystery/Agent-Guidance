@@ -31,3 +31,18 @@
         let hits = index.search(&[1.0, 2.0], 5, 0.0);
         assert!(hits.is_empty());
     }
+
+    #[test]
+    fn test_hnsw_evicts_worst_and_keeps_exact_nearest_when_exceeding_ef() {
+        let mut index = HnswIndex::new(8, 16, 8);
+        for i in 0..60 {
+            let angle = (i as f32) * std::f32::consts::PI / 60.0;
+            index.insert(vec![angle.cos(), angle.sin(), 0.0], i);
+        }
+        let target_angle = 17.0f32 * std::f32::consts::PI / 60.0;
+        let query = vec![target_angle.cos(), target_angle.sin(), 0.0];
+        let hits = index.search(&query, 3, 0.9);
+        assert!(!hits.is_empty());
+        assert_eq!(*hits[0].1, 17);
+        assert!(hits[0].0 > 0.999);
+    }

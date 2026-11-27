@@ -1,4 +1,4 @@
-import { setText, el, emptyState } from '../dom.js';
+import { setText, el, emptyState, escapeHtml } from '../dom.js';
 import { fmtTokens, fmtPct, timeAgo } from '../format.js';
 import { renderHourlyChart } from './chart/index.js';
 import { renderRecentCalls } from './recent.js';
@@ -18,13 +18,13 @@ export function renderDashboard(data) {
   setText('out-client-name', 'global');
   setText('out-session-label', t('kpi.per_call_tracking'));
 
-  setText('sidebar-proj', t('sidebar.project_prefix') + (data.project_path ? data.project_path.split('/').pop() : '--'));
+  const projName = data.project_path ? data.project_path.replace(/\\/g, '/').split('/').filter(Boolean).pop() : '--';
+  setText('sidebar-proj', t('sidebar.project_prefix') + projName);
   const projEl = el('sidebar-proj');
   if (projEl) projEl.title = data.project_path || '';
   setText('sidebar-port', t('sidebar.port_prefix') + (data.server_port || '--'));
   setText('sidebar-port-badge', data.server_port || '11997');
   setText('sidebar-version', t('sidebar.version_prefix') + (data.version || '--'));
-  const projName = data.project_path ? data.project_path.replace(/\\/g, '/').split('/').filter(Boolean).pop() : '--';
   setText('sys-project', projName);
   const sysProjEl = el('sys-project');
   if (sysProjEl) sysProjEl.title = data.project_path || '';
@@ -163,8 +163,8 @@ function drawSkillsTable() {
       const rankBadge = globalIdx < 3 ? 'badge green' : 'badge';
       body.innerHTML += '<tr>' +
         '<td><span class="' + rankBadge + '">#' + (globalIdx + 1) + '</span></td>' +
-        '<td><strong>' + sk.skill_id + '</strong></td>' +
-        '<td>' + sk.cnt + '</td>' +
+        '<td><strong>' + escapeHtml(sk.skill_id) + '</strong></td>' +
+        '<td>' + (Number(sk.cnt) || 0) + '</td>' +
         '</tr>';
     });
   } else {
@@ -187,8 +187,8 @@ function drawRecentSkillCalls() {
   if (paged.pagedRows.length) {
     paged.pagedRows.forEach(sk => {
       body.innerHTML += '<tr>' +
-        '<td>' + timeAgo(sk.loaded_at) + '</td>' +
-        '<td><strong>' + sk.skill_id + '</strong></td>' +
+        '<td>' + escapeHtml(timeAgo(sk.loaded_at)) + '</td>' +
+        '<td><strong>' + escapeHtml(sk.skill_id) + '</strong></td>' +
         '</tr>';
     });
   } else {

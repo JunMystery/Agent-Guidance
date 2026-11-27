@@ -1,4 +1,4 @@
-import { el, emptyState } from '../dom.js';
+import { el, emptyState, escapeHtml } from '../dom.js';
 import { fmtTokens, savingsBadge, fmtDurationMs, timeAgo } from '../format.js';
 import { makeSortable, filterRows, bindFilter } from '../interactions.js';
 import { paginate, renderPagination, resetPage } from '../pagination.js';
@@ -32,20 +32,20 @@ function drawRecentCalls() {
       const duration = fmtDurationMs(r.duration_ms);
       const statusClass = r.error_message ? 'badge red' : 'badge green';
       const statusText = r.error_message ? t('status.error') : t('status.ok');
-      const statusTitle = r.error_message ? ' title="' + r.error_message.replace(/"/g, '&quot;') + '"' : '';
+      const statusTitle = r.error_message ? ' title="' + escapeHtml(r.error_message) + '"' : '';
       const opText = r.operation || ((r.tool_name === 'select_skills' || r.tool_name === 'select_skill') ? 'load' : 'default');
       const targetText = r.target
-        ? '<code class="target-badge" title="' + r.target.replace(/"/g, '&quot;') + '">' + r.target.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</code>'
+        ? '<code class="target-badge" title="' + escapeHtml(r.target) + '">' + escapeHtml(r.target) + '</code>'
         : '<span class="text-muted">—</span>';
       body.innerHTML += '<tr>' +
-        '<td>' + timeAgo(r.started_at) + '</td>' +
-        '<td><code>' + r.tool_name + '</code></td>' +
-        '<td><span class="badge">' + opText + '</span></td>' +
+        '<td>' + escapeHtml(timeAgo(r.started_at)) + '</td>' +
+        '<td><code>' + escapeHtml(r.tool_name) + '</code></td>' +
+        '<td><span class="badge">' + escapeHtml(opText) + '</span></td>' +
         '<td class="target-cell">' + targetText + '</td>' +
         '<td>' + fmtTokens(r.tokens_original) + '</td>' +
         '<td>' + fmtTokens(r.tokens_optimized) + '</td>' +
         '<td><span class="' + badgeClass + '">' + pct + '%</span></td>' +
-        '<td><span class="' + statusClass + '"' + statusTitle + '>' + statusText + '</span></td>' +
+        '<td><span class="' + statusClass + '"' + statusTitle + '>' + escapeHtml(statusText) + '</span></td>' +
         '</tr>';
     });
   } else {

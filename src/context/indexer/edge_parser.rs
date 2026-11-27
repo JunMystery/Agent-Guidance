@@ -96,7 +96,7 @@ pub fn extract_edges_from_content(
     for sym in symbols {
         if sym.kind != "module" && sym.kind != "package" {
             if let Some(parent_name) = &sym.parent {
-                if let Some(parent_sym) = symbols.iter().find(|s| &s.name == parent_name) {
+                if let Some(parent_sym) = symbols.iter().find(|s| &s.name == parent_name && s.id != sym.id) {
                     edges.push(ExtractedEdge {
                         source_id: parent_sym.id.clone(),
                         target_id: sym.id.clone(),
@@ -122,4 +122,45 @@ pub fn extract_edges_from_content(
     }
 
     edges
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_member_of_skips_self_loop_for_same_named_constructor() {
+        let symbols = vec![
+            ExtractedSymbol {
+                id: "src/foo.java::method::Foo::L5".to_string(),
+                name: "Foo".to_string(),
+                kind: "method".to_string(),
+                parent: Some("Foo".to_string()),
+                start_line: 5,
+                end_line: 8,
+                signature: Some("Foo()".to_string()),
+                language: Some("java".to_string()),
+                namespace: None,
+                receiver: None,
+            },
+            ExtractedSymbol {
+                id: "src/foo.java::class::Foo::L1".to_string(),
+                name: "Foo".to_string(),
+                kind: "class".to_string(),
+                parent: None,
+                start_line: 1,
+                end_line: 10,
+                signature: Some("class Foo".to_string()),
+                language: Some("java".to_string()),
+                namespace: None,
+                receiver: None,
+            },
+        ];
+
+        let edges = extract_edges_from_content("src/foo.java", "class Foo { Foo() {} }", &symbols);
+        let member_edges: Vec<&ExtractedEdge> = edges.iter().filter(|e| e.edge_type == "member_of").collect();
+        assert_eq!(member_edges.len(), 1);
+        assert_eq!(member_edges[0].source_id, "src/foo.java::class::Foo::L1");
+        assert_eq!(member_edges[0].target_id, "src/foo.java::method::Foo::L5");
+    }
 }

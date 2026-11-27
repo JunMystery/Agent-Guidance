@@ -129,7 +129,10 @@ impl OnnxQuantizedModel {
             let b_size = encodings.len();
             let max_len = encodings.iter().map(|e| e.get_ids().len()).max().unwrap_or(0);
             if max_len == 0 {
-                continue;
+                anyhow::bail!(
+                    "Batch tokenization produced empty sequences (max_len == 0) for {} inputs",
+                    b_size
+                );
             }
 
             let mut batch_ids = vec![0i64; b_size * max_len];
@@ -185,7 +188,42 @@ impl OnnxQuantizedModel {
     ) -> Result<Vec<Vec<f32>>> {
         let mut results = Vec::with_capacity(b_size);
         if shape.len() == 3 {
-            let hidden_dim = shape[2] as usize;
+            let dim0 = usize::try_from(shape[0])
+                .map_err(|_| anyhow::anyhow!("Invalid ONNX 3D batch dimension: {:?}", shape))?;
+            let dim1 = usize::try_from(shape[1])
+                .map_err(|_| anyhow::anyhow!("Invalid ONNX 3D sequence dimension: {:?}", shape))?;
+            let hidden_dim = usize::try_from(shape[2])
+                .map_err(|_| anyhow::anyhow!("Invalid ONNX 3D hidden dimension: {:?}", shape))?;
+            if dim0 != b_size || dim1 != max_len || hidden_dim == 0 {
+                anyhow::bail!(
+                    "ONNX 3D shape mismatch: shape={:?}, expected=[{}, {}, >0]",
+                    shape,
+                    b_size,
+                    max_len
+                );
+            }
+            let mask_expected = b_size
+                .checked_mul(max_len)
+                .ok_or_else(|| anyhow::anyhow!("ONNX mask size overflow: {}x{}", b_size, max_len))?;
+            if mask.len() < mask_expected {
+                anyhow::bail!(
+                    "ONNX attention mask buffer too small: len={}, expected>={}",
+                    mask.len(),
+                    mask_expected
+                );
+            }
+            let expected = mask_expected
+                .checked_mul(hidden_dim)
+                .ok_or_else(|| anyhow::anyhow!("ONNX 3D tensor size overflow: {:?}", shape))?;
+            if data.len() < expected {
+                anyhow::bail!(
+                    "ONNX 3D tensor buffer too small: len={}, expected>={} for shape {:?}",
+                    data.len(),
+                    expected,
+                    shape
+                );
+            }
+
             for i in 0..b_size {
                 let mut vec = vec![0.0f32; hidden_dim];
                 let mut count = 0.0f32;
@@ -207,7 +245,29 @@ impl OnnxQuantizedModel {
                 results.push(vec);
             }
         } else if shape.len() == 2 {
-            let hidden_dim = shape[1] as usize;
+            let dim0 = usize::try_from(shape[0])
+                .map_err(|_| anyhow::anyhow!("Invalid ONNX 2D batch dimension: {:?}", shape))?;
+            let hidden_dim = usize::try_from(shape[1])
+                .map_err(|_| anyhow::anyhow!("Invalid ONNX 2D hidden dimension: {:?}", shape))?;
+            if dim0 != b_size || hidden_dim == 0 {
+                anyhow::bail!(
+                    "ONNX 2D shape mismatch: shape={:?}, expected=[{}, >0]",
+                    shape,
+                    b_size
+                );
+            }
+            let expected = b_size
+                .checked_mul(hidden_dim)
+                .ok_or_else(|| anyhow::anyhow!("ONNX 2D tensor size overflow: {:?}", shape))?;
+            if data.len() < expected {
+                anyhow::bail!(
+                    "ONNX 2D tensor buffer too small: len={}, expected>={} for shape {:?}",
+                    data.len(),
+                    expected,
+                    shape
+                );
+            }
+
             for i in 0..b_size {
                 let mut vec = data[i * hidden_dim..(i + 1) * hidden_dim].to_vec();
                 Self::normalize_vector(&mut vec);
@@ -224,5 +284,33 @@ impl OnnxQuantizedModel {
         for x in vec.iter_mut() {
             *x /= norm;
         }
+    }
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::OnnxQuantizedModel;
+
+    #[test]
+    fn test_pool_and_normalize_bounds_validation() {
+        // 3D batch mismatch
+        assert!(OnnxQuantizedModel::pool_and_normalize(&[2, 2, 2], &[0.0; 8], &[1; 4], 1, 2).is_err());
+        // 3D sequence length mismatch
+        assert!(OnnxQuantizedModel::pool_and_normalize(&[1, 3, 2], &[0.0; 6], &[1; 3], 1, 2).is_err());
+        // 3D zero / negative hidden_dim
+        assert!(OnnxQuantizedModel::pool_and_normalize(&[1, 2, 0], &[], &[1; 2], 1, 2).is_err());
+        assert!(OnnxQuantizedModel::pool_and_normalize(&[1, 2, -2], &[0.0; 4], &[1; 2], 1, 2).is_err());
+        // 3D truncated data buffer
+        assert!(OnnxQuantizedModel::pool_and_normalize(&[1, 2, 2], &[1.0, 2.0], &[1, 1], 1, 2).is_err());
+        // 3D truncated mask buffer
+        assert!(OnnxQuantizedModel::pool_and_normalize(&[1, 2, 2], &[1.0; 4], &[1], 1, 2).is_err());
+        // 2D batch mismatch
+        assert!(OnnxQuantizedModel::pool_and_normalize(&[1, 2], &[1.0, 2.0], &[1], 2, 1).is_err());
+        // 2D zero hidden_dim
+        assert!(OnnxQuantizedModel::pool_and_normalize(&[2, 0], &[], &[1, 1], 2, 1).is_err());
+        // 2D truncated data buffer
+        assert!(OnnxQuantizedModel::pool_and_normalize(&[2, 2], &[1.0, 2.0, 3.0], &[1, 1], 2, 1).is_err());
+        // Unsupported rank
+        assert!(OnnxQuantizedModel::pool_and_normalize(&[4], &[1.0; 4], &[1], 1, 1).is_err());
     }
 }

@@ -1,6 +1,9 @@
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result};
 use tracing::info;
+
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 use super::binary_format::{SkillsBinary, VectorBinary};
 #[cfg(test)]
@@ -76,13 +79,15 @@ pub fn delete_skills_and_compact(slugs: &[String], purge_staging: bool) -> Resul
         let new_sb = SkillsBinary::new(remaining_skills.clone());
         let new_vb = VectorBinary::new(remaining_vectors);
 
-        let sb_tmp = skills_path.with_extension("tmp");
+        let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let sb_tmp = skills_path.with_extension(format!("tmp.{}.{}", pid, seq));
         std::fs::write(&sb_tmp, new_sb.serialize())?;
-        std::fs::rename(sb_tmp, &skills_path)?;
+        std::fs::rename(&sb_tmp, &skills_path)?;
 
-        let vb_tmp = v_path.with_extension("tmp");
+        let vb_tmp = v_path.with_extension(format!("tmp.{}.{}", pid, seq));
         std::fs::write(&vb_tmp, new_vb.serialize())?;
-        std::fs::rename(vb_tmp, &v_path)?;
+        std::fs::rename(&vb_tmp, &v_path)?;
 
         info!(
             "Compacted binaries: removed {} skills, {} remaining",

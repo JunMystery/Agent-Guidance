@@ -1,11 +1,20 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::store::scanner::scan_skill_dir_recursive;
 use super::store::{SkillItem, SkillSource};
 
+static STAGING_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
 pub fn staging_dir() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir()
+            .join(format!("ag_test_home_{}", std::process::id()))
+            .join("staging")
+            .join("skills");
+    }
     dirs::home_dir()
         .map(|h| h.join(".agent-guidance").join("staging").join("skills"))
         .unwrap_or_else(|| PathBuf::from(".agent-guidance").join("staging").join("skills"))
@@ -48,21 +57,22 @@ pub fn purge_staging_skill(slug: &str) -> anyhow::Result<bool> {
     }
     let dir = staging_dir();
     let norm = slug.trim().to_lowercase();
+    let mut removed = false;
 
     let target_dir = dir.join(&norm);
     if target_dir.exists() && target_dir.is_dir() {
         fs::remove_dir_all(&target_dir)?;
-        return Ok(true);
+        removed = true;
     }
 
-    // Also check for direct markdown file e.g. skill-name.md
+    // Also remove legacy flat markdown file e.g. skill-name.md if present
     let target_file = dir.join(format!("{}.md", norm));
     if target_file.exists() && target_file.is_file() {
         fs::remove_file(&target_file)?;
-        return Ok(true);
+        removed = true;
     }
 
-    Ok(false)
+    Ok(removed)
 }
 
 pub fn save_staging_skill(slug: &str, content: &str) -> anyhow::Result<()> {
@@ -73,7 +83,14 @@ pub fn save_staging_skill(slug: &str, content: &str) -> anyhow::Result<()> {
     let norm = slug.trim().to_lowercase();
     let target_dir = dir.join(&norm);
     fs::create_dir_all(&target_dir)?;
-    fs::write(target_dir.join("SKILL.md"), content)?;
+    let target_file = target_dir.join("SKILL.md");
+    let seq = STAGING_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp_file = target_dir.join(format!("SKILL.tmp.{}.{}", std::process::id(), seq));
+    fs::write(&tmp_file, content)?;
+    if let Err(e) = fs::rename(&tmp_file, &target_file) {
+        let _ = fs::remove_file(&tmp_file);
+        return Err(e.into());
+    }
 
     // Auto-revive if skill was tombstoned
     let _ = crate::catalog::tombstone::remove_tombstones(&[norm.as_str()]);
@@ -197,6 +214,18 @@ mod tests {
 
         let purged = purge_staging_skill(slug);
         assert!(purged.unwrap());
+        assert!(get_skill_content(slug).is_none());
+    }
+
+    #[test]
+    fn test_purge_removes_both_dir_and_flat_file() {
+        let slug = "test-dual-staging-skill";
+        save_staging_skill(slug, "# Dir version").unwrap();
+        let flat = staging_dir().join(format!("{}.md", slug));
+        fs::write(&flat, "# Legacy flat version").unwrap();
+
+        assert!(purge_staging_skill(slug).unwrap());
+        assert!(!flat.exists(), "legacy flat .md file survived purge");
         assert!(get_skill_content(slug).is_none());
     }
 }

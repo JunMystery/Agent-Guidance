@@ -80,6 +80,12 @@ pub(crate) fn evaluate_read_authorization(
         );
         format!("\n---\n## Direct Edit Authorization Report\n\n{}", auth_report)
     } else {
+        if let Some(bad) = paths.iter().find(|p| p.contains("..") || p.contains('\0')) {
+            return format!(
+                "\n---\n# Edit Approval Gate Authorization\n\n- Status: BLOCKED (PATH_TRAVERSAL_PROHIBITED)\n- Target File: `{}`\n\nError: PATH_TRAVERSAL_PROHIBITED: Path traversal (..) or null byte is strictly prohibited.",
+                bad
+            );
+        }
         if let Some(blocked) = super::helpers_path::check_cross_workspace_guard(proj_path, paths, state, allow_cross) {
             return format!("\n---\n{}", blocked);
         }
@@ -103,5 +109,30 @@ pub(crate) fn evaluate_read_authorization(
             "\n---\n> [!NOTE] **Deferred Pre-Authorization Queued**:\n> {} file(s) queued for automatic authorization upon plan approval.\n> Active Stage: '{}' | Plan Approved: {}.\n> Call `workflow_gate(action=\"approve_plan\", user_confirmed=true)` once plan is confirmed to activate authorization in 1 turn.{}",
             paths.len(), state.workflow_stage, state.plan_approved, adv_section
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_deferred_read_auth_blocks_path_traversal() {
+        let dir = std::env::temp_dir().join(format!("ag_auth_trav_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mut state = ServerState::new();
+        state.plan_approved = false;
+
+        let res = evaluate_read_authorization(
+            &json!({"operation": "read", "authorize": true}),
+            &dir,
+            &["../../etc/passwd".to_string()],
+            &mut state,
+        );
+        assert!(res.contains("PATH_TRAVERSAL_PROHIBITED"));
+        assert!(state.deferred_authorized_paths.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1,5 +1,4 @@
 use tracing::{error, info};
-#[cfg(windows)]
 use std::time::Duration;
 
 use super::{
@@ -84,6 +83,7 @@ pub async fn daemon_main(port: u16, project_path: Option<String>) {
         .unwrap_or(DEFAULT_STARTUP_TIMEOUT_SECS);
 
     monitor_client_lifecycle(startup_timeout_secs).await;
+    drop(_lock);
     let _ = fs::remove_file(&path);
     crate::mcp::mcp_logger::log_mcp_direct(
         crate::mcp::mcp_logger::LogLevel::Info,
@@ -129,15 +129,25 @@ pub async fn daemon_main(port: u16, project_path: Option<String>) {
 
     tokio::spawn(async move {
         let mut is_first = true;
+        let mut consecutive_errors = 0u32;
         loop {
             let server_res = ServerOptions::new()
                 .first_pipe_instance(is_first)
                 .create(pipe_name);
 
             let server = match server_res {
-                Ok(s) => s,
+                Ok(s) => {
+                    consecutive_errors = 0;
+                    s
+                }
                 Err(e) => {
+                    consecutive_errors += 1;
                     error!("Failed to create named pipe instance: {}", e);
+                    is_first = false;
+                    if consecutive_errors >= 10 {
+                        error!("Too many consecutive named pipe creation failures; stopping listener.");
+                        break;
+                    }
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     continue;
                 }
@@ -169,6 +179,7 @@ pub async fn daemon_main(port: u16, project_path: Option<String>) {
         .unwrap_or(DEFAULT_STARTUP_TIMEOUT_SECS);
 
     monitor_client_lifecycle(startup_timeout_secs).await;
+    drop(_lock);
     crate::mcp::mcp_logger::log_mcp_direct(
         crate::mcp::mcp_logger::LogLevel::Info,
         "daemon_lifecycle",
@@ -186,6 +197,7 @@ fn checkpoint_usage_db() {
             &db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         ) {
+            let _ = conn.busy_timeout(Duration::from_millis(2000));
             let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
         }
     }

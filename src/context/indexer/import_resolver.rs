@@ -62,6 +62,23 @@ pub fn extract_imported_symbol_names(line: &str) -> Vec<String> {
         .collect()
 }
 
+fn normalize_relative_path(path: &Path) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                parts.pop();
+            }
+            std::path::Component::Normal(seg) => {
+                parts.push(seg.to_string_lossy().into_owned());
+            }
+            _ => {}
+        }
+    }
+    parts.join("/")
+}
+
 /// Resolves an import path into an exact tracked relative project file path.
 pub fn resolve_relative_import_path(
     from_file: &str,
@@ -70,10 +87,15 @@ pub fn resolve_relative_import_path(
 ) -> Option<String> {
     let clean = import_path.trim_matches(|c| c == '\'' || c == '"' || c == ';' || c == '<' || c == '>');
     let clean = clean.strip_prefix("./").unwrap_or(clean);
-    let clean = clean.strip_prefix('.').unwrap_or(clean);
+    let clean = if clean.starts_with('.') && !clean.starts_with("..") {
+        clean.strip_prefix('.').unwrap_or(clean)
+    } else {
+        clean
+    };
+    let clean_slash = clean.replace('\\', "/");
     let parent = Path::new(from_file).parent().unwrap_or(Path::new(""));
-    let target = parent.join(clean);
-    let normalized = target.to_string_lossy().replace('\\', "/").replace("/./", "/");
+    let target = parent.join(&clean_slash);
+    let normalized = normalize_relative_path(&target);
 
     let candidates = [
         normalized.clone(),
@@ -145,5 +167,19 @@ mod tests {
 
         let res_kt = resolve_relative_import_path("app/Main.kt", "Service", &modules);
         assert_eq!(res_kt, Some("app/src/main/java/com/example/Service.kt".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_parent_relative_import_path() {
+        let mut modules = HashMap::new();
+        modules.insert("src/utils.ts".to_string(), "m1".to_string());
+        modules.insert("src/common/helper.rs".to_string(), "m2".to_string());
+
+        let res_parent = resolve_relative_import_path("src/features/auth.ts", "../utils", &modules);
+        assert_eq!(res_parent, Some("src/utils.ts".to_string()));
+
+        let res_grandparent =
+            resolve_relative_import_path("src/a/b/mod.rs", "../../common/helper", &modules);
+        assert_eq!(res_grandparent, Some("src/common/helper.rs".to_string()));
     }
 }

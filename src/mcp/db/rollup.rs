@@ -1,7 +1,54 @@
 use anyhow::Result;
 use rusqlite::{Connection, params};
 
+fn normalize_project_key(raw: &str) -> String {
+    let norm = raw.replace('\\', "/");
+    let trimmed = norm.trim_end_matches('/');
+    if trimmed.is_empty() && norm.starts_with('/') {
+        "/".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+struct SavepointGuard<'a> {
+    conn: &'a Connection,
+    name: &'static str,
+    committed: bool,
+}
+
+impl<'a> SavepointGuard<'a> {
+    fn start(conn: &'a Connection, name: &'static str) -> Result<Self> {
+        conn.execute_batch(&format!("SAVEPOINT {};", name))?;
+        Ok(Self {
+            conn,
+            name,
+            committed: false,
+        })
+    }
+
+    fn commit(mut self) -> Result<()> {
+        self.conn
+            .execute_batch(&format!("RELEASE SAVEPOINT {};", self.name))?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for SavepointGuard<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = self.conn.execute_batch(&format!(
+                "ROLLBACK TO SAVEPOINT {0}; RELEASE SAVEPOINT {0};",
+                self.name
+            ));
+        }
+    }
+}
+
 pub fn rollup_before_prune(conn: &Connection, cutoff_ts: i64) -> Result<usize> {
+    let tx = SavepointGuard::start(conn, "ag_rollup_before_prune")?;
+
     let mut stmt = conn.prepare(
         "SELECT
             strftime('%Y-%m-%d', started_at, 'unixepoch') AS day,
@@ -35,7 +82,7 @@ pub fn rollup_before_prune(conn: &Connection, cutoff_ts: i64) -> Result<usize> {
 
     let mut inserted_count = 0;
     for (day, proj, tool_name, op, cnt, orig, opt, dur) in rows {
-        let norm_proj = proj.replace('\\', "/");
+        let norm_proj = normalize_project_key(&proj);
         let phase = map_phase(&tool_name, &op);
         conn.execute(
             "INSERT INTO dashboard_daily_rollups
@@ -76,12 +123,15 @@ pub fn rollup_before_prune(conn: &Connection, cutoff_ts: i64) -> Result<usize> {
         );
     }
 
-    // Rollup project-specific skills from select_skills tool_calls
-    let tc_skill_sql = "SELECT strftime('%Y-%m-%d', started_at, 'unixepoch') AS day, COALESCE(project_path, '') AS proj, operation, COUNT(*) FROM tool_calls WHERE started_at < ?1 AND (tool_name = 'select_skills' OR tool_name = 'select_skill') AND operation IS NOT NULL AND operation != 'none' GROUP BY day, proj, operation";
+    // Rollup project-specific skills from select_skills tool_calls (skip empty project_path already counted in skill_loads)
+    let tc_skill_sql = "SELECT strftime('%Y-%m-%d', started_at, 'unixepoch') AS day, project_path AS proj, operation, COUNT(*) FROM tool_calls WHERE started_at < ?1 AND (tool_name = 'select_skills' OR tool_name = 'select_skill') AND operation IS NOT NULL AND operation != 'none' AND project_path IS NOT NULL AND TRIM(project_path) != '' GROUP BY day, proj, operation";
     if let Ok(mut tc_stmt) = conn.prepare(tc_skill_sql) {
         if let Ok(rows) = tc_stmt.query_map([cutoff_ts], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?))) {
             for (day, proj, op, cnt) in rows.flatten() {
-                let norm_proj = proj.replace('\\', "/");
+                let norm_proj = normalize_project_key(&proj);
+                if norm_proj.is_empty() {
+                    continue;
+                }
                 for single in op.split(',') {
                     let clean = crate::mcp::tools::skills::clean_skill_identifier(single);
                     if !clean.is_empty() {
@@ -98,6 +148,7 @@ pub fn rollup_before_prune(conn: &Connection, cutoff_ts: i64) -> Result<usize> {
         }
     }
 
+    tx.commit()?;
     Ok(inserted_count)
 }
 
@@ -125,6 +176,7 @@ fn map_phase(tool_name: &str, op: &str) -> String {
 }
 
 pub fn clean_dashboard_history(conn: &Connection, project_filter: Option<&str>) -> Result<usize> {
+    let tx = SavepointGuard::start(conn, "ag_clean_dashboard_history")?;
     let is_all = project_filter.is_none() || project_filter == Some("all") || project_filter == Some("");
     let mut deleted = 0;
 
@@ -136,9 +188,9 @@ pub fn clean_dashboard_history(conn: &Connection, project_filter: Option<&str>) 
         deleted += conn.execute("DELETE FROM embed_queries", [])?;
         deleted += conn.execute("DELETE FROM daily_summaries", [])?;
     } else {
-        let p = project_filter.unwrap_or_default();
-        let p_norm = p.replace('\\', "/");
-        let p_win = p.replace('/', "\\");
+        let p = project_filter.unwrap_or_default().trim();
+        let p_norm = normalize_project_key(p);
+        let p_win = p_norm.replace('/', "\\");
         deleted += conn.execute(
             "DELETE FROM dashboard_daily_rollups
              WHERE project_path = ?1 COLLATE NOCASE OR project_path = ?2 COLLATE NOCASE
@@ -153,10 +205,121 @@ pub fn clean_dashboard_history(conn: &Connection, project_filter: Option<&str>) 
         )?;
         deleted += conn.execute(
             "DELETE FROM daily_skill_rollups
-             WHERE project_path = ?1 COLLATE NOCASE OR project_path = ?2 COLLATE NOCASE",
+             WHERE project_path = ?1 COLLATE NOCASE OR project_path = ?2 COLLATE NOCASE
+                OR rtrim(project_path, '/\\') = ?1 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE",
             params![p_norm, p_win],
         )?;
     }
 
+    tx.commit()?;
     Ok(deleted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_mem_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tool_calls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_name TEXT NOT NULL,
+                operation TEXT,
+                started_at INTEGER NOT NULL,
+                duration_ms INTEGER,
+                tokens_original INTEGER DEFAULT 0,
+                tokens_optimized INTEGER DEFAULT 0,
+                project_path TEXT
+            );
+            CREATE TABLE skill_loads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                skill_id TEXT NOT NULL,
+                loaded_at INTEGER NOT NULL
+            );
+            CREATE TABLE embed_queries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query_text TEXT NOT NULL,
+                queried_at INTEGER NOT NULL
+            );
+            CREATE TABLE daily_summaries (
+                day TEXT PRIMARY KEY,
+                tool_calls INTEGER DEFAULT 0
+            );
+            CREATE TABLE dashboard_daily_rollups (
+                day TEXT NOT NULL,
+                project_path TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                calls INTEGER NOT NULL DEFAULT 0,
+                tokens_original INTEGER NOT NULL DEFAULT 0,
+                tokens_optimized INTEGER NOT NULL DEFAULT 0,
+                total_duration_ms INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (day, project_path, tool_name, operation, phase)
+            );
+            CREATE TABLE daily_skill_rollups (
+                day TEXT NOT NULL,
+                project_path TEXT NOT NULL,
+                skill_id TEXT NOT NULL,
+                calls INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (day, project_path, skill_id)
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_clean_dashboard_history_trailing_slash_and_skill_rollups() {
+        let conn = setup_mem_db();
+        conn.execute(
+            "INSERT INTO dashboard_daily_rollups (day, project_path, tool_name, operation, phase, calls)
+             VALUES ('2026-03-01', 'D:/repo_a', 'task_pipeline', 'plan', 'plan', 2)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO daily_skill_rollups (day, project_path, skill_id, calls)
+             VALUES ('2026-03-01', 'D:/repo_a/', 'rust-expert', 4)",
+            [],
+        )
+        .unwrap();
+
+        let deleted = clean_dashboard_history(&conn, Some("D:\\repo_a\\")).unwrap();
+        assert_eq!(deleted, 2);
+        let rem_skills: i64 = conn
+            .query_row("SELECT COUNT(*) FROM daily_skill_rollups", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rem_skills, 0);
+    }
+
+    #[test]
+    fn test_rollup_does_not_double_count_empty_project_select_skills() {
+        let conn = setup_mem_db();
+        let cutoff = 1_773_187_200;
+        let past = cutoff - 86400;
+
+        conn.execute(
+            "INSERT INTO skill_loads (skill_id, loaded_at) VALUES ('rust-expert', ?1)",
+            [past],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tool_calls (tool_name, operation, started_at, project_path)
+             VALUES ('select_skills', 'rust-expert', ?1, '')",
+            [past],
+        )
+        .unwrap();
+
+        rollup_before_prune(&conn, cutoff).unwrap();
+        let total: i64 = conn
+            .query_row(
+                "SELECT calls FROM daily_skill_rollups WHERE project_path = '' AND skill_id = 'rust-expert'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(total, 1, "Empty-project select_skills must not double-count skill_loads");
+    }
 }

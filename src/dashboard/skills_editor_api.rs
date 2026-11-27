@@ -24,7 +24,7 @@ pub fn handle_api_skills_content(request: Request) {
         let mut parts = pair.split('=');
         if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
             if k == "name" {
-                skill_name = urlencoding_decode(v);
+                skill_name = super::router::url_decode(v);
                 break;
             }
         }
@@ -58,11 +58,13 @@ pub fn handle_api_skills_save(mut request: Request) {
         return;
     }
 
-    let mut body = String::new();
-    if let Err(e) = request.as_reader().read_to_string(&mut body) {
-        super::router::json_response(request, 400, &json!({ "error": format!("Read error: {}", e) }));
-        return;
-    }
+    let body = match super::router::read_bounded_body(&mut request) {
+        Ok(b) => b,
+        Err((status, msg)) => {
+            super::router::json_response(request, status, &json!({ "error": msg }));
+            return;
+        }
+    };
 
     let req_data: SaveSkillRequest = match serde_json::from_str(&body) {
         Ok(d) => d,
@@ -97,11 +99,13 @@ pub fn handle_api_skills_revert(mut request: Request) {
         return;
     }
 
-    let mut body = String::new();
-    if let Err(e) = request.as_reader().read_to_string(&mut body) {
-        super::router::json_response(request, 400, &json!({ "error": format!("Read error: {}", e) }));
-        return;
-    }
+    let body = match super::router::read_bounded_body(&mut request) {
+        Ok(b) => b,
+        Err((status, msg)) => {
+            super::router::json_response(request, status, &json!({ "error": msg }));
+            return;
+        }
+    };
 
     let req_data: RevertSkillRequest = match serde_json::from_str(&body) {
         Ok(d) => d,
@@ -130,38 +134,16 @@ pub fn handle_api_skills_revert(mut request: Request) {
     }
 }
 
-fn urlencoding_decode(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '%' {
-            let hex: String = chars.by_ref().take(2).collect();
-            if hex.len() == 2 {
-                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                    result.push(byte as char);
-                    continue;
-                }
-            }
-            result.push('%');
-            result.push_str(&hex);
-        } else if ch == '+' {
-            result.push(' ');
-        } else {
-            result.push(ch);
-        }
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_urlencoding_decode() {
-        assert_eq!(urlencoding_decode("my%20skill"), "my skill");
-        assert_eq!(urlencoding_decode("test+slug"), "test slug");
-        assert_eq!(urlencoding_decode("codehealth-mcp"), "codehealth-mcp");
+        assert_eq!(super::super::router::url_decode("my%20skill"), "my skill");
+        assert_eq!(super::super::router::url_decode("test+slug"), "test slug");
+        assert_eq!(super::super::router::url_decode("codehealth-mcp"), "codehealth-mcp");
+        assert_eq!(super::super::router::url_decode("t%E1%BA%A3o"), "tảo");
     }
 
     #[test]

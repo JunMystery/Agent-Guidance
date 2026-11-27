@@ -10,7 +10,7 @@ Split `agent-guidance` workloads into a dual-role topology:
   - **Sole Custodian of Vector Binaries**: The server alone compiles, holds, and executes queries against `skills.bin` and `vectors.bin`.
   - **Runtime Binary Exclusivity**: Server answers queries 100% in-memory from compiled binary bundles (`skills.bin` + `vectors.bin`). Zero live markdown parsing or disk sweeps during inference.
   - **Staging Directory Workflow**: Filesystem folder (`~/.agent-guidance/staging/skills/`) serves strictly on the server as an authoring staging area.
-  - **Unlimited Dynamic Capacity ($N \ge 279$)**: Zero hardcoded skill limits. Supports hundreds or thousands of community and enterprise skills.
+  - **Unlimited Dynamic Capacity ($N \ge 629$)**: Zero hardcoded skill limits. Supports hundreds or thousands of community and enterprise skills.
   - **Upsert & Deletion Semantics**: Matching slugs overwrite in-place; new slugs append; 1-N skills can be deleted/cleaned directly from the Web Dashboard.
   - **Binary Compaction Engine**: Prunes vector rows from `vectors.bin` and text records from `skills.bin`, hot-swapping in memory in <1ms without restart.
   - **SHA-256 Incremental Binary Reindex Compiler**: Compiles staged skills into the binary database in <150 ms using differential hashing.
@@ -81,11 +81,11 @@ When connecting to the remote ML worker:
   - As long as server's `catalog_hash` is unchanged, repeat queries resolve instantly from local disk (< 2 ms) without network round-trips.
   - When the server reindexes, modifies, or deletes skills, the new `catalog_hash` immediately invalidates stale cache entries.
 
-### 2.4 Bearer Token Security Model
-- When the remote worker binds to `0.0.0.0`, all API endpoints require authentication via Bearer token:
-  `Authorization: Bearer <api_key>`
-- Configured in `~/.agent-guidance/config.toml` (client) and `~/.agent-guidance/server.toml` (server).
-- Requests with invalid or missing tokens receive `401 Unauthorized` with JSON error payload.
+### 2.4 Bearer Token Security Model & Request Bounds
+- Non-loopback `--bind` addresses (e.g., `0.0.0.0`) **require** an API key via `AGENT_GUIDANCE_API_KEY` (preferred in service templates, with `0o600` Unix unit permissions) or `--api-key`; binding non-loopback without a key is rejected on startup.
+- Protected endpoints require `Authorization: Bearer <api_key>`, cap HTTP request bodies at **1 MB**, cap `/api/embed` batches at **256 items**, and omit wildcard `*` CORS headers.
+- Configured in `~/.agent-guidance/config.toml` (client) and via `AGENT_GUIDANCE_API_KEY` environment variable (server).
+- Requests with invalid or missing tokens receive `401 Unauthorized` with JSON error payload (and the client propagates `401`/`403` auth errors rather than serving stale cached stats).
 
 ### 2.3 CLI Configuration Commands
 - Set server endpoint:
@@ -116,7 +116,7 @@ The installation script in Client Mode installs the lightweight binary and immed
   - **"Test Connection" Button**:
     - Sends probe to `GET http://<entered-ip>:<port>/health`.
     - Renders live latency & model status pill:
-      `[Connected] 172.16.11.24:11998 | Latency: 7.4 ms | Models: Candle BERT (VRAM) | 279 Skills Loaded`
+      `[Connected] 172.16.11.24:11998 | Latency: 7.4 ms | Models: Candle BERT (VRAM) | 629 Skills Loaded`
   - **"Apply & Auto-Configure" Button**:
     - Automatically persists settings into `~/.agent-guidance/config.toml`.
     - Automatically scans and updates IDE MCP configs (VS Code `mcp.json`, Claude Code `~/.claude.json`, Cursor, Windsurf, Zed) so IDEs point to local client binary.
@@ -169,7 +169,7 @@ Custom ports and bind addresses can be configured through three priority levels:
   ? Preload models now? (Y/n): y
   ? Enable systemd auto-start service? (Y/n): y
   ```
-- Generates systemd service with exact custom ports and bind address:
+- Generates systemd/launchd/Windows service configs passing secrets via `AGENT_GUIDANCE_API_KEY` (never CLI `--api-key` flags) with `0o600` permissions on Unix unit files:
   `ExecStart=/home/jun/.local/bin/agent-guidance --server --bind 0.0.0.0 --port 8080 --worker-port 9000`
 
 ### 2.6 Client Dashboard Custom Port Configuration
@@ -212,12 +212,12 @@ If port `11997` is occupied on client or developer prefers a custom port (e.g. `
 
 **Critical Architecture Invariant**:
 - **Client has ZERO ML**: The client installation contains **NO `skills.bin`**, **NO `vectors.bin`**, and **NO neural model weights**. The client cannot run semantic vector search or embedding math locally.
-- **Server is Sole Custodian**: The server alone holds the neural models, compiles markdown into `skills.bin`, generates section embeddings in `vectors.bin`, and services all semantic queries.
+- **Server is Sole Custodian**: The server alone holds the neural models, compiles markdown into `skills.bin`, generates section embeddings in `vectors.bin` (distinct from the local standalone warmup cache `~/.agent-guidance/passage_vectors.bin`), and services all semantic queries.
 
 ### 3.1 Staging Directory (`~/.agent-guidance/staging/skills/`)
 - Purpose: **Server-side staging area only**.
 - Developers or server admins drop custom/updated `SKILL.md` folders into this staging folder on the server.
-- Staging directory supports any number of skills ($N \ge 279$).
+- Staging directory supports any number of skills ($N \ge 629$).
 - **Conflict Resolution (Staged Overrides Built-in)**:
   - If a skill in staging shares the same slug/name as a built-in default skill, the staged custom version **takes absolute precedence**.
   - Binary compilation incorporates the custom staged skill into `skills.bin` and replaces its vectors in `vectors.bin`.
@@ -266,19 +266,19 @@ The server automatically transmits live skill metadata back to connected clients
 - **Server Skill Stats Endpoint (`GET /api/skills/stats`)** (also returned in `/health` and search headers):
   ```json
   {
-    "total_skills": 284,
-    "total_sections": 1142,
+    "total_skills": 629,
+    "total_sections": 2480,
     "vectors_dim": 384,
-    "last_reindex_at": "2026-09-25T14:30:22Z",
+    "last_reindex_at": "2026-11-27T14:30:22Z",
     "catalog_hash": "a3f5b72e91...",
-    "tombstones_count": 2,
+    "tombstones_count": 0,
     "token_savings_ratio": 0.81
   }
   ```
 - **Client Presentation**:
   - **Client CLI (`agent-guidance --stats` / `--status`)**:
     Displays live remote catalog info:
-    `Remote Skills: 284 loaded (1,142 sections) | Freshness: Today 14:30 | Server: 172.16.11.24:9000`
+    `Remote Skills: 629 loaded (2,480 sections) | Freshness: Today 14:30 | Server: 172.16.11.24:9000`
   - **Client Dashboard**:
     Renders a dedicated "Remote ML & Skill Registry" telemetry card showing server model, total skills count, and estimated tokens saved from surgical RAG slicing.
   - **Local Persistence**:
@@ -304,7 +304,7 @@ Dedicated server management views on port `11998` / `11997`:
   - Red **"Delete Selected (N)"** button.
   - Confirmation modal with checkbox: `[x] Also delete files from staging directory`.
   - Instant live removal from table upon confirmation.
-- **Restore Default Skills**: Action button to untombstone and restore original built-in 279 catalog.
+- **Restore Default Skills**: Action button to untombstone and restore original built-in 629 catalog.
 
 ### 4.2 One-Click Incremental Reindex Trigger
 - Live button: **"Compile Staging to Binary (SHA Diff)"**.
@@ -387,7 +387,7 @@ Personal Developer Device (Client)             Remote Server (Worker Daemon)
   - Parse and serialize `~/.agent-guidance/config.toml`.
   - Support arbitrary server endpoint URL/IP and custom ports (`url = "http://<ip>:<custom_port>"`), protocol, API key, timeout, local fallback.
   - Support environment variable overrides.
-- [ ] Add CLI flags in [src/main.rs](src/main.rs):
+- [ ] Add CLI flags in [src/main.rs](../../src/main.rs):
   - `agent-guidance --set-server <URL|local>`
   - `agent-guidance --test-server`
   - `agent-guidance --stats` / `--status` (print client status, ping latency, and remote skill stats)
@@ -419,7 +419,7 @@ Personal Developer Device (Client)             Remote Server (Worker Daemon)
   - `GET /health`: Return server memory, VRAM, and model status.
 
 ### Phase 4: Client Auto Task Context Forwarding & Remote Adapter
-- [ ] In `src/mcp/state.rs`: Cache active task query from `task_pipeline`.
+- [ ] In `src/mcp/state/`: Cache active task query from `task_pipeline`.
 - [ ] In `src/mcp/tools/skills.rs`: Auto-forward cached task to remote `/api/skills/slice`.
 - [ ] Ensure injected context delivers only top 2-3 sections (30–60 LOC) instead of entire SKILL.md.
 - [ ] Synchronize and cache server skills stats locally in `usage.db`:

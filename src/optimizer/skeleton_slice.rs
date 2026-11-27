@@ -53,16 +53,21 @@ fn generate_zoom_slice_heuristic(content: &str, file_path: &str, target_symbol: 
             // Find block end
             let mut depth = 0;
             let body_start = i + 1;
+            let mut saw_open_brace = false;
             while i < total_lines {
                 let cur = lines[i];
-                depth += cur.matches('{').count() as i32;
-                depth -= cur.matches('}').count() as i32;
-                if depth <= 0 && i >= body_start {
+                let opens = cur.matches('{').count() as i32;
+                let closes = cur.matches('}').count() as i32;
+                if opens > 0 {
+                    saw_open_brace = true;
+                }
+                depth += opens - closes;
+                if depth <= 0 && (i >= body_start || saw_open_brace) {
                     break;
                 }
                 i += 1;
             }
-            let end_line = i + 1;
+            let end_line = (i + 1).min(total_lines);
 
             if is_focus {
                 found_target = true;
@@ -113,4 +118,41 @@ fn generate_zoom_slice_heuristic(content: &str, file_path: &str, target_symbol: 
         savings_percent,
         target_found: true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_heuristic_zoom_single_line_brace_function_does_not_swallow_next() {
+        let code = "\
+fn alpha() { 1 }
+fn target_fn() {
+    let a = 1;
+    let b = 2;
+    a + b
+}
+fn gamma() {
+    let c = 3;
+    let d = 4;
+    c + d
+}";
+
+        let res = generate_zoom_slice_heuristic(code, "demo.unknown", "target_fn")
+            .expect("target_fn after single-line alpha() must be found");
+        assert!(res.target_found);
+        assert_eq!(res.folded_functions_count, 1);
+        assert!(res.sliced_content.contains("fn alpha() { 1 }"));
+        assert!(res.sliced_content.contains("ZOOM FOCUS: target_fn (L2-L6)"));
+        assert!(res.sliced_content.contains("let a = 1;"));
+        assert!(res.sliced_content.contains("fn gamma() { /* L7-11: 4 lines folded */ }"));
+        assert!(!res.sliced_content.contains("let c = 3;"));
+
+        // Focusing directly on the single-line function must stop on line 1
+        let single_res = generate_zoom_slice_heuristic(code, "demo.unknown", "alpha")
+            .expect("single-line target alpha() must be found");
+        assert!(single_res.sliced_content.contains("ZOOM FOCUS: alpha (L1-L1)"));
+        assert_eq!(single_res.folded_functions_count, 2);
+    }
 }

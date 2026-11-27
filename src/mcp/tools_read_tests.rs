@@ -150,5 +150,14 @@ fn test_context_read_blocks_external_absolute_path_and_preserves_html_comments()
     let html_text = html_res["content"][0]["text"].as_str().unwrap();
     assert!(html_text.contains("<!-- keep me -->"));
 
+    // Non-existent external absolute path must be rejected when allow_cross_workspace=false
+    let ext_missing = external.join("nonexistent_new.rs");
+    let missing_res = crate::mcp::tools::helpers::validate_path_scoped(
+        &repo,
+        ext_missing.to_str().unwrap(),
+        false,
+    );
+    assert!(missing_res.is_err());
+
     let _ = std::fs::remove_dir_all(&base);
 }

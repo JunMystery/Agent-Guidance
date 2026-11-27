@@ -1,7 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use anyhow::Result;
 use tracing::info;
+
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 use super::binary_format::{SkillRecord, SkillsBinary, VectorBinary};
 use super::model::EmbeddingModel;
@@ -21,6 +24,36 @@ pub struct CompilationStats {
     pub reindexed: usize,
     pub duration_ms: u128,
     pub catalog_hash: String,
+}
+
+fn select_skills_to_embed<'a>(
+    skills: &'a [SkillItem],
+    diff: &crate::catalog::checksum::CatalogDiff,
+    cached_vectors: &HashMap<String, Vec<f32>>,
+    has_prev_manifest: bool,
+    force: bool,
+) -> Vec<&'a SkillItem> {
+    if force {
+        return skills.iter().collect();
+    }
+    if !has_prev_manifest {
+        return skills
+            .iter()
+            .filter(|s| !cached_vectors.contains_key(&s.name.to_lowercase()))
+            .collect();
+    }
+    let modified_names: HashSet<String> = diff
+        .modified_or_new
+        .iter()
+        .map(|s| s.name.to_lowercase())
+        .collect();
+    skills
+        .iter()
+        .filter(|s| {
+            let norm = s.name.to_lowercase();
+            modified_names.contains(&norm) || !cached_vectors.contains_key(&norm)
+        })
+        .collect()
 }
 
 pub fn compile_staging_to_binary(force: bool) -> Result<CompilationStats> {
@@ -78,15 +111,14 @@ pub fn compile_staging_to_binary(force: bool) -> Result<CompilationStats> {
         }
     }
 
-    // 4. Check if reindexing is needed
-    let to_embed: Vec<&SkillItem> = if force {
-        skills.iter().collect()
-    } else {
-        diff.modified_or_new
-            .iter()
-            .filter(|s| !cached_vectors.contains_key(&s.name.to_lowercase()))
-            .collect()
-    };
+    // 4. Check if reindexing is needed (always re-embed modified/new skills even if an older vector existed)
+    let to_embed = select_skills_to_embed(
+        &skills,
+        &diff,
+        &cached_vectors,
+        prev_manifest.is_some(),
+        force,
+    );
 
     let mut newly_embedded: HashMap<String, Vec<f32>> = HashMap::new();
     let reindexed_count = to_embed.len();
@@ -107,6 +139,8 @@ pub fn compile_staging_to_binary(force: bool) -> Result<CompilationStats> {
                 let skill_name = &to_embed[skill_idx].name;
                 newly_embedded.insert(skill_name.to_lowercase(), vec);
             }
+            let done = ((chunk_idx + 1) * 32).min(reindexed_count);
+            info!("Compiler embedded {}/{} skills...", done, reindexed_count);
         }
     }
 
@@ -158,18 +192,21 @@ pub fn compile_staging_to_binary(force: bool) -> Result<CompilationStats> {
     let sb = SkillsBinary::new(final_records);
     let vb = VectorBinary::new(final_vectors);
 
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+
     let s_path = skills_bin_path();
     if let Some(parent) = s_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let s_tmp = s_path.with_extension("tmp");
+    let s_tmp = s_path.with_extension(format!("tmp.{}.{}", pid, seq));
     std::fs::write(&s_tmp, sb.serialize())?;
-    std::fs::rename(s_tmp, &s_path)?;
+    std::fs::rename(&s_tmp, &s_path)?;
 
     let v_path = vectors_path();
-    let v_tmp = v_path.with_extension("tmp");
+    let v_tmp = v_path.with_extension(format!("tmp.{}.{}", pid, seq));
     std::fs::write(&v_tmp, vb.serialize())?;
-    std::fs::rename(v_tmp, &v_path)?;
+    std::fs::rename(&v_tmp, &v_path)?;
 
     // 7. Update skills_manifest.json
     let entries_vec: Vec<_> = manifest_entries.values().cloned().collect();
@@ -199,4 +236,35 @@ pub fn compile_staging_to_binary(force: bool) -> Result<CompilationStats> {
         duration_ms,
         catalog_hash: cat_hash,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::checksum::CatalogDiff;
+
+    #[test]
+    fn test_modified_skill_reembedded_even_when_cached_vector_exists() {
+        let skill = SkillItem {
+            name: "edited-skill".to_string(),
+            relative_path: "staging/edited-skill".to_string(),
+            source: SkillSource::Embedded,
+            content: "new updated content".to_string(),
+        };
+        let diff = CatalogDiff {
+            modified_or_new: vec![skill.clone()],
+            unchanged: vec![],
+            deleted_slugs: vec![],
+        };
+        let mut cached = HashMap::new();
+        cached.insert("edited-skill".to_string(), vec![0.1f32, 0.2]);
+
+        let skills = [skill];
+        let selected = select_skills_to_embed(&skills, &diff, &cached, true, false);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "edited-skill");
+
+        let selected_first_compile = select_skills_to_embed(&skills, &diff, &cached, false, false);
+        assert!(selected_first_compile.is_empty());
+    }
 }

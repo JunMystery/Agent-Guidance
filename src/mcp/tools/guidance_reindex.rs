@@ -34,7 +34,7 @@ pub(crate) fn handle_reindex(
     };
 
     Ok(format!(
-        "# Skill Semantic Index Refreshed\n\n- Total Skills: {}\n- Catalog Fingerprint: {:016x}\n- Status: {}\n- Cache Path: `~/.agent-guidance/vectors.bin`\n\nAll workspace and embedded skills reindexed with rich semantic passages.",
+        "# Skill Semantic Index Refreshed\n\n- Total Skills: {}\n- Catalog Fingerprint: {:016x}\n- Status: {}\n- Cache Path: `~/.agent-guidance/passage_vectors.bin`\n\nAll workspace and embedded skills reindexed with rich semantic passages.",
         count, fp, model_status
     ))
 }

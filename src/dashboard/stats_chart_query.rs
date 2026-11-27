@@ -14,13 +14,13 @@ pub fn query_adaptive_savings(
         "last_7d" => {
             let step = 86400i64;
             let num = 7usize;
-            let start = ((now - (6 * step)) / step) * step;
+            let start = (now.saturating_sub(6 * step).max(0) / step) * step;
             (step, num, start)
         }
         "last_30d" => {
             let step = 86400i64;
             let num = 30usize;
-            let start = ((now - (29 * step)) / step) * step;
+            let start = (now.saturating_sub(29 * step).max(0) / step) * step;
             (step, num, start)
         }
         "lifetime" | "all" => {
@@ -52,16 +52,16 @@ pub fn query_adaptive_savings(
                 (None, Some(u)) => u,
                 (None, None) => now - (29 * 86400),
             };
-            let span = (now - earliest).max(86400);
+            let span = now.saturating_sub(earliest).max(86400);
             if span > 30 * 86400 {
                 let num = 30usize;
                 let step = (((span / 29) + 86399) / 86400) * 86400;
-                let start = ((now - (29 * step)) / step) * step;
+                let start = (now.saturating_sub(29 * step).max(0) / step) * step;
                 (step, num, start)
             } else {
                 let step = 86400i64;
                 let num = 30usize;
-                let start = ((now - (29 * step)) / step) * step;
+                let start = (now.saturating_sub(29 * step).max(0) / step) * step;
                 (step, num, start)
             }
         }
@@ -69,7 +69,7 @@ pub fn query_adaptive_savings(
             // Default: past_24h
             let step = 3600i64;
             let num = 24usize;
-            let start = ((now - (23 * step)) / step) * step;
+            let start = (now.saturating_sub(23 * step).max(0) / step) * step;
             (step, num, start)
         }
     };
@@ -109,7 +109,9 @@ pub fn query_adaptive_savings(
         };
         if let Ok(iter) = rows {
             for (slot, cnt, orig, opt, dur) in iter.flatten() {
-                slot_map.insert(slot, (cnt, orig, opt, dur));
+                if let Some(entry) = slot_map.get_mut(&slot) {
+                    *entry = (cnt, orig, opt, dur);
+                }
             }
         }
     }
@@ -176,7 +178,7 @@ pub fn query_adaptive_savings(
         .into_iter()
         .enumerate()
         .map(|(idx, (slot, (cnt, orig, opt, dur)))| {
-            let saved = orig - opt;
+            let saved = (orig - opt).max(0);
             let is_current = idx + 1 == total_len;
             json!({
                 "hour": slot,

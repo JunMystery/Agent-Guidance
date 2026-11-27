@@ -2,7 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const https = require('https');
-const { spawn, execSync } = require('child_process');
+const crypto = require('crypto');
+const { spawn, execFileSync } = require('child_process');
 
 const VERSION = require('../package.json').version;
 const REPO = 'JunMystery/Agent-Guidance';
@@ -96,21 +97,64 @@ function downloadFile(url, destPath) {
   });
 }
 
+function fetchTextOptional(url) {
+  return new Promise((resolve) => {
+    function get(currentUrl) {
+      https.get(currentUrl, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          return get(res.headers.location);
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          return resolve(null);
+        }
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => resolve(body));
+      }).on('error', () => resolve(null));
+    }
+    get(url);
+  });
+}
+
+async function verifySha256IfAvailable(filePath, shaUrl) {
+  const raw = await fetchTextOptional(shaUrl);
+  if (!raw) return;
+  const expected = (raw.trim().split(/\s+/)[0] || '').toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(expected)) return;
+  const actual = crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex').toLowerCase();
+  if (actual !== expected) {
+    try { fs.unlinkSync(filePath); } catch (_) {}
+    throw new Error(`SHA-256 verification failed for ${path.basename(filePath)} (${actual} !== ${expected})`);
+  }
+}
+
 function extractArchive(archivePath, targetDir, isZip) {
   if (isZip) {
     if (process.platform === 'win32') {
       try {
-        execSync(`tar.exe -xf "${archivePath}" -C "${targetDir}"`, { stdio: 'ignore' });
+        execFileSync('tar.exe', ['-xf', archivePath, '-C', targetDir], { stdio: 'ignore' });
         return;
       } catch (_) {
-        const psCmd = `Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${targetDir}' -Force`;
-        execSync(`powershell -NoProfile -NonInteractive -Command "${psCmd}"`, { stdio: 'inherit' });
+        execFileSync(
+          'powershell',
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            '& { param($src,$dst) Expand-Archive -LiteralPath $src -DestinationPath $dst -Force }',
+            archivePath,
+            targetDir,
+          ],
+          { stdio: 'inherit' }
+        );
         return;
       }
     }
-    execSync(`unzip -q -o "${archivePath}" -d "${targetDir}"`, { stdio: 'inherit' });
+    execFileSync('unzip', ['-q', '-o', archivePath, '-d', targetDir], { stdio: 'inherit' });
   } else {
-    execSync(`tar -xzf "${archivePath}" -C "${targetDir}"`, { stdio: 'inherit' });
+    execFileSync('tar', ['-xzf', archivePath, '-C', targetDir], { stdio: 'inherit' });
   }
 }
 
@@ -130,6 +174,7 @@ async function ensureBinary() {
 
   process.stderr.write(`[agent-guidance] Downloading v${VERSION} (${target.asset})...\n`);
   await downloadFile(downloadUrl, archivePath);
+  await verifySha256IfAvailable(archivePath, `${downloadUrl}.sha256`);
 
   process.stderr.write(`[agent-guidance] Extracting ${target.asset}...\n`);
   extractArchive(archivePath, cacheDir, target.isZip);

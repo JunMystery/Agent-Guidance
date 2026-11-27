@@ -23,6 +23,16 @@ pub fn generate_zoom_slice(
     target_symbol: &str,
 ) -> Option<ZoomSliceResult> {
     let symbols = AstEngine::extract_symbols(content, lang);
+    generate_zoom_slice_from_symbols(content, lang, file_path, target_symbol, &symbols)
+}
+
+pub(crate) fn generate_zoom_slice_from_symbols(
+    content: &str,
+    lang: AstLanguage,
+    file_path: &str,
+    target_symbol: &str,
+    symbols: &[AstSymbol],
+) -> Option<ZoomSliceResult> {
     let lines: Vec<&str> = content.lines().collect();
     let total_lines = lines.len();
 
@@ -41,10 +51,11 @@ pub fn generate_zoom_slice(
         return None;
     }
 
-    let fn_symbols: Vec<&AstSymbol> = symbols
+    let mut fn_symbols: Vec<&AstSymbol> = symbols
         .iter()
         .filter(|s| s.kind == "function" || s.kind == "method")
         .collect();
+    fn_symbols.sort_by_key(|s| (s.start_line, s.end_line));
 
     let is_py = matches!(lang, AstLanguage::Python);
     let mut sliced = Vec::new();
@@ -54,7 +65,7 @@ pub fn generate_zoom_slice(
     let mut folded_count = 0;
 
     for sym in fn_symbols {
-        if sym.start_line < cur_line {
+        if sym.start_line == 0 || sym.start_line > total_lines || sym.start_line < cur_line {
             continue;
         }
 
@@ -65,43 +76,44 @@ pub fn generate_zoom_slice(
         }
 
         if cur_line <= total_lines {
+            let end_line = sym.end_line.min(total_lines);
             if is_target(sym) {
                 // Expanded focus node
-                sliced.push(format!("// >>> [ZOOM FOCUS: {} (L{}-L{})] >>>", sym.name, sym.start_line, sym.end_line));
-                for l in sym.start_line..=sym.end_line.min(total_lines) {
+                sliced.push(format!("// >>> [ZOOM FOCUS: {} (L{}-L{})] >>>", sym.name, sym.start_line, end_line));
+                for l in sym.start_line..=end_line {
                     sliced.push(lines[l - 1].to_string());
                 }
                 sliced.push(format!("// <<< [END ZOOM FOCUS: {}] <<<", sym.name));
-            } else if sym.end_line > sym.start_line + 1 {
+            } else if end_line > sym.start_line + 1 {
                 // Fold sibling function body
                 folded_count += 1;
                 let start_idx = sym.start_line - 1;
                 let first_line = lines[start_idx];
-                let span = sym.end_line.saturating_sub(sym.start_line);
+                let span = end_line.saturating_sub(sym.start_line);
 
                 if is_py {
                     sliced.push(first_line.to_string());
                     let indent: String = first_line.chars().take_while(|c| c.is_whitespace()).collect();
                     let body_indent = if indent.is_empty() { "    ".to_string() } else { format!("{}    ", indent) };
-                    sliced.push(format!("{}... /* L{}-{}: {} lines folded */", body_indent, sym.start_line + 1, sym.end_line, span));
+                    sliced.push(format!("{}... /* L{}-{}: {} lines folded */", body_indent, sym.start_line + 1, end_line, span));
                 } else {
                     let indent: String = first_line.chars().take_while(|c| c.is_whitespace()).collect();
                     let trimmed = first_line.trim();
                     if trimmed.ends_with('{') {
                         let header = trimmed.trim_end_matches('{').trim_end();
-                        sliced.push(format!("{}{} {{ /* L{}-{}: {} lines folded */ }}", indent, header, sym.start_line + 1, sym.end_line, span));
+                        sliced.push(format!("{}{} {{ /* L{}-{}: {} lines folded */ }}", indent, header, sym.start_line + 1, end_line, span));
                     } else {
                         sliced.push(first_line.to_string());
-                        sliced.push(format!("{}{{ /* L{}-{}: {} lines folded */ }}", indent, sym.start_line + 1, sym.end_line, span));
+                        sliced.push(format!("{}{{ /* L{}-{}: {} lines folded */ }}", indent, sym.start_line + 1, end_line, span));
                     }
                 }
             } else {
                 // Single-line function
-                for l in sym.start_line..=sym.end_line.min(total_lines) {
+                for l in sym.start_line..=end_line {
                     sliced.push(lines[l - 1].to_string());
                 }
             }
-            cur_line = sym.end_line + 1;
+            cur_line = end_line + 1;
         }
     }
 
@@ -132,3 +144,57 @@ pub fn generate_zoom_slice(
 #[cfg(test)]
 #[path = "zoom_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod ordering_tests {
+    use super::*;
+
+    fn mk_fn(name: &str, start_line: usize, end_line: usize) -> AstSymbol {
+        AstSymbol {
+            name: name.to_string(),
+            kind: "function".to_string(),
+            start_line,
+            end_line,
+            start_byte: 0,
+            end_byte: 0,
+            signature: format!("fn {}()", name),
+            body_start_line: None,
+            body_end_line: None,
+            parent_symbol: None,
+            package: None,
+            language: "rust".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_zoom_slice_sorts_out_of_order_and_guards_invalid_lines() {
+        let code = "\
+fn target_fn() {
+    let x = 10;
+    let y = 20;
+    x + y
+}
+
+fn sibling_fn() {
+    let a = 1;
+    let b = 2;
+    a + b
+}";
+        // Pass sibling BEFORE target, plus invalid 0 and out-of-bounds line numbers
+        let symbols = vec![
+            mk_fn("sibling_fn", 7, 11),
+            mk_fn("zero_line", 0, 2),
+            mk_fn("oob_line", 200, 210),
+            mk_fn("target_fn", 1, 5),
+        ];
+
+        let res = generate_zoom_slice_from_symbols(code, AstLanguage::Rust, "demo.rs", "target_fn", &symbols)
+            .expect("zoom slice should succeed");
+        assert!(res.target_found);
+        assert_eq!(res.folded_functions_count, 1);
+        assert!(res.sliced_content.contains("ZOOM FOCUS: target_fn"));
+        assert!(res.sliced_content.contains("let x = 10;"));
+        assert!(res.sliced_content.contains("fn sibling_fn() { /* L8-11: 4 lines folded */ }"));
+        assert!(!res.sliced_content.contains("let a = 1;"));
+    }
+}

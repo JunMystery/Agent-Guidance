@@ -1,13 +1,18 @@
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::catalog::store::SkillItem;
+use crate::catalog::store::{SkillItem, SkillSource};
 
 pub const PRECOMPUTED_VECTORS: &[u8] = include_bytes!("../precomputed_vectors.bin");
 pub const PRECOMPUTED_MANIFEST: &[u8] = include_bytes!("../precomputed_manifest.json");
+static PASSAGE_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub fn cache_dir() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("ag_test_cache_{}", std::process::id()));
+    }
     dirs::home_dir()
         .map(|h| h.join(".agent-guidance"))
         .unwrap_or_else(|| PathBuf::from(".agent-guidance"))
@@ -17,12 +22,31 @@ pub fn manifest_path() -> PathBuf {
     cache_dir().join("passage_manifest.json")
 }
 
+pub fn passage_vectors_path() -> PathBuf {
+    cache_dir().join("passage_vectors.bin")
+}
+
 pub fn vectors_path() -> PathBuf {
     cache_dir().join("vectors.bin")
 }
 
 pub fn skills_bin_path() -> PathBuf {
     cache_dir().join("skills.bin")
+}
+
+fn atomic_write_bytes(path: &PathBuf, data: &[u8]) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let seq = PASSAGE_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("tmp.{}.{}", std::process::id(), seq));
+    if std::fs::write(&tmp, data).is_ok() {
+        if std::fs::rename(&tmp, path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    } else {
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
 
 pub fn catalog_fingerprint(skills: &[SkillItem]) -> u64 {
@@ -109,7 +133,10 @@ pub fn load_precomputed_cache(skills: &[SkillItem]) -> Option<Vec<Vec<f32>>> {
         return Some(vectors);
     }
 
-    // Dynamic alignment ONLY if every requested skill exists in the precomputed map (never zero-fill missing skills).
+    // Align by name only when every skill is an unmodified embedded skill; modified staged/workspace skills must re-embed.
+    if !skills.iter().all(|s| matches!(s.source, SkillSource::Embedded)) {
+        return None;
+    }
     let (_, name_to_vec) = load_precomputed_map()?;
     let mut aligned_vectors = Vec::with_capacity(skills.len());
     for skill in skills {
@@ -158,11 +185,11 @@ pub fn save_passage_cache(vectors: &[Vec<f32>], skills: &[SkillItem]) {
     });
 
     if let Ok(manifest_str) = serde_json::to_string(&manifest) {
-        let _ = std::fs::write(manifest_path(), manifest_str);
+        atomic_write_bytes(&manifest_path(), manifest_str.as_bytes());
     }
 
     let vb = super::binary_format::VectorBinary::new(vectors.to_vec());
-    let _ = std::fs::write(vectors_path(), vb.serialize());
+    atomic_write_bytes(&passage_vectors_path(), &vb.serialize());
 }
 
 pub fn load_passage_cache(skills: &[SkillItem]) -> Option<Vec<Vec<f32>>> {
@@ -174,7 +201,7 @@ pub fn load_passage_cache(skills: &[SkillItem]) -> Option<Vec<Vec<f32>>> {
         return None;
     }
 
-    let data = std::fs::read(vectors_path()).ok()?;
+    let data = std::fs::read(passage_vectors_path()).ok()?;
     if let Ok(vb) = super::binary_format::VectorBinary::deserialize(&data) {
         if vb.count as usize == skills.len() {
             return Some(vb.vectors);
@@ -182,4 +209,20 @@ pub fn load_passage_cache(skills: &[SkillItem]) -> Option<Vec<Vec<f32>>> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_staged_override_does_not_reuse_stale_embedded_vector() {
+        let modified = SkillItem {
+            name: "rust-patterns".to_string(),
+            relative_path: "rust-patterns/SKILL.md".to_string(),
+            source: SkillSource::LocalWorkspace("staging".to_string()),
+            content: "# Custom modified skill".to_string(),
+        };
+        assert!(load_precomputed_cache(&[modified]).is_none());
+    }
 }

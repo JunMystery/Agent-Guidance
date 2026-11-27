@@ -19,7 +19,7 @@ pub struct RemoteMlClient {
 
 impl RemoteMlClient {
     pub fn new(config: &ServerConfig) -> Self {
-        let timeout = Duration::from_millis(config.timeout_ms);
+        let timeout = Duration::from_millis(config.timeout_ms.max(100));
         let agent = AgentBuilder::new().timeout(timeout).build();
 
         Self {
@@ -69,6 +69,9 @@ impl RemoteMlClient {
                     return Ok(c);
                 }
                 return Err(anyhow!("Received 304 Not Modified but local cache is empty"));
+            }
+            Err(ureq::Error::Status(status @ (401 | 403), _)) => {
+                return Err(anyhow!("Authentication failed ({}) fetching stats from {}", status, url));
             }
             Err(e) => {
                 if let Some(c) = cached {

@@ -1,21 +1,71 @@
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use super::stats_query_aggregates::{query_phase_and_gov, query_summaries};
+
+static INITIALIZED_STATS_DBS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+
+fn has_required_schema(conn: &Connection) -> bool {
+    conn.prepare("SELECT target FROM tool_calls LIMIT 0").is_ok()
+        && conn.prepare("SELECT 1 FROM skill_loads LIMIT 0").is_ok()
+        && conn.prepare("SELECT 1 FROM embed_queries LIMIT 0").is_ok()
+}
+
+fn open_stats_connection(db_path: &Path) -> Result<Connection> {
+    let key = db_path.canonicalize().unwrap_or_else(|_| db_path.to_path_buf());
+    let initialized_set = INITIALIZED_STATS_DBS.get_or_init(|| Mutex::new(HashSet::new()));
+    let already_initialized = initialized_set
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&key);
+
+    let ro_flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX;
+    let conn = Connection::open_with_flags(db_path, ro_flags)?;
+    let _ = conn.busy_timeout(Duration::from_millis(5000));
+
+    if already_initialized {
+        return Ok(conn);
+    }
+
+    if !has_required_schema(&conn) {
+        drop(conn);
+        let rw_conn = Connection::open_with_flags(
+            db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX,
+        )?;
+        let _ = rw_conn.busy_timeout(Duration::from_millis(5000));
+        ensure_tables(&rw_conn);
+        drop(rw_conn);
+
+        initialized_set
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key);
+
+        let ro_conn = Connection::open_with_flags(db_path, ro_flags)?;
+        let _ = ro_conn.busy_timeout(Duration::from_millis(5000));
+        return Ok(ro_conn);
+    }
+
+    initialized_set
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key);
+    Ok(conn)
+}
 
 pub fn query_usage_stats(db_path: &Path, proj_filter: Option<&str>, timeframe: &str) -> Result<Value> {
     if !db_path.exists() {
         return Ok(json!({ "db_status": "missing" }));
     }
 
-    let conn = Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX,
-    )?;
-    ensure_tables(&conn);
+    let conn = open_stats_connection(db_path)?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -254,5 +304,93 @@ fn ensure_tables(conn: &Connection) {
     let _ = conn.execute("ALTER TABLE tool_calls ADD COLUMN target TEXT", []);
     let _ = conn.execute("CREATE TABLE IF NOT EXISTS skill_loads (id INTEGER PRIMARY KEY AUTOINCREMENT, skill_id TEXT NOT NULL, loaded_at INTEGER NOT NULL)", []);
     let _ = conn.execute("CREATE TABLE IF NOT EXISTS embed_queries (id INTEGER PRIMARY KEY AUTOINCREMENT, query_text TEXT NOT NULL, queried_at INTEGER NOT NULL)", []);
-    let _ = conn.execute("DELETE FROM tool_calls WHERE tool_name = 'mcp_tool'", []);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static STATS_TEST_SEQ: AtomicU64 = AtomicU64::new(1);
+
+    fn unique_stats_test_dir(label: &str) -> PathBuf {
+        let seq = STATS_TEST_SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "ag_stats_query_unit_{}_{}_{}",
+            label,
+            std::process::id(),
+            seq
+        ))
+    }
+
+    #[test]
+    fn test_query_usage_stats_initializes_fresh_db_and_reuses_read_only() {
+        let dir = unique_stats_test_dir("fresh");
+        fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("usage.db");
+        let conn = Connection::open(&db_path).unwrap();
+        drop(conn);
+
+        let first = query_usage_stats(&db_path, None, "past_24h").unwrap();
+        assert_eq!(first["db_status"], "ok");
+
+        let second = query_usage_stats(&db_path, None, "past_24h").unwrap();
+        assert_eq!(second["db_status"], "ok");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_query_usage_stats_does_not_mutate_or_block_on_wal_writer() {
+        let dir = unique_stats_test_dir("wal_ro");
+        fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("usage.db");
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let writer = Connection::open(&db_path).unwrap();
+        let _: String = writer
+            .query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))
+            .unwrap();
+        ensure_tables(&writer);
+        writer
+            .execute(
+                "INSERT INTO tool_calls (tool_name, operation, started_at, tokens_original, tokens_optimized)
+                 VALUES ('project_context', 'read', ?1, 500, 100)",
+                params![now],
+            )
+            .unwrap();
+        writer
+            .execute(
+                "INSERT INTO tool_calls (tool_name, operation, started_at)
+                 VALUES ('mcp_tool', 'legacy', ?1)",
+                params![now],
+            )
+            .unwrap();
+
+        // Hold an active write lock via BEGIN IMMEDIATE while querying stats.
+        writer.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        let stats = query_usage_stats(&db_path, None, "past_24h").unwrap();
+        writer.execute_batch("ROLLBACK;").unwrap();
+
+        assert_eq!(stats["db_status"], "ok");
+        assert_eq!(stats["totals"]["tool_calls"], 1);
+
+        // Verify query_usage_stats did not execute a DELETE on 'mcp_tool' rows.
+        let mcp_tool_rows: i64 = writer
+            .query_row(
+                "SELECT COUNT(*) FROM tool_calls WHERE tool_name = 'mcp_tool'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(mcp_tool_rows, 1);
+
+        drop(writer);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

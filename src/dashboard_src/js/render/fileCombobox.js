@@ -21,7 +21,7 @@ export function initFileCombobox(container, options = {}) {
   let currentSelection = selectedFile || 'all';
 
   const getDisplayVal = (val) => {
-    if (val === 'all') return `🌐 ${t('graph.show_all_files')}`;
+    if (val === 'all') return t('graph.show_all_files');
     return val ? val : '';
   };
 
@@ -56,7 +56,7 @@ export function initFileCombobox(container, options = {}) {
 
     // Always include "all" option if matching or no query
     if (!q || 'all'.includes(q) || t('graph.show_all_files').toLowerCase().includes(q)) {
-      items.push({ value: 'all', label: `🌐 ${t('graph.show_all_files')}`, sub: 'Cross-file call relationships' });
+      items.push({ value: 'all', label: t('graph.show_all_files'), sub: 'Cross-file call relationships' });
     }
 
     // Filter file items
@@ -81,7 +81,7 @@ export function initFileCombobox(container, options = {}) {
         <div class="combobox-item" data-value="${escapeHtml(item.value)}" data-index="${idx}"
           style="padding: 5px 8px; border-radius: 4px; cursor: pointer; display: flex; flex-direction: column; gap: 1px; background: ${isAct ? '#0284c730' : (isSel ? '#0284c718' : 'transparent')}; border-left: 2px solid ${isSel ? '#00e5ff' : 'transparent'};">
           <div style="font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: ${isSel ? '#00e5ff' : '#f1f5f9'}; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
-            ${item.value === 'all' ? '' : '📄 '}${escapeHtml(item.label)}
+            ${escapeHtml(item.label)}
           </div>
           <div style="font-family: var(--font-mono); font-size: 9px; color: #64748b; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
             ${escapeHtml(item.sub)}
@@ -107,7 +107,7 @@ export function initFileCombobox(container, options = {}) {
     isOpen = true;
     activeIndex = -1;
     dropdown.style.display = 'block';
-    renderOptions(input.value.startsWith('🌐') ? '' : input.value);
+    renderOptions(currentSelection === 'all' && input.value === getDisplayVal('all') ? '' : input.value);
   }
 
   function closeDropdown() {

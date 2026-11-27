@@ -59,7 +59,7 @@ The server enforces a 7-stage lifecycle: `Context → Plan → Ask_Revise → Bu
 Every MCP response is filtered through a language-aware compressor that strips redundant comments, collapses whitespace, and caps reads at 300 lines per request to protect token budgets — shielding your prompt context from token bloat.
 
 ### Skill Catalog
-279 embedded skills (440 vector passages) covering backend, frontend, testing, security, DevOps, data, research, and 12+ language ecosystems. Loaded via `select_skills` or `guidance(operation="get", identifier="<name>")` — no context wasted on unused skills.
+629 embedded skills with precomputed semantic passage vectors covering backend, frontend, testing, security (OWASP), Cloudflare platform & Workers, DevOps, data, research, UI/UX, and 12+ language ecosystems. Loaded via `select_skills` or `guidance(operation="get", topic="<name>")` (alias: `identifier`) — no context wasted on unused skills.
 
 ## Next Steps
 

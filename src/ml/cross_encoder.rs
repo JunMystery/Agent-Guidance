@@ -27,8 +27,14 @@ impl CrossEncoder {
         let config_str = std::fs::read_to_string(config_path)?;
         let config: Config = serde_json::from_str(&config_str)?;
 
-        let tokenizer = Tokenizer::from_file(tokenizer_path)
+        let mut tokenizer = Tokenizer::from_file(tokenizer_path)
             .map_err(|e| anyhow::anyhow!("Tokenizer load error: {}", e))?;
+        tokenizer
+            .with_truncation(Some(tokenizers::TruncationParams {
+                max_length: 512,
+                ..Default::default()
+            }))
+            .map_err(|e| anyhow::anyhow!("Tokenizer truncation config error: {}", e))?;
 
         let vb = unsafe {
             VarBuilder::from_mmaped_safetensors(&[weights_path], candle_core::DType::F32, &device)?
@@ -53,16 +59,16 @@ impl CrossEncoder {
     }
 
     pub(crate) fn score(&self, query: &str, candidate: &str) -> Result<f32> {
-        let text = format!("{} [SEP] {}", query, candidate);
         let encoding = self
             .tokenizer
-            .encode(text, true)
+            .encode((query, candidate), true)
             .map_err(|e| anyhow::anyhow!("Encoding error: {}", e))?;
 
         let token_ids = Tensor::new(encoding.get_ids(), &self.device)?.unsqueeze(0)?;
         let attention_mask =
             Tensor::new(encoding.get_attention_mask(), &self.device)?.unsqueeze(0)?;
-        let token_type_ids = token_ids.zeros_like()?;
+        let token_type_ids =
+            Tensor::new(encoding.get_type_ids(), &self.device)?.unsqueeze(0)?;
 
         let hidden = self
             .model

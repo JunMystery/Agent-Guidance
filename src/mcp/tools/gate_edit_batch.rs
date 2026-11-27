@@ -81,7 +81,9 @@ pub(crate) fn handle_batch_authorize(
     let _ = state.auto_checkpoint(proj_path);
 
     let total = passed_count + blocked_count;
-    let overall_status = if blocked_count == 0 {
+    let overall_status = if total == 0 {
+        "BLOCKED (0/0 authorized)".to_string()
+    } else if blocked_count == 0 {
         format!("PASSED ({}/{} authorized)", passed_count, total)
     } else if passed_count > 0 {
         format!(

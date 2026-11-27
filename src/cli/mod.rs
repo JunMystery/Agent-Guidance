@@ -34,11 +34,6 @@ pub fn handle_cli_commands(args: &[String]) -> Result<bool> {
         return cleanup::handle_cleanup(args);
     }
 
-    if args.contains(&"--reindex-skills".to_string()) {
-        let force = args.contains(&"--force".to_string());
-        return handle_reindex_skills(force);
-    }
-
     if let Some(pos) = args.iter().position(|a| a == "--delete-skill") {
         let names: Vec<String> = args[pos + 1..]
             .iter()
@@ -201,23 +196,6 @@ fn handle_stats() -> Result<bool> {
         }
     }
     println!("============================================================");
-    Ok(true)
-}
-
-fn handle_reindex_skills(force: bool) -> Result<bool> {
-    println!("Reindexing skill registry into binary format (force: {})...", force);
-    match crate::ml::embeddings::compiler::compile_staging_to_binary(force) {
-        Ok(stats) => {
-            println!("[OK] Skills compilation complete in {} ms:", stats.duration_ms);
-            println!("  - Total Skills:     {}", stats.total_skills);
-            println!("  - Reindexed:        {}", stats.reindexed);
-            println!("  - Unchanged:        {}", stats.unchanged_skipped);
-            println!("  - Catalog Hash:     {}", stats.catalog_hash);
-        }
-        Err(e) => {
-            eprintln!("[FAIL] Reindexing failed: {}", e);
-        }
-    }
     Ok(true)
 }
 

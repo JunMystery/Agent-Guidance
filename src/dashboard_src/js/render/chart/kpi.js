@@ -21,7 +21,7 @@ export function buildKpi(tot, hours = []) {
   return '<div class="savings-kpi">' +
     '<div class="kpi"><span class="kpi-label">' + t('chart.total_invocations') + '</span><span class="kpi-val kpi-opt">' + totalCalls.toLocaleString() + '</span></div>' +
     '<div class="kpi"><span class="kpi-label">' + t('chart.avg_latency') + '</span><span class="kpi-val">' + avgLatency + 'ms</span></div>' +
-    '<div class="kpi kpi-velocity"><span class="kpi-label">' + t('chart.peak_invocations') + '</span><span class="kpi-val kpi-peak">⚡ ' + peakCalls + unit + '</span></div>' +
+    '<div class="kpi kpi-velocity"><span class="kpi-label">' + t('chart.peak_invocations') + '</span><span class="kpi-val kpi-peak">' + peakCalls + unit + '</span></div>' +
     '<div class="kpi"><span class="kpi-label">' + t('chart.opt_payload') + '</span><span class="kpi-val kpi-saved">' + fmtTokens(opt) + '</span></div>' +
     '</div>';
 }

@@ -131,22 +131,45 @@ pub(crate) fn handle_read(params: Option<Value>, state: &ServerState) -> Result<
                     }))
                 }
                 _ => {
-                    if uri.starts_with("standards://skill/") {
-                        let skill_name = uri.trim_start_matches("standards://skill/");
-                        if let Some(content) = crate::catalog::store::get_embedded_skill(skill_name)
-                        {
-                            return Ok(json!({
-                                "contents": [
-                                    {
-                                        "uri": uri,
-                                        "mimeType": "text/markdown",
-                                        "text": content
-                                    }
-                                ]
-                            }));
-                        }
+                    if let Some(skill_name) = uri.strip_prefix("standards://skill/")
+                        && !skill_name.is_empty()
+                        && !skill_name.contains("..")
+                        && !skill_name.contains('\\')
+                        && !skill_name.contains('\0')
+                        && !skill_name.starts_with('/')
+                        && let Some(content) = crate::catalog::store::get_embedded_skill(skill_name)
+                    {
+                        return Ok(json!({
+                            "contents": [
+                                {
+                                    "uri": uri,
+                                    "mimeType": "text/markdown",
+                                    "text": content
+                                }
+                            ]
+                        }));
                     }
                     Err((-32602, format!("Resource not found: {}", uri)))
                 }
             }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resources_read_rejects_skill_path_traversal() {
+        let state = ServerState::new();
+        for uri in [
+            "standards://skill/../../Cargo.toml",
+            "standards://skill/..\\Cargo.toml",
+            "standards://skill/foo\0bar",
+            "standards://skill//etc/passwd",
+            "standards://skill/standards://skill/agent-guidance",
+        ] {
+            let err = handle_read(Some(json!({ "uri": uri })), &state).unwrap_err();
+            assert_eq!(err.0, -32602, "Expected -32602 for {}", uri);
+        }
+    }
 }

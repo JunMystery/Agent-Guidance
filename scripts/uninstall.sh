@@ -22,8 +22,16 @@ elif [ "$(uname -s)" = "Darwin" ]; then
     rm -f "$plist" 2>/dev/null || true
 fi
 
+for bin in "$HOME/.local/bin/agent-guidance" "$HOME/.cargo/bin/agent-guidance"; do
+    if [ -x "$bin" ]; then
+        "$bin" --uninstall &>/dev/null || true
+        break
+    fi
+done
+
 killall agent-guidance agent-guidance-mcp &>/dev/null || true
-pkill -f agent-guidance &>/dev/null || true
+pkill -x agent-guidance &>/dev/null || true
+pkill -x agent-guidance-mcp &>/dev/null || true
 
 if command -v uv &> /dev/null; then
     uv tool uninstall agent-guidance-mcp 2>/dev/null || true

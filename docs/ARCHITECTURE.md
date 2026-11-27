@@ -40,7 +40,7 @@ src/
 │   ├── tray_platform.rs# Cross-platform browser & directory opener helpers
 │   └── lock.rs        # File-lock singleton mutex guard
 ├── catalog/           # Skills Catalog & Architecture Blueprints
-│   ├── store.rs       # 279 embedded skills (rust_embed) + workspace .agents/skills scanning
+│   ├── store.rs       # 629 embedded skills (rust_embed) + workspace .agents/skills scanning
 │   ├── blueprint.rs   # Upfront dynamic decomposition blueprints for 6 architecture patterns
 │   ├── rules.rs       # Tech stack & language-specific micro-rulesets
 │   └── mod.rs
@@ -61,28 +61,29 @@ src/
 │   └── hnsw/          # High-performance in-memory vector index for symbol retrieval
 ├── dashboard/         # Embedded Web Dashboard Server & REST API
 │   ├── stats.rs       # GET /api/stats with 2s TTL in-memory cache
-│   ├── stats_query.rs # SQLite queries for 24h summaries, tool breakdown, phase cadence
+│   ├── stats_query.rs # Read-only SQLite queries (after one-time schema init, 5s busy_timeout) for 24h/7d/30d/all metrics
 │   ├── graph.rs       # GET /api/graph code graph serializer & Mermaid DAG exporter
 │   ├── graph_query.rs # Graph query builder and caller/callee edge extraction
 │   ├── projects.rs    # GET /api/projects multi-repository registry with active/missing disk checks & root resolution
 │   ├── projects_container.rs # Generic repository container boundary detection
 │   ├── projects_path.rs # Project root resolution (.agent-context & .git anchor detection)
-│   ├── projects_prune.rs# Auto-prune and stale project cleaner
+│   ├── projects_prune.rs# Safe auto-prune and stale project cleaner (exact OS temp / test prefix checks)
 │   ├── rules_api.rs   # Micro-rules REST API with legacy default auto-migration
 │   ├── logs_api.rs    # GET /api/logs paginated diagnostic log query & clear endpoint
-│   └── mod.rs         # tiny_http worker pool, asset router, port allocator (11997)
+│   └── mod.rs         # tiny_http worker pool, Origin/Bearer auth, 1 MB body cap, port allocator (11997)
 ├── dashboard_src/     # Dashboard Frontend SPA (HTML5, Vanilla ES Modules, CSS, SVG)
 ├── mcp/               # Model Context Protocol Engine
 │   ├── router/        # MCP JSON-RPC protocol router & tool schema definitions
 │   ├── state/         # ServerState, stage state machine, 31-keyword multi-lingual approval
 │   ├── tools/         # 6 core tool dispatchers (pipeline, skills, guidance, context, gate, continuity)
+│   ├── snapshots.rs   # Session pre-edit snapshots (.agent-context/snapshots/{session_id}/<rel_path>) used by rollback, diff, handoff
 │   ├── fingerprint.rs # Security provenance, pure-Rust SHA-256 digest, platform digital signature detection
 │   ├── db/            # SQLite usage.db telemetry logging & daily aggregations
 │   └── mod.rs
 ├── ml/                # Machine Learning & Vector Search Engine
-│   ├── embeddings/    # Candle BERT (multilingual-e5-small) + cached passage vectors
-│   ├── worker/        # Remote ML worker HTTP daemon and endpoint handlers
-│   ├── cross_encoder.rs# MiniLM cross-encoder reranker
+│   ├── embeddings/    # Candle BERT (multilingual-e5-small) + local warmup cache (~/.agent-guidance/passage_vectors.bin)
+│   ├── worker/        # Remote ML worker HTTP daemon (vectors.bin, AGENT_GUIDANCE_API_KEY, non-loopback key enforcement, 1 MB body cap)
+│   ├── cross_encoder.rs# MiniLM cross-encoder reranker (512-token truncation, pair encoding)
 │   └── mod.rs
 └── optimizer/         # Token Optimization Engine
     ├── compressor.rs  # Language-aware token compressor & whitespace stripper
@@ -189,7 +190,7 @@ The daemon accepts connections immediately without blocking handshake (< 2ms res
 ```
 daemon start / connection opened
   └─ spawn_background_auto_warmup() (detached thread)
-      ├─ load_precomputed_cache() → instant 440-vector load (0.1ms if count matches)
+      ├─ load_precomputed_cache() → instant 629-vector load (0.1ms if count matches)
       ├─ cached_model() → Candle BERT OnceLock init (~0.5s disk load)
       └─ cached_cross_encoder() → CrossEncoder OnceLock init (~0.07s)
 ```
@@ -202,7 +203,7 @@ daemon start / connection opened
 |---|---|---|---|
 | Embedding | `intfloat/multilingual-e5-small` (384-dim) | 118MB | ~560ms (background) |
 | Cross-encoder | `cross-encoder/ms-marco-MiniLM-L-6-v2` | 80MB | ~70ms (background) |
-| Precomputed Cache | 440 skill passage vectors | — | ~0.1ms (instant) |
+| Precomputed Cache | 629 skill passage vectors | — | ~0.1ms (instant) |
 
 ### Cached Passage Embeddings (`PASSAGE_CACHE`)
 
@@ -210,7 +211,7 @@ daemon start / connection opened
 static PASSAGE_CACHE: OnceLock<RwLock<Vec<PassageCache>>> = OnceLock::new();
 ```
 
-- Embedded and workspace-local skill passage vectors are cached by catalog fingerprint during `warmup_cache()`
+- Embedded and workspace-local skill passage vectors are cached by catalog fingerprint during `warmup_cache()` and persisted locally at `~/.agent-guidance/passage_vectors.bin` (kept separate from the remote ML worker's compiled `vectors.bin`)
 - Shared across all daemon connections via module-level `OnceLock`
 - Subsequent `task_pipeline` calls: 1 query embed plus cached vector scoring
 - Skill content truncated to 300 chars for embedding
@@ -230,7 +231,7 @@ task_pipeline(query)
 
 ### Cross-Encoder Reranker
 
-Second-stage re-ranking using a single-output regression cross-encoder:
+Second-stage re-ranking using a single-output regression cross-encoder (`src/ml/cross_encoder.rs`):
 
 ```rust
 struct CrossEncoder {
@@ -239,7 +240,8 @@ struct CrossEncoder {
 }
 ```
 
-- Scores: relevance logit from `narrow(1, 0, 1)` (single label)
+- Input encoding: native tokenizer sentence-pair encoding `(query, candidate)` with `token_type_ids` and mandatory 512-token truncation (`max_length: 512`)
+- Scores: relevance logit from `narrow(1, 0, 1)` (single label); normalized via sigmoid before hybrid scoring in the remote ML worker
 - Fallback: keyword-frequency ranking if cross-encoder fails
 
 ### `--setup` Pre-download
@@ -273,13 +275,12 @@ task_pipeline call
 
 | Tool | Gate | Notes |
 |---|---|---|
-| `task_pipeline` | ✅ Unlocks | Unlocks priority gate and transitions stage Context → Plan |
-| `select_skills` | ✅ Ungated | Whitelisted; confirm and inject skills into context |
-| `workflow_gate` | ✅ Ungated | Whitelisted governance & state machine tool |
-| `session_continuity` | ✅ Ungated | Whitelisted session persistence & learnings |
-| `guidance` | 🔒 Gated | Blocked before `task_pipeline` (`PRIORITY_REQUIRED`) |
-| `project_context` | 🔒 Gated | Blocked before `task_pipeline` (`PRIORITY_REQUIRED`) |
-| `ui_ux` | 🔒 Gated | Blocked before `task_pipeline` (`PRIORITY_REQUIRED`) |
+| `task_pipeline` | Unlocks | Unlocks priority gate and transitions stage Context → Plan |
+| `select_skills` | Ungated | Whitelisted; confirm and inject skills into context |
+| `workflow_gate` | Ungated | Whitelisted governance & state machine tool |
+| `session_continuity` | Ungated | Whitelisted session persistence & learnings |
+| `guidance` | Gated | Blocked before `task_pipeline` (`PRIORITY_REQUIRED`); includes `ui_ux`, `docs`, `precode`, `verify`, `reindex` operations |
+| `project_context` | Gated | Blocked before `task_pipeline` (`PRIORITY_REQUIRED`) |
 
 ---
 
@@ -367,7 +368,7 @@ To ensure total runtime observability and instant root-cause identification:
   - `INFO`: **3 days** retention (debug diagnostics).
   - Hard rolling quota of **10,000 entries** managed via FIFO cleanup.
 - **Web Dashboard Diagnostics View (`#logs`)**:
-  - Dedicated `⚠️ Diagnostics` view exposing live KPI status cards, level filters, real-time message/stacktrace search, and an expandable drawer to inspect complete runtime stack traces.
+  - Dedicated `Diagnostics` view exposing live KPI status cards, level filters, real-time message/stacktrace search, and an expandable drawer to inspect complete runtime stack traces.
 
 ---
 
@@ -415,22 +416,22 @@ agent-guidance --setup
 |---|---|
 | `--setup` | Register MCP clients in all IDE configs and pre-download ML models |
 | `--verify-setup` | Verify MCP configuration paths across all IDE clients |
-| `--upgrade`, `--self-update` | Download & install latest release package from GitHub |
+| `--upgrade`, `--self-update` | Download & install latest release package from GitHub with mandatory `.sha256` verification |
 | `--fingerprint`, `--verify-signature` | Print binary provenance, SHA-256 hash, and signature report |
-| `--dashboard` | Start real-time HTTP usage dashboard (default: http://127.0.0.1:11997) |
+| `--dashboard` | Start real-time HTTP usage dashboard (default: http://127.0.0.1:11997; Origin-protected & Bearer-authenticated for non-loopback requests) |
 | `--port`, `--dashboard-port <PORT>` | Custom dashboard port (default: 11997) |
 | `--project <PATH>` | Filter dashboard or operations to a specific project path or name |
 | `--server` | Start remote ML worker daemon (default: http://127.0.0.1:11998) |
 | `--worker-port <PORT>` | Custom ML worker port (default: 11998) |
-| `--bind <ADDR>` | Network bind address for remote worker (e.g. 0.0.0.0 or 127.0.0.1) |
-| `--api-key <KEY>` | Bearer authentication token for remote ML worker |
-| `--setup-server` | Interactive CLI setup wizard for remote ML worker |
+| `--bind <ADDR>` | Network bind address for remote worker (non-loopback binds require an API key via `AGENT_GUIDANCE_API_KEY` or `--api-key`) |
+| `--api-key <KEY>` | Bearer authentication token for remote ML worker (prefer `AGENT_GUIDANCE_API_KEY` env var in service files) |
+| `--setup-server` | Interactive CLI setup wizard generating `AGENT_GUIDANCE_API_KEY` service configs |
 | `--set-server <URL>` | Configure remote ML worker endpoint (or 'local' for standalone) |
 | `--test-server` | Test connection and ping latency to remote ML worker |
 | `--stats`, `--status` | Display client mode, system telemetry, and remote skill stats |
 | `--prune-missing` | Prune deleted/moved projects from usage tracking registry |
 | `--cleanup` | Auto-clean expired logs, prune dead projects, and vacuum DB |
-| `--retention-days <N>` | Retention window in days for detail logs (default: 7) |
+| `--retention-days <N>` | Retention window in days for detail logs (default: 7, clamped to >= 1) |
 | `--reindex` | Reindex code graph and update GraphRAG communities for project |
 | `--reindex-skills` | Precompute and build rich semantic vector index for all skills |
 | `--build-manifest` | Build semantic skill index manifest without embedding computation |
@@ -446,7 +447,6 @@ agent-guidance --setup
 agent-guidance --uninstall
   ├─ remove_mcp_clients() → delete from IDE configs
   └─ remove_global_rules() / remove_skills_enforcer() → clean legacy tagged blocks
-```
 ```
 
 All rule/skill sections use HTML-comment tags (`<!-- agent-guidance:start -->` / `<!-- agent-guidance:end -->`) for reliable find-and-replace.

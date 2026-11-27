@@ -9,6 +9,38 @@ pub fn estimate_tokens(text: &str, is_code: bool) -> usize {
     ((text.len() as f64) / ratio).ceil() as usize
 }
 
+/// Tracks CommonMark fenced code block state across lines.
+/// Returns `true` if `line` opens or closes a fenced code block.
+pub(crate) fn update_code_fence(line: &str, open_fence: &mut Option<(char, usize)>) -> bool {
+    let trimmed = line.trim_start();
+    let first = match trimmed.chars().next() {
+        Some(c @ ('`' | '~')) => c,
+        _ => return false,
+    };
+    let count = trimmed.chars().take_while(|&c| c == first).count();
+    if count < 3 {
+        return false;
+    }
+    let rest = &trimmed[count..];
+    match *open_fence {
+        None => {
+            if first == '`' && rest.contains('`') {
+                return false;
+            }
+            *open_fence = Some((first, count));
+            true
+        }
+        Some((fence_char, fence_len)) => {
+            if first == fence_char && count >= fence_len && rest.trim().is_empty() {
+                *open_fence = None;
+                true
+            } else {
+                false
+            }
+        }
+    }
+}
+
 fn strip_markdown_noise(content: &str) -> String {
     let has_comments = content.contains("<!--");
     let has_badges = content.contains("shields.io") || content.contains("badge");
@@ -24,7 +56,7 @@ fn strip_markdown_noise(content: &str) -> String {
 
     if has_badges {
         let re_badges = RE_BADGES.get_or_init(|| {
-            Regex::new(r"!\[.*?\]\(https://img\.shields\.io/.*?\)|!\[.*?\]\(https://badge.*?\)\s*")
+            Regex::new(r"!\[[^\]]*\]\(https://img\.shields\.io/[^)]*\)[ \t]*|!\[[^\]]*\]\(https://badge[^)]*\)[ \t]*")
                 .expect("Invalid badge regex")
         });
         re_badges.replace_all(&stripped, "").into_owned()
@@ -56,29 +88,26 @@ fn push_compressed_markdown_chunk(chunk: &str, out: &mut Vec<String>) {
 pub fn compress_markdown(content: &str) -> String {
     let mut out = Vec::new();
     let mut md_buf = String::new();
-    let mut in_code_block = false;
+    let mut open_fence: Option<(char, usize)> = None;
 
     for line in content.lines() {
-        if line.trim_end().starts_with("```") {
-            if !in_code_block {
+        let was_in_code = open_fence.is_some();
+        if update_code_fence(line, &mut open_fence) {
+            if !was_in_code {
                 push_compressed_markdown_chunk(&md_buf, &mut out);
                 md_buf.clear();
-                in_code_block = true;
-                out.push(line.trim_end().to_string());
-            } else {
-                in_code_block = false;
-                out.push(line.trim_end().to_string());
             }
+            out.push(line.trim_end().to_string());
             continue;
         }
-        if in_code_block {
+        if open_fence.is_some() {
             out.push(line.to_string());
         } else {
             md_buf.push_str(line);
             md_buf.push('\n');
         }
     }
-    if !in_code_block && !md_buf.is_empty() {
+    if open_fence.is_none() && !md_buf.is_empty() {
         push_compressed_markdown_chunk(&md_buf, &mut out);
     }
     out.join("\n")
@@ -120,5 +149,46 @@ mod tests {
         assert!(!compressed.contains("outer comment"));
         assert!(compressed.contains("<div><!-- keep me --></div>"));
         assert!(compressed.contains("https://img.shields.io/badge/a-b"));
+    }
+
+    #[test]
+    fn test_compress_markdown_badge_preserves_preceding_image_and_heading() {
+        let md = "![Arch](https://example.com/arch.png) ![CI](https://img.shields.io/badge/ci-ok)\nStatus: ![Ver](https://badge.fury.io/js/x.svg)\n# Next Heading\n";
+        let compressed = compress_markdown(md);
+        assert!(compressed.contains("![Arch](https://example.com/arch.png)"), "non-badge image stripped: {}", compressed);
+        assert!(!compressed.contains("shields.io"));
+        assert!(!compressed.contains("badge.fury.io"));
+        assert!(compressed.contains("\n# Next Heading"), "heading merged onto prior line: {}", compressed);
+    }
+
+    #[test]
+    fn test_compress_markdown_indented_nested_and_inline_fences() {
+        let md = "\
+```inline``` text
+
+<!-- drop this -->
+
+- Item:
+  ```html
+  <!-- keep indented -->
+
+
+  <p>ok</p>
+  ```
+
+````markdown
+```rust
+<!-- keep nested -->
+```
+````
+
+<!-- drop trailing -->
+End";
+        let compressed = compress_markdown(md);
+        assert!(!compressed.contains("drop this"), "inline triple-backtick broke fence state: {}", compressed);
+        assert!(compressed.contains("<!-- keep indented -->"), "indented code fence stripped: {}", compressed);
+        assert!(compressed.contains("<!-- keep nested -->"), "nested 4-backtick fence broken: {}", compressed);
+        assert!(!compressed.contains("drop trailing"), "trailing comment not stripped: {}", compressed);
+        assert!(compressed.contains("End"));
     }
 }

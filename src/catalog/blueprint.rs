@@ -44,7 +44,13 @@ pub fn generate_dynamic_blueprint(proj_path: &Path, task: &str, arch_pattern: &s
                             }
                         }
 
-                        let full = proj_path.join(&file_path);
+                        let rel = Path::new(&file_path);
+                        if rel.is_absolute()
+                            || rel.components().any(|c| matches!(c, std::path::Component::ParentDir))
+                        {
+                            continue;
+                        }
+                        let full = proj_path.join(rel);
                         if let Ok(content) = std::fs::read_to_string(&full) {
                             let loc = content.lines().count();
                             if loc > 300 && !large_files.iter().any(|(p, _, _)| p == &file_path) {

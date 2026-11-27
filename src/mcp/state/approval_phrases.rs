@@ -1,5 +1,19 @@
 use super::ServerState;
 
+fn starts_with_negation(msg: &str) -> bool {
+    if msg.starts_with("từ chối") {
+        return true;
+    }
+    let first_word = msg
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .find(|s| !s.is_empty())
+        .unwrap_or("");
+    matches!(
+        first_word,
+        "no" | "not" | "don't" | "dont" | "reject" | "cancel" | "không" | "hủy"
+    )
+}
+
 impl ServerState {
     pub fn is_approval_message(message: &str) -> bool {
         let msg = message.trim().to_lowercase();
@@ -7,8 +21,7 @@ impl ServerState {
             return false;
         }
 
-        let negation_prefixes = ["no ", "not ", "don't ", "dont ", "reject", "cancel", "không ", "hủy", "từ chối"];
-        if msg.split_whitespace().count() <= 10 && negation_prefixes.iter().any(|p| msg.starts_with(p)) {
+        if msg.split_whitespace().count() <= 10 && starts_with_negation(&msg) {
             return false;
         }
 
@@ -79,8 +92,7 @@ impl ServerState {
             return false;
         }
 
-        let negation_prefixes = ["no ", "not ", "don't ", "dont ", "reject", "cancel", "không ", "hủy", "từ chối"];
-        if negation_prefixes.iter().any(|p| msg.starts_with(p)) {
+        if starts_with_negation(&msg) {
             return false;
         }
 
@@ -108,6 +120,9 @@ impl ServerState {
 }
 
 fn contains_phrase_boundary(haystack: &str, phrase: &str) -> bool {
+    if phrase.is_empty() {
+        return false;
+    }
     let mut start = 0;
     while let Some(idx) = haystack[start..].find(phrase) {
         let abs = start + idx;
@@ -128,4 +143,24 @@ fn contains_phrase_boundary(haystack: &str, phrase: &str) -> bool {
         start = abs + phrase.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_negation_with_punctuation_blocks_approval() {
+        assert!(!ServerState::is_approval_message("No, don't proceed"));
+        assert!(!ServerState::is_approval_message("No! not ok"));
+        assert!(!ServerState::is_approval_message("Không, chưa đồng ý"));
+        assert!(!ServerState::is_gui_or_short_plan_approval("No, don't proceed"));
+        assert!(ServerState::is_approval_message("OK, proceed"));
+        assert!(ServerState::is_gui_or_short_plan_approval("Yes, go ahead"));
+    }
+
+    #[test]
+    fn test_contains_phrase_boundary_empty_phrase_no_panic_on_utf8() {
+        assert!(!contains_phrase_boundary("đồng ý triển khai", ""));
+    }
 }

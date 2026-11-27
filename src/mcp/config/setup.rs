@@ -17,8 +17,10 @@ pub fn run_setup(binary_path: &Path) -> Result<()> {
 
     for target in targets {
         if target.force || target.path.parent().map(|p| p.exists()).unwrap_or(false) {
-            merge_mcp_config(&target.path, SERVER_ID, &bin_str, target.key)?;
-            info!("Successfully configured {}", target.name);
+            match merge_mcp_config(&target.path, SERVER_ID, &bin_str, target.key) {
+                Ok(()) => info!("Successfully configured {}", target.name),
+                Err(e) => tracing::warn!("Skipped {} ({}): {}", target.name, target.path.display(), e),
+            }
         }
     }
 
@@ -30,16 +32,26 @@ pub fn run_setup(binary_path: &Path) -> Result<()> {
             .map(|p| p.exists())
             .unwrap_or(false)
         {
-            merge_mcp_config(&ext.path, SERVER_ID, &bin_str, "mcpServers")?;
-            info!("Successfully configured {}", ext.name);
+            match merge_mcp_config(&ext.path, SERVER_ID, &bin_str, "mcpServers") {
+                Ok(()) => info!("Successfully configured {}", ext.name),
+                Err(e) => tracing::warn!("Skipped {} ({}): {}", ext.name, ext.path.display(), e),
+            }
         }
     }
 
     let opencode_path = home.join(".config").join("opencode").join("opencode.json");
-    configure_opencode(&opencode_path, &bin_str)?;
+    if opencode_path.parent().is_some_and(|p| p.exists()) {
+        if let Err(e) = configure_opencode(&opencode_path, &bin_str) {
+            tracing::warn!("Skipped OpenCode ({}): {}", opencode_path.display(), e);
+        }
+    }
 
     let codex_path = home.join(".codex").join("config.toml");
-    configure_codex_toml(&codex_path, &bin_str)?;
+    if codex_path.parent().is_some_and(|p| p.exists()) {
+        if let Err(e) = configure_codex_toml(&codex_path, &bin_str) {
+            tracing::warn!("Skipped Codex ({}): {}", codex_path.display(), e);
+        }
+    }
 
     register_cli_clients(&bin_str, SERVER_ID);
 

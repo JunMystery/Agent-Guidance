@@ -82,17 +82,43 @@ pub(crate) fn remove_skills_enforcer(home: &Path) -> Result<()> {
 }
 
 fn strip_tagged_section(content: &str, start_tag: &str, end_tag: &str) -> String {
-    if let (Some(start_idx), Some(end_idx)) = (content.find(start_tag), content.find(end_tag)) {
-        let before = content[..start_idx].trim_end();
-        let after = content[end_idx + end_tag.len()..].trim_start();
-        let mut res = String::new();
-        res.push_str(before);
-        if !before.is_empty() && !after.is_empty() {
-            res.push('\n');
+    if let Some(start_idx) = content.find(start_tag) {
+        let search_from = start_idx + start_tag.len();
+        if let Some(rel_end_idx) = content[search_from..].find(end_tag) {
+            let end_idx = search_from + rel_end_idx;
+            let before = content[..start_idx].trim_end();
+            let after = content[end_idx + end_tag.len()..].trim_start();
+            let mut res = String::new();
+            res.push_str(before);
+            if !before.is_empty() && !after.is_empty() {
+                res.push('\n');
+            }
+            res.push_str(after);
+            return res;
         }
-        res.push_str(after);
-        res
-    } else {
-        content.to_string()
+    }
+    content.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_tagged_section;
+
+    #[test]
+    fn test_strip_tagged_section_ignores_reversed_end_tag() {
+        let content = "before\n<!-- END -->\nmiddle\n<!-- START -->\nkeep";
+        assert_eq!(
+            strip_tagged_section(content, "<!-- START -->", "<!-- END -->"),
+            content
+        );
+    }
+
+    #[test]
+    fn test_strip_tagged_section_removes_matched_block() {
+        let content = "header\n<!-- START -->\nremove me\n<!-- END -->\nfooter";
+        assert_eq!(
+            strip_tagged_section(content, "<!-- START -->", "<!-- END -->"),
+            "header\nfooter"
+        );
     }
 }

@@ -4,27 +4,16 @@
 use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 use std::fs;
-use std::hash::{DefaultHasher, Hasher};
-use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use crate::context::db::CodeGraphDb;
 
-/// Computes a deterministic checksum of a file on disk.
+static SNAPSHOT_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Computes a deterministic SHA-256 checksum of a file on disk.
 pub fn compute_file_checksum(file_path: &Path) -> Result<String> {
-    let mut file = fs::File::open(file_path)
-        .with_context(|| format!("Cannot open file for checksum: {:?}", file_path))?;
-    let mut hasher = DefaultHasher::new();
-    let mut buffer = [0u8; 8192];
-
-    loop {
-        let n = file.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        hasher.write(&buffer[..n]);
-    }
-
-    Ok(format!("{:016x}", hasher.finish()))
+    crate::mcp::fingerprint::compute_file_sha256(file_path)
+        .with_context(|| format!("Cannot compute SHA-256 checksum for: {:?}", file_path))
 }
 
 /// Exports the SQLite code graph database of `project_path` into `out_file`.
@@ -72,25 +61,37 @@ pub fn import_graph_snapshot(
         }
     }
 
-    // 2. Verify SQLite integrity before installing
-    let verify_conn = Connection::open_with_flags(
-        snapshot_file,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    let integrity: String = verify_conn.query_row("PRAGMA quick_check;", [], |r| r.get(0))?;
-    if integrity != "ok" {
-        bail!("Snapshot SQLite integrity check failed: {}", integrity);
-    }
-    drop(verify_conn);
-
-    // 3. Atomically install into target directory
+    // 2. Copy into unique staging file so caller's snapshot stays untouched, then verify SQLite integrity
     let agent_ctx = project_path.join(".agent-context");
     fs::create_dir_all(&agent_ctx)?;
     let target_db = agent_ctx.join("code_graph.db");
 
-    let temp_target = agent_ctx.join("code_graph.db.incoming");
+    let seq = SNAPSHOT_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let temp_target = agent_ctx.join(format!("code_graph.db.incoming.{}.{}", std::process::id(), seq));
     fs::copy(snapshot_file, &temp_target)?;
-    fs::rename(&temp_target, &target_db)?;
+
+    let verify_res: Result<()> = (|| {
+        let verify_conn = Connection::open_with_flags(
+            &temp_target,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        verify_conn.execute_batch("PRAGMA trusted_schema = OFF;")?;
+        let integrity: String = verify_conn.query_row("PRAGMA quick_check;", [], |r| r.get(0))?;
+        if integrity != "ok" {
+            bail!("Snapshot SQLite integrity check failed: {}", integrity);
+        }
+        Ok(())
+    })();
+    if let Err(e) = verify_res {
+        let _ = fs::remove_file(&temp_target);
+        return Err(e);
+    }
+
+    // 3. Atomically install into target directory
+    if let Err(e) = fs::rename(&temp_target, &target_db) {
+        let _ = fs::remove_file(&temp_target);
+        return Err(e.into());
+    }
 
     // Remove old WAL and SHM if present
     let _ = fs::remove_file(agent_ctx.join("code_graph.db-wal"));

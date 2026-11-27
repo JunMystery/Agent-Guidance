@@ -120,6 +120,9 @@ impl<T> HnswIndex<T> {
 
             for &n in &neighbors {
                 self.graph[node_id][lc].push(n);
+                if lc >= self.graph[n].len() {
+                    continue;
+                }
                 self.graph[n][lc].push(node_id);
 
                 // Prune if neighbor node exceeded m_max
@@ -151,14 +154,15 @@ impl<T> HnswIndex<T> {
         visited.insert(ep);
 
         let initial_sim = self.dist_similarity(query, &self.vectors[ep]);
+        // Max-heap: expand closest unexplored candidate first; min-heap: track worst kept element.
         let mut candidates = BinaryHeap::new();
-        candidates.push(MinNeighbor(Neighbor { id: ep, similarity: initial_sim }));
+        candidates.push(Neighbor { id: ep, similarity: initial_sim });
 
         let mut w = BinaryHeap::new();
-        w.push(Neighbor { id: ep, similarity: initial_sim });
+        w.push(MinNeighbor(Neighbor { id: ep, similarity: initial_sim }));
 
-        while let Some(MinNeighbor(c)) = candidates.pop() {
-            if let Some(worst_w) = w.peek() {
+        while let Some(c) = candidates.pop() {
+            if let Some(MinNeighbor(worst_w)) = w.peek() {
                 if c.similarity < worst_w.similarity && w.len() >= ef {
                     break;
                 }
@@ -168,11 +172,11 @@ impl<T> HnswIndex<T> {
                 for &neighbor in &self.graph[c.id][lc] {
                     if visited.insert(neighbor) {
                         let sim = self.dist_similarity(query, &self.vectors[neighbor]);
-                        let worst_sim = w.peek().map(|n| n.similarity).unwrap_or(f32::NEG_INFINITY);
+                        let worst_sim = w.peek().map(|n| n.0.similarity).unwrap_or(f32::NEG_INFINITY);
 
                         if sim > worst_sim || w.len() < ef {
-                            candidates.push(MinNeighbor(Neighbor { id: neighbor, similarity: sim }));
-                            w.push(Neighbor { id: neighbor, similarity: sim });
+                            candidates.push(Neighbor { id: neighbor, similarity: sim });
+                            w.push(MinNeighbor(Neighbor { id: neighbor, similarity: sim }));
 
                             if w.len() > ef {
                                 w.pop();
@@ -183,8 +187,8 @@ impl<T> HnswIndex<T> {
             }
         }
 
-        let mut results: Vec<Neighbor> = w.into_sorted_vec();
-        results.reverse();
+        let mut results: Vec<Neighbor> = w.into_iter().map(|MinNeighbor(n)| n).collect();
+        results.sort_by(|a, b| b.similarity.total_cmp(&a.similarity));
         results
     }
 

@@ -1,10 +1,61 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 
 use crate::mcp::templates::*;
+
+static CONFIG_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn atomic_write_text(path: &Path, content: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let seq = CONFIG_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("config");
+    let tmp_path = path.with_file_name(format!("{}.tmp.{}.{}", file_name, std::process::id(), seq));
+    fs::write(&tmp_path, content)?;
+    if let Err(e) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+fn backup_existing_config(path: &Path, suffix: &str) {
+    if path.exists() {
+        let bak_path = path.with_extension(suffix);
+        let _ = fs::copy(path, bak_path);
+    }
+}
+
+pub(crate) fn parse_existing_json_object(config_path: &Path) -> Result<Value> {
+    if !config_path.exists() {
+        return Ok(json!({}));
+    }
+    let content = fs::read_to_string(config_path)?;
+    if content.trim().is_empty() {
+        return Ok(json!({}));
+    }
+    let root: Value = serde_json::from_str(&content).with_context(|| {
+        format!(
+            "Refusing to overwrite non-empty invalid JSON config at {}",
+            config_path.display()
+        )
+    })?;
+    if !root.is_object() {
+        anyhow::bail!(
+            "Refusing to overwrite non-object JSON config at {}",
+            config_path.display()
+        );
+    }
+    Ok(root)
+}
 
 pub(crate) fn check_mcp_registration(config_path: &Path, key: &str) -> bool {
     if !config_path.exists() {
@@ -27,32 +78,22 @@ pub(crate) fn check_mcp_registration(config_path: &Path, key: &str) -> bool {
 // ---- Original MCP Config Functions (required by run_setup) ----
 
 pub(crate) fn merge_mcp_config(config_path: &Path, server_id: &str, bin_path: &str, key: &str) -> Result<()> {
-    if config_path.exists() {
-        let bak_path = config_path.with_extension("json.bak");
-        let _ = fs::copy(config_path, bak_path);
-    }
+    let mut root = parse_existing_json_object(config_path)?;
+    backup_existing_config(config_path, "json.bak");
 
-    let mut root: Value = if config_path.exists() {
-        let content = fs::read_to_string(config_path)?;
-        serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
-    } else {
-        json!({})
-    };
-
-    if !root.is_object() {
-        root = json!({});
-    }
-
-    let obj = root.as_object_mut().expect("Root JSON must be object");
-    if !obj.contains_key(key) || !obj[key].is_object() {
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Root JSON must be an object"))?;
+    if !obj.contains_key(key) {
         obj.insert(key.to_string(), json!({}));
+    } else if !obj[key].is_object() {
+        anyhow::bail!("Expected JSON object at key '{}' in {}", key, config_path.display());
     }
 
     let servers_map = obj
         .get_mut(key)
-        .expect("Key exists in obj")
-        .as_object_mut()
-        .expect("Server entry must be object");
+        .and_then(|v| v.as_object_mut())
+        .ok_or_else(|| anyhow::anyhow!("Server entry must be an object"))?;
     servers_map.remove(crate::mcp::templates::OLD_SERVER_ID);
 
     let server_entry = if key == "servers" || config_path.to_string_lossy().ends_with(".claude.json") {
@@ -69,42 +110,27 @@ pub(crate) fn merge_mcp_config(config_path: &Path, server_id: &str, bin_path: &s
     };
 
     servers_map.insert(server_id.to_string(), server_entry);
-
-    if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    fs::write(config_path, serde_json::to_string_pretty(&root)?)?;
+    atomic_write_text(config_path, &serde_json::to_string_pretty(&root)?)?;
     Ok(())
 }
 
 pub(crate) fn configure_opencode(opencode_path: &Path, bin_path: &str) -> Result<()> {
-    if opencode_path.exists() {
-        let bak_path = opencode_path.with_extension("json.bak");
-        let _ = fs::copy(opencode_path, bak_path);
-    }
+    let mut root = parse_existing_json_object(opencode_path)?;
+    backup_existing_config(opencode_path, "json.bak");
 
-    let mut root: Value = if opencode_path.exists() {
-        let content = fs::read_to_string(opencode_path)?;
-        serde_json::from_str(&content).unwrap_or_else(|_| json!({}))
-    } else {
-        json!({})
-    };
-
-    if !root.is_object() {
-        root = json!({});
-    }
-
-    let obj = root.as_object_mut().expect("Root JSON must be object");
-    if !obj.contains_key("mcp") || !obj["mcp"].is_object() {
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Root JSON must be an object"))?;
+    if !obj.contains_key("mcp") {
         obj.insert("mcp".to_string(), json!({}));
+    } else if !obj["mcp"].is_object() {
+        anyhow::bail!("Expected JSON object at key 'mcp' in {}", opencode_path.display());
     }
 
     let mcp_map = obj
         .get_mut("mcp")
-        .expect("mcp exists")
-        .as_object_mut()
-        .expect("mcp must be object");
+        .and_then(|v| v.as_object_mut())
+        .ok_or_else(|| anyhow::anyhow!("mcp entry must be an object"))?;
     mcp_map.remove(crate::mcp::templates::OLD_SERVER_ID);
     mcp_map.insert(
         SERVER_ID.to_string(),
@@ -116,26 +142,31 @@ pub(crate) fn configure_opencode(opencode_path: &Path, bin_path: &str) -> Result
         }),
     );
 
-    if let Some(parent) = opencode_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    fs::write(opencode_path, serde_json::to_string_pretty(&root)?)?;
+    atomic_write_text(opencode_path, &serde_json::to_string_pretty(&root)?)?;
     Ok(())
 }
 
 pub(crate) fn configure_codex_toml(codex_path: &Path, bin_path: &str) -> Result<()> {
-    let existing = if codex_path.exists() {
-        fs::read_to_string(codex_path).unwrap_or_default()
+    let mut value: toml::Value = if codex_path.exists() {
+        let existing = fs::read_to_string(codex_path)?;
+        if existing.trim().is_empty() {
+            toml::Value::Table(toml::map::Map::new())
+        } else {
+            existing.parse::<toml::Value>().with_context(|| {
+                format!(
+                    "Refusing to overwrite invalid TOML config at {}",
+                    codex_path.display()
+                )
+            })?
+        }
     } else {
-        String::new()
+        toml::Value::Table(toml::map::Map::new())
     };
+    backup_existing_config(codex_path, "toml.bak");
 
-    let mut value: toml::Value = existing
-        .parse::<toml::Value>()
-        .unwrap_or_else(|_| toml::Value::Table(toml::map::Map::new()));
-
-    let table = value.as_table_mut().expect("TOML root must be a table");
+    let table = value
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("TOML root must be a table"))?;
     if !table.contains_key("mcp_servers") {
         table.insert(
             "mcp_servers".to_string(),
@@ -143,9 +174,12 @@ pub(crate) fn configure_codex_toml(codex_path: &Path, bin_path: &str) -> Result<
         );
     }
 
-    let mcp_servers = table["mcp_servers"]
-        .as_table_mut()
-        .expect("mcp_servers must be table");
+    let mcp_servers = table
+        .get_mut("mcp_servers")
+        .and_then(|v| v.as_table_mut())
+        .ok_or_else(|| {
+            anyhow::anyhow!("Expected TOML table at 'mcp_servers' in {}", codex_path.display())
+        })?;
 
     mcp_servers.remove(crate::mcp::templates::OLD_SERVER_ID);
 
@@ -162,12 +196,8 @@ pub(crate) fn configure_codex_toml(codex_path: &Path, bin_path: &str) -> Result<
         }),
     );
 
-    if let Some(parent) = codex_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
     let toml_string = toml::to_string_pretty(&value)?;
-    fs::write(codex_path, toml_string)?;
+    atomic_write_text(codex_path, &toml_string)?;
     info!("Successfully configured ChatGPT/Codex");
     Ok(())
 }

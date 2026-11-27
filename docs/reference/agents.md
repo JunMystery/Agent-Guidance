@@ -1,13 +1,13 @@
 # Agent Personas
 
-Specialist personas that play a single role with a single perspective. Each persona is a Markdown file consumed as a system prompt by your harness (Claude Code, Cursor, Copilot, etc.).
+Specialist personas that play a single role with a single perspective. Each persona is a Markdown file (`agents/<role>.md`, maintained in the upstream agent-skills package or added locally when enabled) consumed as a system prompt by your harness (Claude Code, Cursor, Copilot, etc.).
 
 | Persona | Role | Best for |
 |---------|------|----------|
-| [code-reviewer](../../agents/code-reviewer.md) | Senior Staff Engineer | Five-axis review before merge |
-| [security-auditor](../../agents/security-auditor.md) | Security Engineer | Vulnerability detection, OWASP-style audit |
-| [test-engineer](../../agents/test-engineer.md) | QA Engineer | Test strategy, coverage analysis, Prove-It pattern |
-| [web-performance-auditor](../../agents/web-performance-auditor.md) | Web Performance Engineer | Core Web Vitals audit, loading/rendering/network analysis |
+| `code-reviewer` | Senior Staff Engineer | Five-axis review before merge |
+| `security-auditor` | Security Engineer | Vulnerability detection, OWASP-style audit |
+| `test-engineer` | QA Engineer | Test strategy, coverage analysis, Prove-It pattern |
+| `web-performance-auditor` | Web Performance Engineer | Core Web Vitals audit, loading/rendering/network analysis |
 
 ## How personas relate to skills and commands
 

@@ -211,3 +211,22 @@ fn test_extract_paths_strips_windows_file_uri_and_line_anchors() {
     );
     let _ = fs::remove_dir_all(&temp);
 }
+
+#[test]
+fn test_find_plan_artifact_rejects_traversal_and_non_markdown_custom_paths() {
+    let base = create_temp_dir();
+    let repo = base.join("repo");
+    let ext = base.join("outside");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&ext).unwrap();
+    let outside_md = ext.join("secret.md");
+    let non_md = repo.join("Cargo.toml");
+    fs::write(&outside_md, "# Secret").unwrap();
+    fs::write(&non_md, "[package]").unwrap();
+
+    assert!(find_plan_artifact(&repo, Some("../outside/secret.md"), None).is_none());
+    assert!(find_plan_artifact(&repo, Some(outside_md.to_str().unwrap()), None).is_none());
+    assert!(find_plan_artifact(&repo, Some("Cargo.toml"), None).is_none());
+
+    let _ = fs::remove_dir_all(&base);
+}

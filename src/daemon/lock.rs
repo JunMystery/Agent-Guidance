@@ -8,13 +8,18 @@ use super::lock_path;
 
 pub struct DaemonLock {
     file: std::fs::File,
+    #[allow(dead_code)]
     path: PathBuf,
 }
 
 impl Drop for DaemonLock {
     fn drop(&mut self) {
         let _ = self.file.unlock();
-        let _ = fs::remove_file(&self.path);
+        #[cfg(windows)]
+        {
+            // Keep the lockfile inode intact on Unix to avoid flock race conditions across processes.
+            let _ = fs::remove_file(&self.path);
+        }
     }
 }
 

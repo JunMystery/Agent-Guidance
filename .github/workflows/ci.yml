@@ -5,13 +5,21 @@ on:
     branches:
       - main
     paths-ignore:
-      - '**.md'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
+      - 'AGENTS.md'
+      - 'GEMINI.md'
       - 'docs/**'
   pull_request:
     branches:
       - main
     paths-ignore:
-      - '**.md'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
+      - 'AGENTS.md'
+      - 'GEMINI.md'
       - 'docs/**'
   workflow_dispatch:
 
@@ -41,6 +49,17 @@ jobs:
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
+
+      - name: Verify precomputed skill manifest sync
+        if: runner.os == 'Linux'
+        run: |
+          manifest_count=$(grep -o '"count":[[:space:]]*[0-9]*' src/ml/precomputed_manifest.json | head -n1 | grep -o '[0-9]*' || echo "0")
+          skill_count=$(find skills -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+          echo "Manifest skill count: ${manifest_count}, Workspace skills/: ${skill_count}"
+          if [ "${manifest_count}" != "${skill_count}" ]; then
+            echo "::error::Precomputed skill vectors (${manifest_count}) differ from skills/ directory count (${skill_count}). Run --reindex-skills before merging."
+            exit 1
+          fi
 
       - name: Cargo check
         run: cargo check --all-targets

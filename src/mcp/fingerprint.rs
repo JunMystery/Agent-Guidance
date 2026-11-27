@@ -48,9 +48,10 @@ impl BinaryFingerprint {
 
 #[cfg(windows)]
 fn detect_signature_status(path: &Path) -> String {
+    let escaped_path = path.display().to_string().replace('\'', "''");
     let script = format!(
         "$s = Get-AuthenticodeSignature -LiteralPath '{}'; if ($s.Status -eq 'Valid') {{ \"Valid (Signed by: $($s.SignerCertificate.Subject))\" }} elseif ($s.SignerCertificate) {{ \"Signed: $($s.SignerCertificate.Subject) [Thumbprint: $($s.SignerCertificate.Thumbprint)]\" }} else {{ \"$($s.Status): $($s.StatusMessage)\" }}",
-        path.display()
+        escaped_path
     );
     std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])

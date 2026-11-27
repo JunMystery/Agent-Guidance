@@ -1,9 +1,12 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 
 use super::schema::AppConfig;
+
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub fn config_dir() -> PathBuf {
     dirs::home_dir()
@@ -66,13 +69,26 @@ pub fn save_config(config: &AppConfig) -> Result<()> {
         .context("Failed to serialize config to TOML")?;
 
     let path = config_path();
-    let tmp_path = dir.join("config.toml.tmp");
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = dir.join(format!("config.toml.{}.{}.tmp", std::process::id(), seq));
 
     fs::write(&tmp_path, toml_str)
         .with_context(|| format!("Failed to write temporary config file at {:?}", tmp_path))?;
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
+    }
+
     fs::rename(&tmp_path, &path)
         .with_context(|| format!("Failed to atomically rename {:?} to {:?}", tmp_path, path))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
 
     info!("Saved configuration to {:?}", path);
     Ok(())

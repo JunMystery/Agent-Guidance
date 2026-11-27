@@ -16,6 +16,8 @@ struct UpdateServerConfigRequest {
     #[serde(default)]
     api_key: Option<String>,
     #[serde(default)]
+    clear_api_key: Option<bool>,
+    #[serde(default)]
     timeout_ms: Option<u64>,
     #[serde(default)]
     dashboard_port: Option<u16>,
@@ -34,23 +36,52 @@ struct TestConnectionRequest {
     timeout_ms: Option<u64>,
 }
 
+fn redacted_config(mut cfg: crate::config::AppConfig) -> (bool, crate::config::AppConfig) {
+    let api_key_configured = !cfg.server.api_key.is_empty();
+    cfg.server.api_key.clear();
+    (api_key_configured, cfg)
+}
+
+fn is_valid_http_url(url: &str) -> bool {
+    let t = url.trim();
+    (t.starts_with("http://") || t.starts_with("https://"))
+        && !t.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+fn resolve_test_api_key(
+    req_url: &str,
+    req_key: Option<String>,
+    cfg_server: &ServerConfig,
+) -> String {
+    if let Some(key) = req_key.filter(|k| !k.trim().is_empty()) {
+        return key.trim().to_string();
+    }
+    if req_url.trim().trim_end_matches('/') == cfg_server.url.trim().trim_end_matches('/') {
+        return cfg_server.api_key.clone();
+    }
+    String::new()
+}
+
 pub fn handle_api_server_config(mut request: Request) {
     match request.method() {
         tiny_http::Method::Get => {
-            let cfg = current_config();
+            let (api_key_configured, safe_cfg) = redacted_config((*current_config()).clone());
             let payload = json!({
                 "status": "ok",
-                "config": *cfg
+                "api_key_configured": api_key_configured,
+                "config": safe_cfg
             });
             super::router::json_response(request, 200, &payload);
         }
         tiny_http::Method::Post => {
-            let mut body = String::new();
-            if let Err(e) = request.as_reader().read_to_string(&mut body) {
-                let err = json!({ "status": "error", "message": format!("Failed to read request body: {}", e) });
-                super::router::json_response(request, 400, &err);
-                return;
-            }
+            let body = match super::router::read_bounded_body(&mut request) {
+                Ok(b) => b,
+                Err((status, msg)) => {
+                    let err = json!({ "status": "error", "message": msg });
+                    super::router::json_response(request, status, &err);
+                    return;
+                }
+            };
 
             let req_data: UpdateServerConfigRequest = match serde_json::from_str(&body) {
                 Ok(data) => data,
@@ -61,15 +92,23 @@ pub fn handle_api_server_config(mut request: Request) {
                 }
             };
 
+            if !req_data.url.trim().is_empty() && !is_valid_http_url(&req_data.url) {
+                let err = json!({ "status": "error", "message": "Invalid server URL scheme (must be http:// or https://)" });
+                super::router::json_response(request, 400, &err);
+                return;
+            }
+
             let mut cfg = (*current_config()).clone();
             if !req_data.url.is_empty() {
-                cfg.server.url = req_data.url;
+                cfg.server.url = req_data.url.trim().to_string();
             }
             if let Some(m) = req_data.mode {
                 cfg.server.mode = m;
             }
-            if let Some(key) = req_data.api_key {
-                cfg.server.api_key = key;
+            if req_data.clear_api_key == Some(true) {
+                cfg.server.api_key.clear();
+            } else if let Some(key) = req_data.api_key.filter(|k| !k.trim().is_empty()) {
+                cfg.server.api_key = key.trim().to_string();
             }
             if let Some(t) = req_data.timeout_ms {
                 cfg.server.timeout_ms = t;
@@ -97,11 +136,13 @@ pub fn handle_api_server_config(mut request: Request) {
                 }
             }
 
+            let (api_key_configured, safe_cfg) = redacted_config(cfg);
             let payload = json!({
                 "status": "ok",
                 "message": "Configuration saved successfully",
                 "ide_configuration": ide_status,
-                "config": cfg
+                "api_key_configured": api_key_configured,
+                "config": safe_cfg
             });
             super::router::json_response(request, 200, &payload);
         }
@@ -117,12 +158,14 @@ pub fn handle_api_test_connection(mut request: Request) {
         return;
     }
 
-    let mut body = String::new();
-    if let Err(e) = request.as_reader().read_to_string(&mut body) {
-        let err = json!({ "status": "error", "message": format!("Failed to read request body: {}", e) });
-        super::router::json_response(request, 400, &err);
-        return;
-    }
+    let body = match super::router::read_bounded_body(&mut request) {
+        Ok(b) => b,
+        Err((status, msg)) => {
+            let err = json!({ "status": "error", "message": msg });
+            super::router::json_response(request, status, &err);
+            return;
+        }
+    };
 
     let req_data: TestConnectionRequest = match serde_json::from_str(&body) {
         Ok(data) => data,
@@ -133,11 +176,19 @@ pub fn handle_api_test_connection(mut request: Request) {
         }
     };
 
-    let mut test_server = ServerConfig::default();
-    test_server.url = req_data.url;
-    if let Some(key) = req_data.api_key {
-        test_server.api_key = key;
+    if !is_valid_http_url(&req_data.url) {
+        let err = json!({ "status": "error", "message": "Invalid URL: must start with http:// or https://" });
+        super::router::json_response(request, 400, &err);
+        return;
     }
+
+    let mut test_server = ServerConfig::default();
+    test_server.url = req_data.url.trim().to_string();
+    test_server.api_key = resolve_test_api_key(
+        &req_data.url,
+        req_data.api_key,
+        &current_config().server,
+    );
     if let Some(t) = req_data.timeout_ms {
         test_server.timeout_ms = t;
     }
@@ -159,5 +210,22 @@ pub fn handle_api_test_connection(mut request: Request) {
             });
             super::router::json_response(request, 200, &payload);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_test_api_key_fallback() {
+        let mut cfg = ServerConfig::default();
+        cfg.url = "http://10.0.0.5:11998".to_string();
+        cfg.api_key = "stored_secret".to_string();
+
+        assert_eq!(resolve_test_api_key("http://10.0.0.5:11998/", None, &cfg), "stored_secret");
+        assert_eq!(resolve_test_api_key("http://10.0.0.5:11998", Some("  ".into()), &cfg), "stored_secret");
+        assert_eq!(resolve_test_api_key("http://10.0.0.5:11998", Some("override".into()), &cfg), "override");
+        assert_eq!(resolve_test_api_key("http://other-host:11998", None, &cfg), "");
     }
 }

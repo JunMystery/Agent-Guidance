@@ -5,7 +5,10 @@ use super::trait_def::{TraitBinding, TraitSpec};
 use super::types::AstLanguage;
 
 fn node_text<'a>(node: &Node, source: &'a [u8]) -> &'a str {
-    std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
+    source
+        .get(node.start_byte()..node.end_byte())
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .unwrap_or("")
 }
 
 /// Extract trait definitions and implementation bindings from an AST root.

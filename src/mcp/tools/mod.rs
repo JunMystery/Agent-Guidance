@@ -229,16 +229,6 @@ fn handle_tool_call_internal(
         "task_pipeline" => pipeline::handle(arguments, state),
         "select_skills" | "select_skill" => skills::handle(arguments, state),
         "guidance" => guidance::handle(arguments, state),
-        "ui_ux" => {
-            let query = arguments
-                .get("query")
-                .and_then(|q| q.as_str())
-                .unwrap_or("general");
-            Ok(format!(
-                "# UI/UX Guidelines for '{}'\n\n- Styling: Modern CSS, Glassmorphism, Dynamic Animations\n- Color Palette: Dark mode default, curated HSL gradients\n- Typography: Inter/Outfit via Google Fonts\n- Accessibility: Semantic HTML5, unique IDs",
-                query
-            ))
-        }
         "project_context" => context::handle(arguments, state),
         "session_continuity" => continuity::handle(arguments, state),
         "workflow_gate" => gate::handle(arguments, state),

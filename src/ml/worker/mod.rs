@@ -17,7 +17,21 @@ pub const DEFAULT_WORKER_PORT: u16 = 11998;
 pub const DEFAULT_BIND_ADDR: &str = "127.0.0.1";
 const WORKER_THREADS: usize = 4;
 
+pub fn is_loopback_bind(bind_addr: &str) -> bool {
+    let norm = bind_addr
+        .trim()
+        .trim_matches(|c| c == '[' || c == ']')
+        .to_ascii_lowercase();
+    matches!(norm.as_str(), "127.0.0.1" | "::1" | "localhost")
+}
+
 pub fn run_worker_server(bind_addr: &str, port: u16, api_key: String) -> Result<()> {
+    if !is_loopback_bind(bind_addr) && api_key.trim().is_empty() {
+        anyhow::bail!(
+            "Refusing to bind ML Worker to non-loopback address '{}' without --api-key or AGENT_GUIDANCE_API_KEY",
+            bind_addr
+        );
+    }
     let addr = format!("{}:{}", bind_addr, port);
     let server = Arc::new(
         Server::http(&addr).map_err(|e| anyhow::anyhow!("Failed to bind ML Worker on {}: {}", addr, e))?,

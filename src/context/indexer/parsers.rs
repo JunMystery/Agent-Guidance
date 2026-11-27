@@ -161,7 +161,7 @@ pub fn extract_symbols_from_content(rel_path: &str, content: &str) -> Vec<Extrac
                 kind: kind.to_string(),
                 parent: None,
                 start_line: line_num,
-                end_line: line_num + 10,
+                end_line: (line_num + 10).min(total_lines),
                 signature: Some(trimmed.to_string()),
                 language: Some(lang.as_str().to_string()),
                 namespace: None,

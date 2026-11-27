@@ -129,6 +129,16 @@ pub(super) fn has_opt_out(content: &str, line: &str, tag: &str) -> bool {
     check(line) || check(content)
 }
 
+pub(super) fn has_line_opt_out(content: &str, line: &str, tag: &str) -> bool {
+    let exact = format!("test-safety-allow: {}", tag);
+    let compact = format!("test-safety-allow:{}", tag);
+    let file_exact = format!("test-safety-allow-file: {}", tag);
+    line.contains(&exact)
+        || line.contains(&compact)
+        || content.contains(&file_exact)
+        || content.contains("test-safety-allow: all")
+}
+
 fn analyze_persistence_file(content: &str, rel_path: &str, findings: &mut Vec<SafetyFinding>) {
     if has_opt_out(content, "", "persistence") {
         return;

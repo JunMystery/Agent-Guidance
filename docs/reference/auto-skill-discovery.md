@@ -4,7 +4,7 @@ This document describes the three-tier pipeline used by the Agent Guidance MCP s
 
 ---
 
-## 🏗️ Architecture Workflow
+## Architecture Workflow
 
 ```mermaid
 graph TD
@@ -22,36 +22,36 @@ graph TD
 
 ---
 
-## ⚙️ Processing Phases
+## Processing Phases
 
 ### 1. Tokenization & Normalization
-* **Files**: `src/mcp/tools.rs` (keyword extraction in `hybrid_vector_search`)
+* **Files**: `src/mcp/tools/pipeline.rs` & `src/ml/embeddings/search.rs`
 * **Action**: Extracts tokens from the task string, filters out single-character words, converts to lowercase. Embedded in the hybrid search pipeline.
 
 ### 2. Flexible Keyword Inference & Root Mapping
-* **File**: `src/mcp/tools.rs` & `src/ml/embeddings.rs`
+* **Files**: `src/mcp/tools/guidance_intent.rs` & `src/ml/embeddings/search.rs`
 * **Action**: Compares extracted task terms against skill names and content. Three matching levels:
   * **Exact Match**: skill name equals query → +0.5 score boost
   * **Name Contains**: skill name contains query → +0.3 score boost
   * **Word Match**: query word found in skill name → +0.1 score boost each
 
 ### 3. Catalog Matching & Anchor Routing
-* **File**: `src/catalog/store.rs` (`load_all_skills`) & `src/mcp/tools.rs` (`task_pipeline`)
-* **Action**: Loads all embedded skills + workspace-local skills. Matches keywords to pull relevant entries:
+* **Files**: `src/catalog/store.rs` (`list_embedded_skills`) & `src/mcp/tools/pipeline.rs` (`task_pipeline`)
+* **Action**: Loads all 629 embedded skills + staged/workspace-local skills. Matches keywords to pull relevant entries:
   * **Anchor Promotion**: Frontmatter `anchors` promote matching skills to top recommendations.
   * **Name/Content Keyword Scoring**: Additional weight for skills matching task keywords.
 
 ### 4. Hybrid Vector Search & Cross-Encoder Rerank
-* **File**: `src/ml/embeddings.rs` (`hybrid_vector_search`) & `src/ml/llm_selector.rs` (`LLMSelector::rerank`)
-* **Action**: Generates a query vector embedding via multilingual-e5-small, scores all 276 cached passage vectors by cosine similarity, then re-ranks top-8 with a cross-encoder:
-  * **Cached Passage Vectors**: All skills pre-embedded during `warmup_cache()` at daemon startup — stored in `PASSAGE_CACHE` module-level `OnceLock`
+* **Files**: `src/ml/embeddings/search.rs` (`hybrid_vector_search`), `src/ml/cross_encoder.rs` (`CrossEncoder`), & `src/ml/llm_selector.rs` (`LLMSelector::rerank`)
+* **Action**: Generates a query vector embedding via multilingual-e5-small, scores all 629 precomputed skill passage vectors by cosine similarity, then re-ranks top-8 with a cross-encoder:
+  * **Cached Passage Vectors**: All skills pre-embedded during `warmup_cache()` at daemon startup — stored in `PASSAGE_CACHE` module-level `OnceLock` and persisted locally at `~/.agent-guidance/passage_vectors.bin` (separate from the remote ML worker's compiled `vectors.bin`)
   * **Hybrid Score**: `cosine_similarity(q_vec, passage_vec) + keyword_boost`
-  * **Cross-Encoder Rerank**: `LLMSelector::rerank()` scores top-8 with cross-encoder/ms-marco-MiniLM-L-6-v2 (single-output regression, num_labels=1)
+  * **Cross-Encoder Rerank**: `LLMSelector::rerank()` scores top-8 with `cross-encoder/ms-marco-MiniLM-L-6-v2` (single-output regression, `num_labels=1`) using native sentence-pair encoding `(query, candidate)` with `token_type_ids` and 512-token truncation
   * **Graceful Fallback**: If the cross-encoder fails, falls back to keyword-frequency ranking
 
 ---
 
-## 📋 Extending Triggers in Skill Files
+## Extending Triggers in Skill Files
 
 To register any new or existing skill in the Auto Skill Discovery pipeline, simply add frontmatter tags to the skill's `SKILL.md` file:
 

@@ -76,6 +76,18 @@ pub(crate) fn handle_api_graph(request: tiny_http::Request, default_proj: &str) 
     };
     let clean_target = target_dir.trim().trim_matches(['"', '\'']);
     let initial_path = Path::new(clean_target);
+    if clean_target.contains('\0')
+        || initial_path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        json_response(
+            request,
+            400,
+            &json!({"error": "Invalid project path: parent traversal prohibited"}),
+        );
+        return;
+    }
     let resolved_root = crate::dashboard::projects_path::find_project_root(initial_path);
     let path = if resolved_root.exists() {
         &resolved_root
@@ -137,6 +149,7 @@ pub fn query_graph_data_with_view(
         &db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(2000));
 
     match view {
         "files" => {

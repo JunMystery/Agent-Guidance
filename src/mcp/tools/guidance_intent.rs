@@ -39,15 +39,24 @@ pub fn strip_slash_commands(text: &str) -> (String, Vec<String>) {
 
     for token in text.split_whitespace() {
         if let Some(rest) = token.strip_prefix('/') {
-            let cmd_name = rest
-                .trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
-                .to_lowercase();
-            if !cmd_name.is_empty() && seen.insert(cmd_name.clone()) {
-                slash_commands.push(cmd_name);
+            let trimmed_rest =
+                rest.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+            let is_path_like = trimmed_rest.contains('/')
+                || trimmed_rest.contains('\\')
+                || trimmed_rest.contains('.');
+            if !is_path_like {
+                let cmd_name = trimmed_rest
+                    .trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+                    .to_lowercase();
+                if !cmd_name.is_empty() {
+                    if seen.insert(cmd_name.clone()) {
+                        slash_commands.push(cmd_name);
+                    }
+                    continue;
+                }
             }
-        } else {
-            remaining_words.push(token);
         }
+        remaining_words.push(token);
     }
 
     (remaining_words.join(" "), slash_commands)
@@ -170,6 +179,11 @@ mod tests {
         let (empty_cleaned, empty_cmds) = strip_slash_commands("/generative_ui");
         assert_eq!(empty_cleaned, "");
         assert_eq!(empty_cmds, vec!["generative_ui"]);
+
+        // Unix paths and REST routes must NOT be stripped as slash commands
+        let (route_cleaned, route_cmds) = strip_slash_commands("/plan fix /api/v1/users and /etc/nginx.conf");
+        assert_eq!(route_cleaned, "fix /api/v1/users and /etc/nginx.conf");
+        assert_eq!(route_cmds, vec!["plan"]);
     }
 
     #[test]

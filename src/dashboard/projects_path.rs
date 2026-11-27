@@ -30,10 +30,20 @@ pub fn find_project_root(path: &Path) -> PathBuf {
     let trimmed = raw_str.trim().trim_matches(['"', '\'']);
     let unescaped_buf;
     let clean_path: &Path = if trimmed.starts_with("file://") || trimmed.contains('%') {
-        let stripped = trimmed
-            .strip_prefix("file:///")
-            .or_else(|| trimmed.strip_prefix("file://"))
-            .unwrap_or(trimmed);
+        let stripped = if let Some(after) = trimmed.strip_prefix("file:///") {
+            let bytes = after.as_bytes();
+            let is_win_uri = (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+                || (bytes.len() >= 4
+                    && bytes[0].is_ascii_alphabetic()
+                    && (after[1..].starts_with("%3A") || after[1..].starts_with("%3a")));
+            if is_win_uri {
+                after
+            } else {
+                &trimmed["file://".len()..]
+            }
+        } else {
+            trimmed.strip_prefix("file://").unwrap_or(trimmed)
+        };
         unescaped_buf = PathBuf::from(super::router::url_decode(stripped));
         &unescaped_buf
     } else if trimmed.len() != raw_str.len() {
@@ -142,7 +152,9 @@ pub fn normalize_project_path(raw: &str) -> String {
         return String::new();
     }
 
-    let is_win_drive = trimmed.len() >= 2 && trimmed.as_bytes()[1] == b':';
+    let is_win_drive = trimmed.len() >= 2
+        && trimmed.as_bytes()[0].is_ascii_alphabetic()
+        && trimmed.as_bytes()[1] == b':';
     if is_win_drive && !cfg!(windows) {
         let mut s = trimmed.replace('/', "\\");
         while s.len() > 3 && s.ends_with('\\') {
@@ -167,12 +179,12 @@ pub fn normalize_project_path(raw: &str) -> String {
         s.pop();
     }
 
-    if is_win_drive {
-        let first = s.chars().next().unwrap();
-        if first.is_ascii_lowercase() {
-            let upper = first.to_ascii_uppercase().to_string();
-            s.replace_range(..1, &upper);
-        }
+    if is_win_drive
+        && let Some(first) = s.chars().next()
+        && first.is_ascii_lowercase()
+    {
+        let upper = first.to_ascii_uppercase().to_string();
+        s.replace_range(..1, &upper);
     }
 
     let p = Path::new(&s);
@@ -189,12 +201,14 @@ pub fn normalize_project_path(raw: &str) -> String {
     while res.len() > (if is_windows { 3 } else { 1 }) && (res.ends_with(sep) || res.ends_with(alt_sep)) {
         res.pop();
     }
-    if is_win_drive || (res.len() >= 2 && res.as_bytes()[1] == b':') {
-        let first = res.chars().next().unwrap();
-        if first.is_ascii_lowercase() {
-            let upper = first.to_ascii_uppercase().to_string();
-            res.replace_range(..1, &upper);
-        }
+    if res.len() >= 2
+        && res.as_bytes()[0].is_ascii_alphabetic()
+        && res.as_bytes()[1] == b':'
+        && let Some(first) = res.chars().next()
+        && first.is_ascii_lowercase()
+    {
+        let upper = first.to_ascii_uppercase().to_string();
+        res.replace_range(..1, &upper);
     }
     res
 }
@@ -249,4 +263,29 @@ pub fn is_temp_project_path(raw: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_project_path_edge_cases() {
+        assert_eq!(normalize_project_path(""), "");
+        assert_eq!(normalize_project_path("   "), "");
+        // Non-alphabetic char before ':' must not be mistaken for a Windows drive or panic
+        let non_drive = normalize_project_path("/:not_a_drive");
+        assert!(!non_drive.is_empty());
+        // Lowercase drive letter is uppercased safely
+        let drive = normalize_project_path("z:/nonexistent_ag_test_dir/");
+        assert!(drive.starts_with("Z:"));
+        assert!(!drive.ends_with('\\') && !drive.ends_with('/'));
+    }
+
+    #[test]
+    fn test_find_project_root_preserves_unix_file_uri_root() {
+        let unix_uri = find_project_root(Path::new("file:///opt/nonexistent_ag_repo"));
+        let s = unix_uri.to_string_lossy();
+        assert!(s.starts_with('/') || s.contains("/opt/nonexistent_ag_repo"), "got: {s}");
+    }
 }

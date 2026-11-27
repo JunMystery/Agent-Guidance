@@ -105,7 +105,6 @@ export function initGraphSymbolList(container, nodes, onSelectNode) {
         <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; overflow: hidden; flex-shrink: 0; min-height: fit-content;">
           <div style="background: #1e293b; padding: 6px 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155;">
             <div style="display: flex; align-items: center; gap: 6px;">
-              <span style="font-size: 13px;">📁</span>
               <span style="font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: #38bdf8;">${escapeHtml(displayFile)}</span>
             </div>
             <span style="font-size: 10px; color: #94a3b8; background: #0f172a; padding: 1px 6px; border-radius: 4px;">${t('symbol_list.symbols_count', { count: fileNodes.length })}</span>
@@ -119,8 +118,18 @@ export function initGraphSymbolList(container, nodes, onSelectNode) {
 
     treeWrap.innerHTML = html;
 
-    // Attach click handlers
+    // Attach click and hover handlers
     treeWrap.querySelectorAll('.symbol-item-card').forEach(card => {
+      card.addEventListener('mouseenter', () => {
+        if (card.getAttribute('data-id') !== activeId) {
+          card.style.borderColor = '#38bdf8';
+        }
+      });
+      card.addEventListener('mouseleave', () => {
+        if (card.getAttribute('data-id') !== activeId) {
+          card.style.borderColor = '#1e293b';
+        }
+      });
       card.onclick = () => {
         const id = card.getAttribute('data-id');
         activeId = id;
@@ -140,11 +149,11 @@ export function initGraphSymbolList(container, nodes, onSelectNode) {
     const kindColors = { function: '#10b981', struct: '#00e5ff', module: '#8b5cf6', trait: '#ec4899', enum: '#f59e0b' };
     const color = kindColors[n.kind] || '#94a3b8';
     return `
-      <div class="symbol-item-card" data-id="${escapeHtml(n.id)}" style="background: ${isSelected ? '#0284c725' : '#080c14'}; border: 1px solid ${isSelected ? '#00e5ff' : '#1e293b'}; border-radius: 4px; padding: 6px 8px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 6px; transition: all 0.15s ease;" onmouseover="if(this.getAttribute('data-id')!=='${activeId}')this.style.borderColor='#38bdf8'" onmouseout="if(this.getAttribute('data-id')!=='${activeId}')this.style.borderColor='#1e293b'">
+      <div class="symbol-item-card" data-id="${escapeHtml(n.id)}" style="background: ${isSelected ? '#0284c725' : '#080c14'}; border: 1px solid ${isSelected ? '#00e5ff' : '#1e293b'}; border-radius: 4px; padding: 6px 8px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 6px; transition: all 0.15s ease;">
         <div style="min-width: 0; flex: 1;">
           <div style="display: flex; align-items: center; gap: 4px; margin-bottom: 2px;">
-            <span style="font-size: 9px; font-weight: 700; color: ${color}; background: ${color}15; border: 1px solid ${color}35; padding: 1px 4px; border-radius: 3px;">${n.kind || 'sym'}</span>
-            ${n.lang ? `<span style="font-size: 8px; font-weight: 700; color: #38bdf8; background: #0284c718; border: 1px solid #0284c730; padding: 1px 3px; border-radius: 2px;">${n.lang}</span>` : ''}
+            <span style="font-size: 9px; font-weight: 700; color: ${color}; background: ${color}15; border: 1px solid ${color}35; padding: 1px 4px; border-radius: 3px;">${escapeHtml(n.kind || 'sym')}</span>
+            ${n.lang ? `<span style="font-size: 8px; font-weight: 700; color: #38bdf8; background: #0284c718; border: 1px solid #0284c730; padding: 1px 3px; border-radius: 2px;">${escapeHtml(n.lang)}</span>` : ''}
             <span style="font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: #f1f5f9; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${escapeHtml(n.label)}</span>
           </div>
           <div style="font-size: 9px; color: #64748b;">

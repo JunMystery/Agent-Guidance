@@ -1,8 +1,10 @@
 import { el, activeView, pollSpanFor } from './dom.js';
 import { pollBackoff } from './state.js';
 import { fetchData } from './api.js';
+import { t } from './i18n/index.js';
 
 let pollTimer = null;
+const POLL_VIEWS = new Set(['dashboard', 'actions']);
 
 function scheduleNextPoll() {
   if (pollTimer) {
@@ -11,7 +13,7 @@ function scheduleNextPoll() {
   }
   if (document.hidden) return;
   const view = activeView();
-  if (view === 'graph' || view === 'logs') return;
+  if (!POLL_VIEWS.has(view)) return;
 
   pollTimer = setTimeout(async () => {
     try {
@@ -27,7 +29,7 @@ export function startPoll() {
   const spanId = pollSpanFor(activeView());
   if (spanId) {
     const node = el(spanId);
-    if (node) node.textContent = '(polling ' + (pollBackoff / 1000).toFixed(0) + 's)';
+    if (node) node.textContent = t('poll.polling', { sec: (pollBackoff / 1000).toFixed(0) });
   }
   scheduleNextPoll();
 }
@@ -50,7 +52,7 @@ document.addEventListener('visibilitychange', () => {
     stopPoll();
   } else {
     const view = activeView();
-    if (view && view !== 'graph' && view !== 'logs') {
+    if (POLL_VIEWS.has(view)) {
       fetchData().finally(() => startPoll());
     }
   }

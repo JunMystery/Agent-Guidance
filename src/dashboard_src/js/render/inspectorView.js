@@ -47,26 +47,26 @@ export function renderSymbolInspector(container, node, edges, allNodes, onSelect
     <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 10px;">
       <div style="flex: 1; min-width: 0;">
         <span style="font-size: 10px; text-transform: uppercase; font-weight: 700; color: ${kindColor}; background: ${kindColor}18; border: 1px solid ${kindColor}40; padding: 2px 6px; border-radius: 4px; display: inline-block; margin-bottom: 4px;">
-          ${node.kind || 'symbol'}
+          ${escapeHtml(node.kind || 'symbol')}
         </span>
-        ${node.lang ? `<span style="font-size: 10px; text-transform: uppercase; font-weight: 700; color: #38bdf8; background: #0284c718; border: 1px solid #0284c740; padding: 2px 6px; border-radius: 4px; display: inline-block; margin-left: 4px; margin-bottom: 4px;">${node.lang}</span>` : ''}
+        ${node.lang ? `<span style="font-size: 10px; text-transform: uppercase; font-weight: 700; color: #38bdf8; background: #0284c718; border: 1px solid #0284c740; padding: 2px 6px; border-radius: 4px; display: inline-block; margin-left: 4px; margin-bottom: 4px;">${escapeHtml(node.lang)}</span>` : ''}
         <h4 style="color: #f8fafc; font-size: 14px; margin: 0; font-family: var(--font-mono); word-break: break-all; line-height: 1.3;">
           ${escapeHtml(node.label)}
         </h4>
       </div>
-      <button id="btn-copy-symbol" title="${t('inspector.copy_id_title')}" style="background: var(--bg-tertiary); border: 1px solid var(--border-color); color: #94a3b8; border-radius: 4px; padding: 3px 6px; font-size: 11px; cursor: pointer;">
-        📋
+      <button id="btn-copy-symbol" title="${escapeHtml(t('inspector.copy_id_title'))}" style="background: var(--bg-tertiary); border: 1px solid var(--border-color); color: #94a3b8; border-radius: 4px; padding: 3px 6px; font-size: 11px; cursor: pointer;">
+        Copy
       </button>
     </div>
 
     <!-- Functional Role & Architecture Tier -->
     <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-        <span style="font-size: 11px; color: #64748b; font-weight: 600;">${t('inspector.role').toUpperCase()}:</span>
-        <span style="font-size: 10px; font-family: var(--font-mono); color: #38bdf8; background: #0284c71a; padding: 1px 6px; border-radius: 3px; border: 1px solid #0284c730;">${role.tier}</span>
+        <span style="font-size: 11px; color: #64748b; font-weight: 600;">${escapeHtml(t('inspector.role').toUpperCase())}:</span>
+        <span style="font-size: 10px; font-family: var(--font-mono); color: #38bdf8; background: #0284c71a; padding: 1px 6px; border-radius: 3px; border: 1px solid #0284c730;">${escapeHtml(role.tier)}</span>
       </div>
       <div style="font-size: 12px; color: #e2e8f0; font-weight: 500;">
-        ${role.description}
+        ${escapeHtml(role.description)}
       </div>
     </div>
 
@@ -148,10 +148,10 @@ export function renderSymbolInspector(container, node, edges, allNodes, onSelect
   const copyBtn = container.querySelector('#btn-copy-symbol');
   if (copyBtn) {
     copyBtn.onclick = () => {
-      navigator.clipboard.writeText(node.label).then(() => {
-        copyBtn.textContent = '✅';
-        setTimeout(() => { copyBtn.textContent = '📋'; }, 1500);
-      });
+      navigator.clipboard?.writeText(node.label)?.then(() => {
+        copyBtn.textContent = 'Copied';
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+      })?.catch(() => {});
     };
   }
 
@@ -182,7 +182,7 @@ function renderRelationItem(rel, direction, onSelect) {
         </div>
       </div>
       <span style="font-size: 9px; font-weight: 600; color: ${typeBadgeColor}; background: ${typeBadgeColor}18; padding: 1px 5px; border-radius: 3px; border: 1px solid ${typeBadgeColor}30; margin-left: 6px;">
-        ${rel.type}
+        ${escapeHtml(rel.type)}
       </span>
     </div>
   `;

@@ -31,7 +31,7 @@ Every coding task follows a strict 6-step execution lifecycle:
 
 Returns project file counts, detected architecture pattern (e.g. `Clean_Architecture`), dynamic split blueprint, memorized project learnings, and unlocks subsequent gated tools.
 
-### ⚡ Minor Task Fast-Path Exemption
+### Minor Task Fast-Path Exemption
 
 For trivial changes (typos, comments, docs, or single-file bugfixes < 20 lines), use Fast-Path:
 ```json
@@ -230,7 +230,7 @@ Authorize single files or batch related domain files together; when a file excee
 {
   "action": "set_stage",
   "project_path": "/absolute/path/to/project",
-  "target_stage": "Test"
+  "target_stage": "Test_Recheck"
 }
 ```
 
@@ -259,7 +259,7 @@ Record persistent architectural instinct or project rule:
 }
 ```
 
-Generate cross-agent session handoff summary:
+Generate cross-agent session handoff summary (resolves pre-edit snapshots from `.agent-context/snapshots/{session_id}/<rel_path>`, shared with `session_continuity(operation="diff")` and `workflow_gate(action="rollback")`):
 
 ```json
 {

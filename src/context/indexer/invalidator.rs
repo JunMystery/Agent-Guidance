@@ -17,6 +17,15 @@ pub struct FileInvalidationReport {
     pub duration_ms: u64,
 }
 
+fn is_unsafe_rel_path(clean_path: &str) -> bool {
+    if clean_path.is_empty() || clean_path.contains('\0') {
+        return true;
+    }
+    Path::new(clean_path)
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
 /// Fast check whether a file on disk has changed compared to SQLite index.
 pub fn is_file_dirty(project_path: &Path, rel_path: &str) -> bool {
     let clean_path = rel_path
@@ -24,7 +33,7 @@ pub fn is_file_dirty(project_path: &Path, rel_path: &str) -> bool {
         .trim_start_matches(|c| c == '/' || c == '\\')
         .replace('\\', "/");
 
-    if crate::context::exclusion::is_excluded_path(&clean_path) {
+    if is_unsafe_rel_path(&clean_path) || crate::context::exclusion::is_excluded_path(&clean_path) {
         return false;
     }
 
@@ -74,7 +83,10 @@ pub fn invalidate_and_sync_file(
         ..Default::default()
     };
 
-    if crate::context::exclusion::is_excluded_path(&clean_path) || !is_file_dirty(project_path, &clean_path) {
+    if is_unsafe_rel_path(&clean_path)
+        || crate::context::exclusion::is_excluded_path(&clean_path)
+        || !is_file_dirty(project_path, &clean_path)
+    {
         report.duration_ms = start.elapsed().as_millis() as u64;
         return Ok(report);
     }
@@ -119,4 +131,25 @@ pub fn sync_dirty_files(
         }
     }
     Ok(reports)
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    #[test]
+    fn test_rejects_parent_traversal_and_null_byte_paths() {
+        let project = std::env::temp_dir();
+        for bad in ["../outside.rs", "src/../../outside.rs", "src/bad\0name.rs", "..\\outside.rs"] {
+            assert!(!is_file_dirty(&project, bad), "expected unsafe path rejected: {:?}", bad);
+            let rep = invalidate_and_sync_file(&project, bad).unwrap();
+            assert!(!rep.is_dirty);
+            assert!(!rep.reindexed);
+            assert_eq!(rep.symbols_extracted, 0);
+            assert_eq!(rep.edges_created, 0);
+        }
+
+        // Filenames merely containing ".." inside a normal segment are not traversal components
+        assert!(!is_unsafe_rel_path("src/v1..v2.rs"));
+    }
 }

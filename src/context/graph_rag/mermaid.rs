@@ -1,12 +1,32 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use super::community::{CommunityHierarchy, CommunityLevel, GraphEdge};
+
+fn is_mermaid_reserved_keyword(id: &str) -> bool {
+    matches!(
+        id,
+        "end"
+            | "subgraph"
+            | "graph"
+            | "flowchart"
+            | "style"
+            | "classDef"
+            | "class"
+            | "click"
+            | "default"
+            | "direction"
+            | "linkStyle"
+    )
+}
 
 pub fn sanitize_mermaid_id(raw: &str) -> String {
     let sanitized: String = raw
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
         .collect();
-    if sanitized.is_empty() || sanitized.chars().next().map(|c| c.is_numeric()).unwrap_or(false) {
+    if sanitized.is_empty()
+        || sanitized.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+        || is_mermaid_reserved_keyword(&sanitized)
+    {
         format!("node_{}", sanitized)
     } else {
         sanitized
@@ -15,7 +35,10 @@ pub fn sanitize_mermaid_id(raw: &str) -> String {
 
 pub fn sanitize_mermaid_label(raw: &str) -> String {
     raw.replace('"', "'")
-        .replace(['[', ']', '(', ')', '{', '}', '<', '>'], " ")
+        .replace(
+            ['[', ']', '(', ')', '{', '}', '<', '>', '\r', '\n', '\t', ';', '`', '|'],
+            " ",
+        )
         .trim()
         .to_string()
 }
@@ -37,18 +60,30 @@ pub fn generate_architecture_mermaid(
         return out;
     }
 
-    let mut layer_map: HashMap<String, Vec<&super::community::Community>> = HashMap::new();
-    let mut entity_to_comm: HashMap<&str, String> = HashMap::new();
+    let mut layer_map: BTreeMap<String, Vec<&super::community::Community>> = BTreeMap::new();
+    let mut subgraph_ids: HashSet<String> = HashSet::new();
 
-    for comm in macro_comms {
+    for comm in &macro_comms {
         let layer = if comm.summary.layer.trim().is_empty() {
             "Shared".to_string()
         } else {
             comm.summary.layer.clone()
         };
-        layer_map.entry(layer).or_default().push(comm);
+        subgraph_ids.insert(sanitize_mermaid_id(&layer));
+        layer_map.entry(layer).or_default().push(*comm);
+    }
 
-        let safe_comm_id = sanitize_mermaid_id(&comm.id);
+    let mut entity_to_comm: HashMap<&str, String> = HashMap::new();
+    let mut comm_node_ids: HashMap<&str, String> = HashMap::new();
+
+    for comm in &macro_comms {
+        let base_id = sanitize_mermaid_id(&comm.id);
+        let safe_comm_id = if subgraph_ids.contains(&base_id) {
+            format!("comm_{}", base_id)
+        } else {
+            base_id
+        };
+        comm_node_ids.insert(comm.id.as_str(), safe_comm_id.clone());
         for member in &comm.member_entity_ids {
             entity_to_comm.insert(member.as_str(), safe_comm_id.clone());
         }
@@ -63,7 +98,10 @@ pub fn generate_architecture_mermaid(
             sanitize_mermaid_label(&layer_name)
         ));
         for comm in comms {
-            let safe_id = sanitize_mermaid_id(&comm.id);
+            let safe_id = comm_node_ids
+                .get(comm.id.as_str())
+                .cloned()
+                .unwrap_or_else(|| sanitize_mermaid_id(&comm.id));
             let safe_title = sanitize_mermaid_label(&comm.summary.title);
             out.push_str(&format!("        {}[\"{}\"]\n", safe_id, safe_title));
         }
@@ -123,4 +161,45 @@ pub fn generate_blast_radius_mermaid(
 #[cfg(test)]
 #[path = "mermaid_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod regression_tests {
+    use super::super::community::{Community, CommunityHierarchy, CommunityLevel, CommunitySummary};
+    use super::*;
+
+    #[test]
+    fn test_reserved_keyword_and_injection_sanitization() {
+        assert_eq!(sanitize_mermaid_id("end"), "node_end");
+        assert_eq!(sanitize_mermaid_id("subgraph"), "node_subgraph");
+        assert_eq!(sanitize_mermaid_id("style"), "node_style");
+        assert_eq!(sanitize_mermaid_id("click"), "node_click");
+        assert!(!sanitize_mermaid_label("foo\nclick A \"javascript:alert(1)\";`bar`").contains('\n'));
+        assert!(!sanitize_mermaid_label("a\r\nb;c|d`e").contains(['\r', '\n', ';', '|', '`']));
+    }
+
+    #[test]
+    fn test_architecture_mermaid_avoids_subgraph_node_id_collision() {
+        let mut hierarchy = CommunityHierarchy::new("proj", "Layered");
+        hierarchy.communities.push(Community {
+            id: "Shared".to_string(),
+            level: CommunityLevel::MacroSubsystem,
+            parent_id: None,
+            member_entity_ids: vec!["sym_a".to_string()],
+            member_files: vec!["src/shared.rs".to_string()],
+            summary: CommunitySummary {
+                title: "Shared".to_string(),
+                description: "Shared utilities".to_string(),
+                layer: "Shared".to_string(),
+                key_entities: vec!["sym_a".to_string()],
+                export_interfaces: vec![],
+                dependencies: vec![],
+            },
+        });
+
+        let mermaid = generate_architecture_mermaid(&hierarchy, &[]);
+        assert!(mermaid.contains("subgraph Shared [\"Shared Layer\"]"));
+        assert!(mermaid.contains("comm_Shared[\"Shared\"]"));
+        assert!(!mermaid.contains("        Shared[\"Shared\"]"));
+    }
+}
 

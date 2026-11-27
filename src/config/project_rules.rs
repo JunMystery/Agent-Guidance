@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::schema::ToolRulesConfig;
+
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub const TOOL_RULES_FILE: &str = "tool_rules.toml";
 pub const AGENT_CONTEXT_DIR: &str = ".agent-context";
@@ -32,10 +35,14 @@ pub fn save_project_rules(project_path: &Path, config: &ToolRulesConfig) -> Resu
             .with_context(|| format!("Failed to create directory: {}", dir.display()))?;
     }
     let path = dir.join(TOOL_RULES_FILE);
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = dir.join(format!("{}.{}.{}.tmp", TOOL_RULES_FILE, std::process::id(), seq));
     let toml_str = toml::to_string_pretty(config)
         .context("Failed to serialize project tool rules to TOML")?;
-    fs::write(&path, toml_str)
-        .with_context(|| format!("Failed to write project rules: {}", path.display()))?;
+    fs::write(&tmp_path, toml_str)
+        .with_context(|| format!("Failed to write temp project rules: {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, &path)
+        .with_context(|| format!("Failed to commit project rules: {}", path.display()))?;
     Ok(())
 }
 

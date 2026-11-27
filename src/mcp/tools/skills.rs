@@ -77,8 +77,6 @@ pub(crate) fn handle(
 
     let resp = if active_skills.is_empty() {
         let text = "# Skill Selection\n\nNo skills selected. Proceeding directly to task execution.\n\n-> NEXT STEP: If codebase inspection is needed, use `project_context(operation=\"search\" | \"read\")`. Otherwise, answer directly or proceed to task planning.".to_string();
-        let tokens = estimate_tokens(&text, false) as u64;
-        state.record_call(tokens, tokens);
         text
     } else {
         let all_skills = load_all_skills(&proj_path);
@@ -151,7 +149,6 @@ pub(crate) fn handle(
         let opt_tokens = estimate_tokens(&resp, false);
         let orig_tokens = raw_token_acc.max(opt_tokens);
         state.last_raw_baseline_tokens = Some(orig_tokens as u64);
-        state.record_call(orig_tokens as u64, opt_tokens as u64);
 
         resp
     };

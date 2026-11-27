@@ -30,7 +30,7 @@ pub(crate) struct Neighbor {
 
 impl PartialEq for Neighbor {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.cmp(other) == Ordering::Equal
     }
 }
 
@@ -38,13 +38,15 @@ impl Eq for Neighbor {}
 
 impl PartialOrd for Neighbor {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.similarity.partial_cmp(&other.similarity)
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for Neighbor {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+        self.similarity
+            .total_cmp(&other.similarity)
+            .then_with(|| self.id.cmp(&other.id))
     }
 }
 

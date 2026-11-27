@@ -126,6 +126,102 @@ impl Default for ServerState {
     }
 }
 
+fn sanitize_client_id_segment(name: &str) -> String {
+    let mut out = String::with_capacity(name.len().min(40));
+    let mut last_was_sep = false;
+    for ch in name.trim().chars() {
+        let mapped = if ch.is_ascii_alphanumeric() {
+            last_was_sep = false;
+            Some(ch.to_ascii_lowercase())
+        } else if ch == '-' || ch == '_' || ch.is_whitespace() {
+            if last_was_sep || out.is_empty() {
+                None
+            } else {
+                last_was_sep = true;
+                Some('_')
+            }
+        } else if !last_was_sep && !out.is_empty() {
+            last_was_sep = true;
+            Some('_')
+        } else {
+            None
+        };
+        if let Some(c) = mapped {
+            out.push(c);
+            if out.len() >= 40 {
+                break;
+            }
+        }
+    }
+    let trimmed = out.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "client".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn canonicalize_or_normalize(path: &Path) -> std::path::PathBuf {
+    let resolved = if let Ok(c) = path.canonicalize() {
+        c
+    } else {
+        let mut suffix_parts: Vec<std::ffi::OsString> = Vec::new();
+        let mut cur = path;
+        let base = loop {
+            if let Ok(c) = cur.canonicalize() {
+                break Some(c);
+            }
+            if let Some(name) = cur.file_name() {
+                suffix_parts.push(name.to_os_string());
+                match cur.parent() {
+                    Some(p) if !p.as_os_str().is_empty() => cur = p,
+                    _ => break None,
+                }
+            } else {
+                break None;
+            }
+        };
+        let combined = match base {
+            Some(mut b) => {
+                for part in suffix_parts.into_iter().rev() {
+                    b.push(part);
+                }
+                b
+            }
+            None => path.to_path_buf(),
+        };
+        lexical_normalize(&combined)
+    };
+    strip_verbatim_prefix(&resolved)
+}
+
+fn lexical_normalize(path: &Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push(comp.as_os_str());
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+fn strip_verbatim_prefix(path: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        let s = path.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            return std::path::PathBuf::from(stripped);
+        }
+    }
+    path.to_path_buf()
+}
+
 impl ServerState {
     pub fn new() -> Self {
         Self::with_client_name(None)
@@ -139,10 +235,11 @@ impl ServerState {
                 .unwrap_or_default()
                 .as_millis();
             let seq = SESSION_SEQ.fetch_add(1, Ordering::Relaxed);
+            let safe_name = sanitize_client_id_segment(name);
             s.session_id = format!(
                 "session_{}_{}_{}_{}",
                 std::process::id(),
-                name.to_lowercase().replace(' ', "_"),
+                safe_name,
                 ts,
                 seq
             );
@@ -195,11 +292,13 @@ impl ServerState {
             self.workspace_roots = parsed_roots.clone();
 
             // Background pre-warm workspace snapshot and skills before user sends first action
-            for root in parsed_roots {
-                let r_path = std::path::PathBuf::from(root);
-                tokio::task::spawn_blocking(move || {
-                    let _ = crate::context::cache::project_snapshot(&r_path);
-                });
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                for root in parsed_roots {
+                    let r_path = std::path::PathBuf::from(root);
+                    handle.spawn_blocking(move || {
+                        let _ = crate::context::cache::project_snapshot(&r_path);
+                    });
+                }
             }
         }
     }
@@ -221,8 +320,14 @@ impl ServerState {
     }
 
     pub fn record_fast_path_file(&mut self, file: &str) {
-        if !self.fast_path_files.iter().any(|f| f == file) {
-            self.fast_path_files.push(file.to_string());
+        let clean = file
+            .trim()
+            .trim_start_matches("./")
+            .trim_start_matches(".\\")
+            .trim_start_matches(['/', '\\'])
+            .replace('\\', "/");
+        if !clean.is_empty() && !self.fast_path_files.iter().any(|f| f == &clean) {
+            self.fast_path_files.push(clean);
         }
     }
 
@@ -293,11 +398,81 @@ impl ServerState {
     }
 
     pub fn is_path_inside_workspace(&self, target: &Path) -> bool {
-        let clean = target.canonicalize().unwrap_or_else(|_| target.to_path_buf());
-        self.workspace_roots.iter().any(|r| {
-            clean.starts_with(Path::new(r).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(r)))
-        }) || self.project_path.as_deref().map_or(false, |p| {
-            clean.starts_with(Path::new(p).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(p)))
-        })
+        let clean = canonicalize_or_normalize(target);
+        self.workspace_roots
+            .iter()
+            .any(|r| clean.starts_with(canonicalize_or_normalize(Path::new(r))))
+            || self
+                .project_path
+                .as_deref()
+                .is_some_and(|p| clean.starts_with(canonicalize_or_normalize(Path::new(p))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_with_client_name_sanitizes_session_id() {
+        let s = ServerState::with_client_name(Some("Claude Desktop (v1.2) / ../evil".to_string()));
+        assert!(
+            ServerState::is_valid_session_id(&s.session_id),
+            "Sanitized session_id must be valid: {}",
+            s.session_id
+        );
+    }
+
+    #[test]
+    fn test_set_roots_from_initialize_safe_without_tokio_runtime() {
+        let mut state = ServerState::new();
+        let dir = std::env::temp_dir().join(format!(
+            "ag_init_notokio_{}_{}",
+            std::process::id(),
+            SESSION_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        state.set_roots_from_initialize(&serde_json::json!({
+            "rootPath": dir.to_string_lossy()
+        }));
+        assert_eq!(state.workspace_roots.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_is_path_inside_workspace_handles_nonexistent_and_blocks_traversal() {
+        let base = std::env::temp_dir().join(format!(
+            "ag_ws_inside_{}_{}",
+            std::process::id(),
+            SESSION_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let repo = base.join("repo");
+        let _ = std::fs::create_dir_all(&repo);
+
+        let mut state = ServerState::new();
+        state.workspace_roots = vec![repo.to_string_lossy().to_string()];
+
+        let nonexistent_child = repo.join("new_subdir").join("file.rs");
+        assert!(
+            state.is_path_inside_workspace(&nonexistent_child),
+            "Non-existent child inside workspace must be recognized"
+        );
+
+        let traversal = repo.join("..").join("..").join("outside_evil.rs");
+        assert!(
+            !state.is_path_inside_workspace(&traversal),
+            "Traversal outside workspace must be rejected"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_record_fast_path_file_normalizes_slashes() {
+        let mut state = ServerState::new();
+        state.record_fast_path_file("src\\main.rs");
+        state.record_fast_path_file("./src/main.rs");
+        state.record_fast_path_file("/src/main.rs");
+        assert_eq!(state.fast_path_files, vec!["src/main.rs"]);
     }
 }

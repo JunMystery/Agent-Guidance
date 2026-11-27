@@ -39,6 +39,22 @@ fn extract_project_query(request: &Request) -> Option<String> {
     None
 }
 
+fn is_tracked_or_cwd_project(proj_path: &str) -> bool {
+    let norm_target = super::projects::normalize_project_path(proj_path);
+    if norm_target.is_empty() {
+        return false;
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if super::projects::normalize_project_path(&cwd.to_string_lossy()) == norm_target {
+            return true;
+        }
+    }
+    let db_path = crate::mcp::db::get_db_path();
+    super::projects::list_tracked_projects(&db_path)
+        .map(|list| list.iter().any(|p| p.path == norm_target))
+        .unwrap_or(false)
+}
+
 pub fn handle_api_tool_rules(mut request: Request) {
     let project_arg = extract_project_query(&request);
 
@@ -97,12 +113,14 @@ pub fn handle_api_tool_rules(mut request: Request) {
             super::router::json_response(request, 200, &payload);
         }
         tiny_http::Method::Post => {
-            let mut body = String::new();
-            if let Err(e) = request.as_reader().read_to_string(&mut body) {
-                let err = json!({ "status": "error", "message": format!("Failed to read body: {}", e) });
-                super::router::json_response(request, 400, &err);
-                return;
-            }
+            let body = match super::router::read_bounded_body(&mut request) {
+                Ok(b) => b,
+                Err((status, msg)) => {
+                    let err = json!({ "status": "error", "message": msg });
+                    super::router::json_response(request, status, &err);
+                    return;
+                }
+            };
 
             let req_data: SaveRulesRequest = match serde_json::from_str(&body) {
                 Ok(data) => data,
@@ -114,6 +132,11 @@ pub fn handle_api_tool_rules(mut request: Request) {
             };
 
             if let Some(ref proj_path) = project_arg {
+                if !is_tracked_or_cwd_project(proj_path) {
+                    let err = json!({ "status": "error", "message": "Forbidden: project path is not tracked" });
+                    super::router::json_response(request, 403, &err);
+                    return;
+                }
                 let cfg = ToolRulesConfig {
                     rules: req_data.rules,
                 };
@@ -166,6 +189,12 @@ pub fn handle_api_tool_rules_revert(request: Request) {
             return;
         }
     };
+
+    if !is_tracked_or_cwd_project(&proj_path) {
+        let err = json!({ "status": "error", "message": "Forbidden: project path is not tracked" });
+        super::router::json_response(request, 403, &err);
+        return;
+    }
 
     match delete_project_rules(Path::new(&proj_path)) {
         Ok(deleted) => {

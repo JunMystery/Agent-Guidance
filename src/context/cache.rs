@@ -2,7 +2,7 @@ use crate::context::scanner::{FileEntry, scan_project};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 const CACHE_TTL: Duration = Duration::from_secs(60);
 
@@ -12,7 +12,7 @@ pub struct ProjectSnapshot {
 
 struct CacheEntry {
     snapshot: Arc<ProjectSnapshot>,
-    observed_at: SystemTime,
+    observed_at: Instant,
     markers: Vec<Option<SystemTime>>,
 }
 
@@ -42,12 +42,13 @@ pub fn project_snapshot(root: &Path) -> Arc<ProjectSnapshot> {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let paths = marker_paths(&canonical_root);
     let current_markers = markers(&paths);
-    let now = SystemTime::now();
+    let now = Instant::now();
     let cache = PROJECT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
-    if let Ok(guard) = cache.lock() {
+    {
+        let guard = cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = guard.get(&canonical_root) {
-            let fresh = now.duration_since(entry.observed_at).unwrap_or_default() < CACHE_TTL;
+            let fresh = entry.observed_at.elapsed() < CACHE_TTL;
             if fresh && entry.markers == current_markers {
                 return entry.snapshot.clone();
             }
@@ -58,7 +59,8 @@ pub fn project_snapshot(root: &Path) -> Arc<ProjectSnapshot> {
         files: Arc::new(scan_project(&canonical_root, 8)),
     });
 
-    if let Ok(mut guard) = cache.lock() {
+    {
+        let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
         guard.insert(
             canonical_root,
             CacheEntry {
@@ -75,9 +77,8 @@ pub fn project_snapshot(root: &Path) -> Arc<ProjectSnapshot> {
 pub fn invalidate_snapshot(root: &Path) {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let cache = PROJECT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(mut guard) = cache.lock() {
-        guard.remove(&canonical_root);
-    }
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    guard.remove(&canonical_root);
 }
 
 #[cfg(test)]
@@ -97,6 +98,7 @@ mod tests {
         let second = project_snapshot(&temp_dir);
         assert!(Arc::ptr_eq(&first, &second));
 
+        invalidate_snapshot(&temp_dir);
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

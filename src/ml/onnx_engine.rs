@@ -62,6 +62,7 @@ impl OnnxEmbeddingModel {
             .map(|&m| m as i64)
             .collect();
         let seq_len = input_ids.len();
+        let mask_copy = attention_mask.clone();
 
         let input_ids_tensor = ort::value::Value::from_array((vec![1, seq_len], input_ids))?;
         let attention_mask_tensor =
@@ -81,15 +82,23 @@ impl OnnxEmbeddingModel {
 
         let (shape, data) = output_tensor.try_extract_tensor::<f32>()?;
 
-        // Mean pooling over sequence dimension if last_hidden_state [1, seq_len, hidden_dim]
+        // Masked mean pooling over sequence dimension if last_hidden_state [1, seq_len, hidden_dim]
         if shape.len() == 3 {
             let hidden_dim = shape[2] as usize;
+            let required = seq_len.checked_mul(hidden_dim).ok_or_else(|| anyhow::anyhow!("Tensor size overflow"))?;
+            if data.len() < required {
+                anyhow::bail!("ONNX output buffer shorter than expected ({} < {})", data.len(), required);
+            }
             let mut vec = vec![0.0f32; hidden_dim];
             let mut count = 0.0f32;
 
-            for i in 0..seq_len {
+            for (i, &mask) in mask_copy.iter().enumerate().take(seq_len) {
+                if mask == 0 {
+                    continue;
+                }
+                let base = i * hidden_dim;
                 for h in 0..hidden_dim {
-                    vec[h] += data[i * hidden_dim + h];
+                    vec[h] += data[base + h];
                 }
                 count += 1.0;
             }

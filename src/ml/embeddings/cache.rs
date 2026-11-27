@@ -114,40 +114,80 @@ pub fn warmup_cache() {
         return;
     }
 
-    // 3. Compute from model (cache miss — first start after skill changes)
+    // 3. Reuse precomputed vectors for known skills and embed only missing skills on CPU
     info!(
         "Computing passage embeddings for {} skills...",
         candidates.len()
     );
-    let texts: Vec<String> = candidates
+    let precomputed_map = load_precomputed_map().map(|(_, m)| m);
+    let missing_indices: Vec<usize> = candidates
         .iter()
-        .map(|c| c.to_search_passage())
+        .enumerate()
+        .filter_map(|(idx, cand)| {
+            let found = precomputed_map
+                .as_ref()
+                .and_then(|m| m.get(&cand.name.to_lowercase()))
+                .is_some();
+            if found { None } else { Some(idx) }
+        })
         .collect();
 
-    let model_guard = cached_model().ok();
-    let vecs = match model_guard.as_ref() {
-        Some(guard) => inference_pool().install(|| {
-            texts
-                .par_iter()
-                .filter_map(|text| guard.embed_text(text, Some("passage")).ok())
-                .collect()
-        }),
-        None => Vec::new(),
-    };
+    let mut slots: Vec<Option<Vec<f32>>> = candidates
+        .iter()
+        .map(|cand| {
+            precomputed_map
+                .as_ref()
+                .and_then(|m| m.get(&cand.name.to_lowercase()).cloned())
+        })
+        .collect();
 
-    save_passage_cache(&vecs, &candidates);
-    store_passage_cache(vecs, &candidates);
-    mark_warmup_complete();
-    info!(
-        "Passage embedding warmup complete ({} skills).",
-        candidates.len()
-    );
+    if !missing_indices.is_empty() {
+        if let Ok(guard) = cached_model() {
+            let missing_vecs: Vec<(usize, Option<Vec<f32>>)> = inference_pool().install(|| {
+                missing_indices
+                    .par_iter()
+                    .map(|&idx| {
+                        let text = candidates[idx].to_search_passage();
+                        (idx, guard.embed_text(&text, Some("passage")).ok())
+                    })
+                    .collect()
+            });
+            for (idx, maybe_vec) in missing_vecs {
+                slots[idx] = maybe_vec;
+            }
+        }
+    }
+
+    let vecs: Vec<Vec<f32>> = slots.into_iter().flatten().collect();
+    if vecs.len() == candidates.len() {
+        save_passage_cache(&vecs, &candidates);
+        store_passage_cache(vecs, &candidates);
+        mark_warmup_complete();
+        info!(
+            "Passage embedding warmup complete ({} skills).",
+            candidates.len()
+        );
+    } else {
+        tracing::warn!(
+            "Passage embedding warmup incomplete ({}/{} skills embedded); skipping disk cache write.",
+            vecs.len(),
+            candidates.len()
+        );
+    }
 
     // 4. Preload models so first user query doesn't pay OnceLock init
     eager_load_embedding_model();
 }
 
 static AUTO_WARMUP_TRIGGERED: OnceLock<AtomicBool> = OnceLock::new();
+static BG_EMBED_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+struct BgEmbedGuard;
+impl Drop for BgEmbedGuard {
+    fn drop(&mut self) {
+        BG_EMBED_IN_FLIGHT.store(false, Ordering::SeqCst);
+    }
+}
 
 pub fn spawn_background_auto_warmup() {
     let triggered = AUTO_WARMUP_TRIGGERED.get_or_init(|| AtomicBool::new(false));
@@ -237,30 +277,37 @@ pub fn embed_skills_cache(candidates: &[SkillItem], model: &EmbeddingModel) -> A
         .collect();
 
     if missing_indices.len() > 64 {
-        info!(
-            "[ML Pipeline] Deferring on-the-fly embedding of {} skills to background to avoid timeout; using fast semantic fallback.",
-            missing_indices.len()
-        );
-        let cand_owned = candidates.to_vec();
-        let _ = std::thread::Builder::new()
-            .name("ag-passage-bg".to_string())
-            .spawn(move || {
-                if let Ok(model_guard) = cached_model() {
-                    let pre_map = load_precomputed_map().map(|(_, m)| m);
-                    let mut vecs = Vec::with_capacity(cand_owned.len());
-                    for cand in &cand_owned {
-                        if let Some(v) = pre_map.as_ref().and_then(|m| m.get(&cand.name.to_lowercase())) {
-                            vecs.push(v.clone());
-                        } else if let Ok(v) = model_guard.embed_text(&cand.to_search_passage(), Some("passage")) {
-                            vecs.push(v);
+        if !BG_EMBED_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+            info!(
+                "[ML Pipeline] Deferring on-the-fly embedding of {} skills to background to avoid timeout; using fast semantic fallback.",
+                missing_indices.len()
+            );
+            let cand_owned = candidates.to_vec();
+            if std::thread::Builder::new()
+                .name("ag-passage-bg".to_string())
+                .spawn(move || {
+                    let _guard = BgEmbedGuard;
+                    if let Ok(model_guard) = cached_model() {
+                        let pre_map = load_precomputed_map().map(|(_, m)| m);
+                        let mut vecs = Vec::with_capacity(cand_owned.len());
+                        for cand in &cand_owned {
+                            if let Some(v) = pre_map.as_ref().and_then(|m| m.get(&cand.name.to_lowercase())) {
+                                vecs.push(v.clone());
+                            } else if let Ok(v) = model_guard.embed_text(&cand.to_search_passage(), Some("passage")) {
+                                vecs.push(v);
+                            }
+                        }
+                        if vecs.len() == cand_owned.len() {
+                            save_passage_cache(&vecs, &cand_owned);
+                            store_passage_cache(vecs, &cand_owned);
                         }
                     }
-                    if vecs.len() == cand_owned.len() {
-                        save_passage_cache(&vecs, &cand_owned);
-                        store_passage_cache(vecs, &cand_owned);
-                    }
-                }
-            });
+                })
+                .is_err()
+            {
+                BG_EMBED_IN_FLIGHT.store(false, Ordering::SeqCst);
+            }
+        }
         return Arc::new(Vec::new());
     }
 
@@ -293,6 +340,7 @@ pub fn embed_skills_cache(candidates: &[SkillItem], model: &EmbeddingModel) -> A
     if vecs.len() != candidates.len() {
         return Arc::new(Vec::new());
     }
+    save_passage_cache(&vecs, candidates);
     store_passage_cache(vecs, candidates);
     cache
         .read()

@@ -94,7 +94,7 @@ pub(crate) fn handle_read(
     }
 
     let cache_key = super::context_cache::AstCacheKey {
-        path: resolved_subpath.clone(),
+        path: full_path.to_string_lossy().replace('\\', "/"),
         target_symbol: target_symbol.map(|s| s.to_string()),
         view_mode: view_mode.to_string(),
         start_line: start_line_arg,

@@ -163,7 +163,12 @@ pub(crate) fn handle_pass_verification(
         .or_else(|| arguments.get("command_output"))
         .and_then(|v| v.as_str());
 
-    if let Some(expected_kw) = state.expected_output_keyword.as_deref().filter(|k| !k.is_empty()) {
+    if let Some(expected_kw) = state
+        .expected_output_keyword
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+    {
         let matched = output.map(|actual| actual.contains(expected_kw)).unwrap_or(false);
         if !matched {
             state.verification_passed = false;
@@ -173,6 +178,12 @@ pub(crate) fn handle_pass_verification(
                 expected_kw
             );
         }
+    } else if state.verification_command.is_some()
+        && output.map(|actual| actual.trim().is_empty()).unwrap_or(true)
+    {
+        state.verification_passed = false;
+        let _ = state.auto_checkpoint(proj_path);
+        return "# Workflow Gate: [pass_verification]\n\nStatus: BLOCKED (VERIFICATION_OUTPUT_MISSING)\n\nVerification command is registered, so non-empty `verification_output` is required to confirm passing verification.".to_string();
     }
 
     state.verification_passed = true;

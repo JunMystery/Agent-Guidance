@@ -90,14 +90,24 @@ impl AstEngine {
     /// Generates a concise AST-aware code skeleton with function bodies collapsed.
     pub fn generate_skeleton(content: &str, lang: AstLanguage, file_path: &str) -> Option<String> {
         let symbols = Self::extract_symbols(content, lang);
+        Self::generate_skeleton_from_symbols(content, lang, file_path, &symbols)
+    }
+
+    pub(crate) fn generate_skeleton_from_symbols(
+        content: &str,
+        lang: AstLanguage,
+        file_path: &str,
+        symbols: &[AstSymbol],
+    ) -> Option<String> {
         let lines: Vec<&str> = content.lines().collect();
         let total_lines = lines.len();
 
         // Only collapse function and method bodies
-        let fn_symbols: Vec<&AstSymbol> = symbols
+        let mut fn_symbols: Vec<&AstSymbol> = symbols
             .iter()
             .filter(|s| (s.kind == "function" || s.kind == "method") && s.end_line > s.start_line + 1)
             .collect();
+        fn_symbols.sort_by_key(|s| (s.start_line, s.end_line));
 
         if fn_symbols.is_empty() {
             return None;
@@ -109,7 +119,7 @@ impl AstEngine {
 
         let mut cur_line = 1;
         for sym in fn_symbols {
-            if sym.start_line < cur_line {
+            if sym.start_line == 0 || sym.start_line > total_lines || sym.start_line < cur_line {
                 continue;
             }
             // Emit lines up to start_line
@@ -121,25 +131,26 @@ impl AstEngine {
             if cur_line <= total_lines {
                 let start_line_idx = sym.start_line - 1;
                 let first_line = lines[start_line_idx];
-                let span = sym.end_line - sym.start_line;
+                let end_line = sym.end_line.min(total_lines);
+                let span = end_line.saturating_sub(sym.start_line);
 
                 if is_py {
                     skeleton.push(first_line.to_string());
                     let indent: String = first_line.chars().take_while(|c| c.is_whitespace()).collect();
                     let body_indent = if indent.is_empty() { "    ".to_string() } else { format!("{}    ", indent) };
-                    skeleton.push(format!("{}... /* L{}-{}: {} lines */", body_indent, sym.start_line + 1, sym.end_line, span));
+                    skeleton.push(format!("{}... /* L{}-{}: {} lines */", body_indent, sym.start_line + 1, end_line, span));
                 } else {
                     let indent: String = first_line.chars().take_while(|c| c.is_whitespace()).collect();
                     let trimmed = first_line.trim();
                     if trimmed.ends_with('{') {
                         let header = trimmed.trim_end_matches('{').trim_end();
-                        skeleton.push(format!("{}{} {{ /* L{}-{}: {} lines */ }}", indent, header, sym.start_line + 1, sym.end_line, span));
+                        skeleton.push(format!("{}{} {{ /* L{}-{}: {} lines */ }}", indent, header, sym.start_line + 1, end_line, span));
                     } else {
                         skeleton.push(first_line.to_string());
-                        skeleton.push(format!("{}{{ /* L{}-{}: {} lines */ }}", indent, sym.start_line + 1, sym.end_line, span));
+                        skeleton.push(format!("{}{{ /* L{}-{}: {} lines */ }}", indent, sym.start_line + 1, end_line, span));
                     }
                 }
-                cur_line = sym.end_line + 1;
+                cur_line = end_line + 1;
             }
         }
 
@@ -150,5 +161,56 @@ impl AstEngine {
         }
 
         Some(skeleton.join("\n"))
+    }
+}
+
+#[cfg(test)]
+mod ordering_tests {
+    use super::*;
+
+    fn mk_fn(name: &str, start_line: usize, end_line: usize) -> AstSymbol {
+        AstSymbol {
+            name: name.to_string(),
+            kind: "function".to_string(),
+            start_line,
+            end_line,
+            start_byte: 0,
+            end_byte: 0,
+            signature: format!("fn {}()", name),
+            body_start_line: None,
+            body_end_line: None,
+            parent_symbol: None,
+            package: None,
+            language: "rust".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_generate_skeleton_sorts_out_of_order_and_guards_invalid_lines() {
+        let code = "\
+fn first() {
+    let a = 1;
+    let b = 2;
+    a + b
+}
+
+fn second() {
+    let c = 3;
+    let d = 4;
+    c + d
+}";
+        let symbols = vec![
+            mk_fn("second", 7, 11),
+            mk_fn("zero_line", 0, 3),
+            mk_fn("oob_line", 99, 105),
+            mk_fn("first", 1, 5),
+        ];
+
+        let skel = AstEngine::generate_skeleton_from_symbols(code, AstLanguage::Rust, "demo.rs", &symbols)
+            .expect("skeleton should be generated");
+        assert!(skel.contains("fn first() { /* L2-5: 4 lines */ }"));
+        assert!(skel.contains("fn second() { /* L8-11: 4 lines */ }"));
+        assert!(!skel.contains("let a = 1;"));
+        assert!(!skel.contains("let c = 3;"));
     }
 }

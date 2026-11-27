@@ -1,5 +1,5 @@
 // Dashboard MCP System Logs & Diagnostics View
-import { el } from '../dom.js';
+import { el, escapeHtml } from '../dom.js';
 import { fetchLogs, clearLogs } from '../api.js';
 import { showConfirm } from '../dialog.js';
 import { paginate, renderPagination, resetPage } from '../pagination.js';
@@ -42,20 +42,19 @@ export async function renderLogsView() {
 
       <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
         <div style="display: flex; gap: 6px; align-items: center;">
-          <button id="btn-log-all" class="btn btn-sm btn-primary" style="padding: 3px 8px; font-size: 11px;">${t('logs.all')}</button>
-          <button id="btn-log-crash" class="btn btn-sm btn-secondary" style="padding: 3px 8px; font-size: 11px; color: #ef4444;">${t('logs.filter_crashes')}</button>
-          <button id="btn-log-error" class="btn btn-sm btn-secondary" style="padding: 3px 8px; font-size: 11px; color: #f97316;">${t('logs.filter_errors')}</button>
-          <button id="btn-log-warn" class="btn btn-sm btn-secondary" style="padding: 3px 8px; font-size: 11px; color: #f59e0b;">${t('logs.filter_warnings')}</button>
+          <button id="btn-log-all" class="btn btn-sm ${currentLevel === 'all' ? 'btn-primary' : 'btn-secondary'}" style="padding: 3px 8px; font-size: 11px;">${t('logs.all')}</button>
+          <button id="btn-log-crash" class="btn btn-sm ${currentLevel === 'crash' ? 'btn-primary' : 'btn-secondary'}" style="padding: 3px 8px; font-size: 11px; color: #ef4444;">${t('logs.filter_crashes')}</button>
+          <button id="btn-log-error" class="btn btn-sm ${currentLevel === 'error' ? 'btn-primary' : 'btn-secondary'}" style="padding: 3px 8px; font-size: 11px; color: #f97316;">${t('logs.filter_errors')}</button>
+          <button id="btn-log-warn" class="btn btn-sm ${currentLevel === 'warn' ? 'btn-primary' : 'btn-secondary'}" style="padding: 3px 8px; font-size: 11px; color: #f59e0b;">${t('logs.filter_warnings')}</button>
         </div>
 
         <div style="display: flex; gap: 6px; align-items: center; flex: 1; max-width: 460px; justify-content: flex-end;">
           <div style="position: relative; display: flex; align-items: center; width: 100%; max-width: 320px;">
-            <span style="position: absolute; left: 8px; font-size: 11px; color: var(--text-muted); pointer-events: none;">🔍</span>
-            <input id="logs-search-input" type="text" value="${escapeHtml(currentSearch)}" placeholder="${t('logs.search_placeholder')}"
-              style="width: 100%; padding: 4px 24px 4px 26px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 11px; height: 28px;" />
+            <input id="logs-search-input" type="text" value="${escapeHtml(currentSearch)}" placeholder="${escapeHtml(t('logs.search_placeholder'))}"
+              style="width: 100%; padding: 4px 24px 4px 10px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); font-size: 11px; height: 28px;" />
             <button id="btn-search-clear" style="position: absolute; right: 6px; background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; display: ${currentSearch ? 'block' : 'none'};" title="Clear">✕</button>
           </div>
-          <button id="btn-refresh-logs" class="btn btn-sm btn-secondary" style="padding: 3px 8px; font-size: 11px; height: 28px;" title="Refresh">🔄</button>
+          <button id="btn-refresh-logs" class="btn btn-sm btn-secondary" style="padding: 3px 8px; font-size: 11px; height: 28px;" title="Refresh">Refresh</button>
           <button id="btn-clear-logs" class="btn btn-sm btn-secondary" style="padding: 3px 8px; font-size: 11px; height: 28px; color: #ef4444; border-color: rgba(239, 68, 68, 0.4);" title="${t('logs.clear')}">${t('logs.clear')}</button>
         </div>
       </div>
@@ -94,7 +93,7 @@ async function loadLogs() {
     allLogs = data.logs || [];
     drawLogsTable();
   } catch (err) {
-    table.innerHTML = `<tr><td colspan="4" style="color: #ef4444; padding: 20px; text-align: center;">${t('logs.load_failed', { error: err.message })}</td></tr>`;
+    table.innerHTML = `<tr><td colspan="4" style="color: #ef4444; padding: 20px; text-align: center;">${escapeHtml(t('logs.load_failed', { error: err.message }))}</td></tr>`;
   }
 }
 
@@ -118,9 +117,8 @@ function renderLogEntries(tbody, logs) {
     tbody.innerHTML = `
       <tr>
         <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 28px 16px;">
-          <div style="font-size: 20px; margin-bottom: 4px;">✨</div>
-          <div style="font-size: 12px; color: var(--text-secondary); font-weight: 500;">${t('logs.zero_found')}</div>
-          <div style="font-size: 10px; margin-top: 2px;">${t('logs.healthy')}</div>
+          <div style="font-size: 12px; color: var(--text-secondary); font-weight: 500;">${escapeHtml(t('logs.zero_found'))}</div>
+          <div style="font-size: 10px; margin-top: 2px;">${escapeHtml(t('logs.healthy'))}</div>
         </td>
       </tr>
     `;
@@ -134,14 +132,14 @@ function renderLogEntries(tbody, logs) {
     const isWarn = log.level === 'WARN';
     const badgeBg = isCrash ? '#ef444422' : (isErr ? '#f9731622' : (isWarn ? '#f59e0b22' : '#00e5ff22'));
     const badgeColor = isCrash ? '#ef4444' : (isErr ? '#f97316' : (isWarn ? '#f59e0b' : '#00e5ff'));
-    const icon = isCrash ? '💥' : (isErr ? '❌' : (isWarn ? '⚠️' : 'ℹ️'));
+    const icon = isCrash ? '!' : (isErr ? '✗' : (isWarn ? '⚠' : 'i'));
     const isExp = expandedId === log.id;
 
     html += `
-      <tr class="log-row" data-id="${log.id}" style="cursor: pointer; border-bottom: 1px solid var(--border-color); height: 32px; background: ${isExp ? 'rgba(0, 229, 255, 0.05)' : 'transparent'};" title="Click to expand details">
+      <tr class="log-row" data-id="${Number(log.id) || 0}" style="cursor: pointer; border-bottom: 1px solid var(--border-color); height: 32px; background: ${isExp ? 'rgba(0, 229, 255, 0.05)' : 'transparent'};" title="Click to expand details">
         <td style="padding: 5px 10px; white-space: nowrap;">
           <span style="background: ${badgeBg}; color: ${badgeColor}; border: 1px solid ${badgeColor}55; padding: 1px 6px; border-radius: 3px; font-size: 9.5px; font-weight: 700;">
-            ${icon} ${log.level}
+            ${icon} ${escapeHtml(log.level)}
           </span>
         </td>
         <td style="padding: 5px 10px; color: #00e5ff; font-weight: 600; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px;">
@@ -157,7 +155,7 @@ function renderLogEntries(tbody, logs) {
           </div>
         </td>
         <td style="padding: 5px 10px; color: var(--text-muted); font-size: 10.5px; white-space: nowrap;">
-          ${log.time_str || ''}
+          ${escapeHtml(log.time_str || '')}
         </td>
       </tr>
     `;
@@ -266,9 +264,4 @@ function setupSearchAndActions() {
       }
     };
   }
-}
-
-function escapeHtml(str) {
-  if (!str) return '';
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }

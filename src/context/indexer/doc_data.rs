@@ -20,8 +20,12 @@ impl FileDocCategory {
 
 /// Checks if a file path is a documentation or structured data file.
 pub fn classify_doc_or_data(rel_path: &str) -> Option<FileDocCategory> {
-    let lower = rel_path.to_lowercase();
-    let ext = lower.rsplit('.').next().unwrap_or("");
+    let file_name = std::path::Path::new(rel_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(rel_path);
+    let lower = file_name.to_ascii_lowercase();
+    let (_, ext) = lower.rsplit_once('.')?;
 
     match ext {
         "md" | "markdown" | "mdown" | "mkdn" | "txt" | "rst" | "adoc" | "pdf" => {
@@ -74,6 +78,11 @@ mod tests {
         assert_eq!(classify_doc_or_data("Cargo.toml"), Some(FileDocCategory::Data));
         assert_eq!(classify_doc_or_data("package.json"), Some(FileDocCategory::Data));
         assert_eq!(classify_doc_or_data("dashboard.css"), Some(FileDocCategory::Data));
+        assert_eq!(classify_doc_or_data(".env"), Some(FileDocCategory::Data));
+        assert_eq!(classify_doc_or_data("config/.env"), Some(FileDocCategory::Data));
+        assert_eq!(classify_doc_or_data("md"), None);
+        assert_eq!(classify_doc_or_data("lock"), None);
+        assert_eq!(classify_doc_or_data("dir.txt/Makefile"), None);
         assert_eq!(classify_doc_or_data("src/main.rs"), None);
         assert_eq!(classify_doc_or_data("scripts/instinct-cli.py"), None);
     }

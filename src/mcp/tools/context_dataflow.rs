@@ -14,13 +14,11 @@ pub fn handle_data_flow(project_path: &Path, query: &str) -> String {
         return "No code graph index found. Run task_pipeline or project_context first to generate index.".to_string();
     }
 
-    let conn = match Connection::open_with_flags(
-        &db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) {
-        Ok(c) => c,
+    let db = match crate::context::db::CodeGraphDb::open_read_only(&db_path) {
+        Ok(db) => db,
         Err(e) => return format!("Failed to open code graph database: {}", e),
     };
+    let conn = &db.conn;
 
     let mut output = Vec::new();
     output.push(format!("# Data Flow & Dispatch Analysis for '{}'", query));
@@ -28,7 +26,7 @@ pub fn handle_data_flow(project_path: &Path, query: &str) -> String {
     let pattern = format!("%{}%", query);
 
     // 1. Forward Data Flow (Sinks: where does this variable/function output flow into?)
-    let forward_flows = query_forward_flows(&conn, &pattern, query);
+    let forward_flows = query_forward_flows(conn, &pattern, query);
     output.push(format!("\n## Forward Data Flow (Sinks) [{}]", forward_flows.len()));
     if forward_flows.is_empty() {
         output.push("- No outgoing data flow links recorded for this symbol or variable.".to_string());
@@ -42,7 +40,7 @@ pub fn handle_data_flow(project_path: &Path, query: &str) -> String {
     }
 
     // 2. Backward Data Flow (Sources: what values flow into this function/parameter?)
-    let backward_flows = query_backward_flows(&conn, &pattern, query);
+    let backward_flows = query_backward_flows(conn, &pattern, query);
     output.push(format!("\n## Backward Data Flow (Sources) [{}]", backward_flows.len()));
     if backward_flows.is_empty() {
         output.push("- No incoming data flow links recorded for this target parameter.".to_string());
@@ -56,7 +54,7 @@ pub fn handle_data_flow(project_path: &Path, query: &str) -> String {
     }
 
     // 3. Dynamic Dispatch & Trait Implementation Links
-    let dispatch_links = query_dispatch_links(&conn, &pattern);
+    let dispatch_links = query_dispatch_links(conn, &pattern);
     output.push(format!("\n## Dynamic Dispatch & Trait Contracts [{}]", dispatch_links.len()));
     if dispatch_links.is_empty() {
         output.push("- No dynamic dispatch or trait implementation edges registered.".to_string());

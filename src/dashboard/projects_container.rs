@@ -25,8 +25,11 @@ pub fn is_generic_home_dir(p: &Path) -> bool {
         if parent == Path::new("/home") || parent == Path::new("/Users") {
             return true;
         }
-        let clean_parent = parent.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
-        if clean_parent.ends_with(":\\Users") || clean_parent.ends_with(":/Users") {
+        let clean_parent = parent
+            .to_string_lossy()
+            .trim_end_matches(['/', '\\'])
+            .to_ascii_lowercase();
+        if clean_parent.ends_with(":\\users") || clean_parent.ends_with(":/users") {
             return true;
         }
     }

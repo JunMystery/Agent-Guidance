@@ -39,7 +39,7 @@ read_tty() {
 }
 
 perform_uninstall() {
-    echo -e "\n${RED}${BOLD}🗑️  Uninstalling Agent Guidance...${NC}\n"
+    echo -e "\n${RED}${BOLD}Uninstalling Agent Guidance...${NC}\n"
     if [ "$(uname -s)" = "Linux" ] && command -v systemctl &>/dev/null; then
         systemctl --user stop agent-guidance 2>/dev/null || true
         systemctl --user disable agent-guidance 2>/dev/null || true
@@ -49,7 +49,7 @@ perform_uninstall() {
         launchctl unload "$plist" 2>/dev/null || true
         rm -f "$plist" 2>/dev/null || true
     fi
-    killall agent-guidance agent-guidance-mcp &>/dev/null || pkill -f agent-guidance &>/dev/null || true
+    killall agent-guidance agent-guidance-mcp &>/dev/null || pkill -x agent-guidance &>/dev/null || true
     [ -d "$HOME/.agent-guidance" ] && rm -rf "$HOME/.agent-guidance" && echo -e "  ${GREEN}✓${NC} Removed $HOME/.agent-guidance"
     rm -f "$HOME/.local/bin/agent-guidance" "$HOME/.cargo/bin/agent-guidance" 2>/dev/null || true
     echo -e "\n${GREEN}${BOLD}✓ Uninstallation complete!${NC}\n"; exit 0
@@ -71,7 +71,7 @@ if [ "$NON_INTERACTIVE" = false ]; then
     PROFILE="$(read_tty "Profile" "1")"
 fi
 
-killall agent-guidance &>/dev/null || pkill -f agent-guidance &>/dev/null || true
+killall agent-guidance &>/dev/null || pkill -x agent-guidance &>/dev/null || true
 rm -f "$HOME/.cargo/bin/agent-guidance" 2>/dev/null || true
 mkdir -p "$HOME/.local/bin"
 LOCAL_BIN="$HOME/.local/bin"
@@ -99,7 +99,7 @@ try_download() {
     elif command -v wget &>/dev/null; then
         version="$(wget -qO- "https://api.github.com/repos/${repo}/releases/latest" | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
     fi
-    version="${version:-v2.0.2}"
+    version="${version:-v2.0.3}"
     local tmp_dir; tmp_dir="$(mktemp -d 2>/dev/null || echo "/tmp/ag-download-$$")"
     mkdir -p "$tmp_dir"
 
@@ -110,6 +110,20 @@ try_download() {
         if command -v curl &>/dev/null && curl -fsSL "$url" -o "$tmp_dir/$asset" 2>/dev/null; then ok=true;
         elif command -v wget &>/dev/null && wget -q "$url" -O "$tmp_dir/$asset" 2>/dev/null; then ok=true; fi
         if [ "$ok" = true ] && [ -s "$tmp_dir/$asset" ]; then
+            local sha_url="${url}.sha256" sha_file="$tmp_dir/${asset}.sha256" sha_ok=true
+            if command -v curl &>/dev/null; then curl -fsSL "$sha_url" -o "$sha_file" 2>/dev/null || rm -f "$sha_file";
+            elif command -v wget &>/dev/null; then wget -q "$sha_url" -O "$sha_file" 2>/dev/null || rm -f "$sha_file"; fi
+            if [ -s "$sha_file" ]; then
+                local expected actual=""
+                expected="$(awk '{print tolower($1)}' "$sha_file" | head -n1)"
+                if command -v sha256sum &>/dev/null; then actual="$(sha256sum "$tmp_dir/$asset" | awk '{print tolower($1)}')";
+                elif command -v shasum &>/dev/null; then actual="$(shasum -a 256 "$tmp_dir/$asset" | awk '{print tolower($1)}')"; fi
+                if [ -n "$expected" ] && [ -n "$actual" ] && [ "$expected" != "$actual" ]; then
+                    echo -e "  ${YELLOW}WARN${NC} SHA256 mismatch for ${asset}, skipping"
+                    sha_ok=false
+                fi
+            fi
+            [ "$sha_ok" = true ] || continue
             echo -e "  ${GREEN}✓${NC} Downloaded prebuilt release ${version} (${asset})"
             tar -xzf "$tmp_dir/$asset" -C "$tmp_dir" 2>/dev/null || continue
             if [ -f "$tmp_dir/agent-guidance" ]; then
@@ -125,7 +139,7 @@ try_download() {
 
 build_source() {
     if ! command -v cargo &>/dev/null && [ ! -f "$HOME/.cargo/bin/cargo" ]; then
-        echo -e "  ${YELLOW}⚡ Installing rustup...${NC}"
+        echo -e "  ${YELLOW}Installing rustup...${NC}"
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     fi
     export PATH="$HOME/.cargo/bin:$PATH"
@@ -173,6 +187,8 @@ configure_server_daemon() {
         DASHBOARD_PORT="$(read_tty "Dashboard Port" "$DASHBOARD_PORT")"
         API_KEY="$(read_tty "Optional Bearer API Key" "$API_KEY")"
     fi
+    if ! [[ "$BIND_ADDR" =~ ^[A-Za-z0-9.:-]+$ ]]; then echo "Invalid Bind Address: $BIND_ADDR" >&2; exit 1; fi
+    if [ -n "$API_KEY" ] && ! [[ "$API_KEY" =~ ^[A-Za-z0-9._-]+$ ]]; then echo "Invalid API Key characters" >&2; exit 1; fi
     local key_arg=""
     [ -n "$API_KEY" ] && key_arg=" --api-key $API_KEY"
 

@@ -21,14 +21,28 @@ pub fn commit_batch(conn: &Connection) {
     let _ = conn.execute_batch("COMMIT;");
 }
 
+fn escape_like(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 pub fn clear_file_edges(conn: &Connection, rel_path: &str) {
-    let prefix = format!("{}::%", rel_path);
+    let prefix = format!("{}::%", escape_like(rel_path));
     let _ = conn.execute(
-        "DELETE FROM symbol_edges WHERE source_id LIKE ?1 OR target_id LIKE ?1",
+        "DELETE FROM symbol_edges WHERE source_id LIKE ?1 ESCAPE '\\' OR target_id LIKE ?1 ESCAPE '\\'",
         rusqlite::params![prefix],
     );
     let _ = conn.execute(
-        "DELETE FROM data_flow_edges WHERE caller_symbol_id LIKE ?1 OR callee_symbol_id LIKE ?1",
+        "DELETE FROM data_flow_edges WHERE caller_symbol_id LIKE ?1 ESCAPE '\\' OR callee_symbol_id LIKE ?1 ESCAPE '\\'",
         rusqlite::params![prefix],
     );
 }
@@ -106,5 +120,52 @@ mod tests {
         commit_batch(&conn);
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM t;", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_clear_file_edges_escapes_like_wildcards() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE symbol_edges (source_id TEXT, target_id TEXT);
+             CREATE TABLE data_flow_edges (caller_symbol_id TEXT, callee_symbol_id TEXT);",
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO symbol_edges VALUES ('src/a_b.rs::fn::f1', 'src/c.rs::fn::f3');",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO symbol_edges VALUES ('src/axb.rs::fn::f2', 'src/c.rs::fn::f3');",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO data_flow_edges VALUES ('src/a_b.rs::fn::f1', 'src/c.rs::fn::f3');",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO data_flow_edges VALUES ('src/axb.rs::fn::f2', 'src/c.rs::fn::f3');",
+            [],
+        )
+        .unwrap();
+
+        clear_file_edges(&conn, "src/a_b.rs");
+
+        let sym_remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM symbol_edges;", [], |r| r.get(0))
+            .unwrap();
+        let df_remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM data_flow_edges;", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(sym_remaining, 1);
+        assert_eq!(df_remaining, 1);
+
+        let kept_source: String = conn
+            .query_row("SELECT source_id FROM symbol_edges;", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kept_source, "src/axb.rs::fn::f2");
     }
 }

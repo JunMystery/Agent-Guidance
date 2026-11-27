@@ -1,4 +1,4 @@
-# 🦀 Agent Guidance MCP Server
+# Agent Guidance MCP Server
 
 [![Releases](https://img.shields.io/github/v/release/JunMystery/Agent-Guidance?style=flat-square)](https://github.com/JunMystery/Agent-Guidance/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
@@ -6,11 +6,11 @@
 ![Agent Guidance Hero Banner](docs/images/hero-banner.png)
 
 > **The Architectural Conductor for AI Coding Agents.**
-> Stop spaghetti code, cut context bloat by 80%, and supercharge agent reasoning. Agent Guidance supervises AI Coding Agents (Claude Code, Cursor, Windsurf, Gemini, Codex) by guiding domain cohesion and function complexity with a 300 LOC soft limit and built-in AST metrics, and delivering sub-millisecond **Hierarchical GraphRAG** with neural skill retrieval.
+> Stop spaghetti code, cut context bloat by 80%, and supercharge agent reasoning. Agent Guidance supervises AI Coding Agents (Claude Code, Cursor, Windsurf, Gemini, Codex) by guiding domain cohesion and function complexity with a 300 LOC soft limit and built-in AST metrics, and delivering sub-millisecond **Hierarchical GraphRAG** with neural retrieval across 629 embedded skills.
 
 ---
 
-## 🚀 Quickstart & Installation
+## Quickstart & Installation
 
 Installers automatically detect and configure all supported IDEs (Claude Code, Claude Desktop, Cursor, Gemini, Antigravity, Windsurf).
 
@@ -54,7 +54,7 @@ cargo build --release
 
 ---
 
-## ⚡ The Difference: AI with vs. without Agent Guidance
+## The Difference: AI with vs. without Agent Guidance
 
 | Challenge | Without Agent Guidance (AI Slop) | With Agent Guidance (Disciplined Architect) |
 | :--- | :--- | :--- |
@@ -68,7 +68,7 @@ cargo build --release
 
 ---
 
-## 🧭 Instant Codebase Onboarding with Hierarchical GraphRAG
+## Instant Codebase Onboarding with Hierarchical GraphRAG
 
 Traditional agents waste up to 70% of context reading full source files just to understand function call chains. Agent Guidance implements **Hierarchical Leiden GraphRAG** backed by Tree-sitter AST symbol tables and SQLite:
 
@@ -100,7 +100,7 @@ Traditional agents waste up to 70% of context reading full source files just to 
 
 ---
 
-## 🛡️ Step-by-Step AI Guardrail Pipeline
+## Step-by-Step AI Guardrail Pipeline
 
 Agent Guidance forces autonomous agents to follow an enterprise engineering lifecycle:
 
@@ -149,14 +149,14 @@ Agent Guidance forces autonomous agents to follow an enterprise engineering life
 
 ---
 
-## 🛠️ MCP Tool Suite Reference
+## MCP Tool Suite Reference
 
 | Tool Name | Role | Primary Developer Capabilities |
 | :--- | :--- | :--- |
 | **`task_pipeline`** | **Entrypoint Orchestrator** | CALL FIRST. Unlocks priority gate, detects architecture, auto-bundles Turn 1 skill discovery, injects memorized learnings, and synthesizes domain/feature blueprints & 300 LOC soft-limit review candidates. |
 | **`project_context`** | **GraphRAG & Bounded Reader** | Hierarchical Leiden GraphRAG (`drift`, `global`, `local`), Subgraph Bundling (<250 LOC definition + 1-hop callers/callees), AST skeletonization, and 6-phase instant search cascade (<100ms). |
 | **`workflow_gate`** | **Stage & Edit Guard** | Runs Tree-Sitter AST complexity, soft 300 LOC cohesion, and test-safety advisories, warns on cross-domain container bags (`DOMAIN_COHESION_ADVISORY`), blocks `TEST_SAFETY_VIOLATION` on `advance`, creates rollback snapshots, and manages fix circuit breakers. |
-| **`guidance`** | **Standards & Skill Catalog** | 2-stage Candle BERT vector search + Cross-Encoder reranking over embedded domain skills, pre-code checklists, test-safety & production-data boundary verification (`TEST_SAFETY_VIOLATION`), and empirical verification contracts. |
+| **`guidance`** | **Standards & Skill Catalog** | 2-stage Candle BERT vector search + Cross-Encoder reranking over 629 embedded domain skills (ECC, OWASP, Anthropic, Cloudflare, Karpathy, UI/UX, humanizer), pre-code checklists, test-safety & production-data boundary verification (`TEST_SAFETY_VIOLATION`), and empirical verification contracts. |
 | **`select_skills`** | **Semantic Skill Loader** | Delivers full instructions for standard skills ($\le 250$ LOC) and vector-ranked section slices for large reference skills (~80% token savings). |
 | **`session_continuity`** | **Memory & Handoff** | Persists session memory, tracks pairwise co-changes into evolutionary git graphs, stores project learnings, and generates cross-agent handoff briefs. |
 
@@ -164,7 +164,7 @@ Agent Guidance forces autonomous agents to follow an enterprise engineering life
 
 ---
 
-## 💻 Essential CLI Reference
+## Essential CLI Reference
 
 ```bash
 agent-guidance [OPTIONS]
@@ -172,30 +172,34 @@ agent-guidance [OPTIONS]
 Client & IDE Configuration:
   --setup                  Install and configure MCP server across all detected IDE clients
   --verify-setup           Verify MCP configuration paths and binary permissions across IDEs
+  --upgrade                Download and install the latest release with mandatory SHA-256 verification
   --status, --stats        Display client mode, system telemetry, and remote skill stats
   --set-server <URL|local> Configure remote ML worker endpoint (or 'local' for standalone)
   --test-server            Test connection and measure ping latency to remote ML worker
+  --setup-server           Interactive wizard generating systemd/launchd/Windows worker configs
   --uninstall              Remove MCP server configurations from all IDE clients
 
 Daemon & Maintenance:
   --dashboard              Launch real-time web usage dashboard at http://127.0.0.1:11997
   --cleanup                Auto-clean expired logs, prune dead projects, and vacuum SQLite DB
+  --retention-days <N>     Retention window in days for --cleanup (default: 7, min: 1)
   --reindex-skills         Compile staging skills into high-speed binary vector format
   --help, -h               Print full help message (includes remote worker and server flags)
 ```
 
 ---
 
-## 📊 Web Dashboard & Telemetry
+## Web Dashboard & Telemetry
 
-Agent Guidance includes a local real-time Command Deck at **`http://127.0.0.1:11997`**:
+Agent Guidance includes a local real-time Command Deck at **`http://127.0.0.1:11997`** (origin-protected on loopback and Bearer-authenticated for remote clients):
 
 - **Telemetry & Token Metrics**: Persistent timeframe controls (`24H` / `7D` / `30D` / `ALL`) tracking agent token savings, tool distributions, and execution latency waves.
 - **Tool Micro-Rules Editor (`/#rules`)**: Visual toggles and markdown editors to configure per-project or global tool guidance (subordinate to user's main rules in `AGENTS.md` / `RULES.md`) without prompt bloat.
 - **In-Browser Skill Registry (`/#skills`)**: Author, test, and live-preview custom domain skills with instant staging precedence (`~/.agent-guidance/staging/skills/`).
+- **Server & Connection Settings (`/#settings`)**: Configure Remote ML Worker endpoints, test connectivity/latency, and store or clear Bearer API keys safely.
 
 ---
 
-## 📄 License
+## License
 
 Distributed under the MIT License. See [LICENSE](LICENSE) for details.

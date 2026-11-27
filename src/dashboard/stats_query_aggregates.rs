@@ -70,9 +70,9 @@ pub fn query_phase_and_gov(conn: &Connection, cutoff: i64, is_proj: bool, p1: &s
     }
 
     let r_sql = if is_proj {
-        "SELECT phase, tool_name, operation, SUM(calls) FROM dashboard_daily_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE) GROUP BY phase, tool_name, operation"
+        "SELECT LOWER(COALESCE(phase, '')), tool_name, LOWER(COALESCE(operation, '')), SUM(calls) FROM dashboard_daily_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE) GROUP BY LOWER(COALESCE(phase, '')), tool_name, LOWER(COALESCE(operation, ''))"
     } else {
-        "SELECT phase, tool_name, operation, SUM(calls) FROM dashboard_daily_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 GROUP BY phase, tool_name, operation"
+        "SELECT LOWER(COALESCE(phase, '')), tool_name, LOWER(COALESCE(operation, '')), SUM(calls) FROM dashboard_daily_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 GROUP BY LOWER(COALESCE(phase, '')), tool_name, LOWER(COALESCE(operation, ''))"
     };
     if let Ok(mut r_stmt) = conn.prepare(r_sql) {
         let mapper = |r: &rusqlite::Row| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?));
@@ -84,6 +84,7 @@ pub fn query_phase_and_gov(conn: &Connection, cutoff: i64, is_proj: bool, p1: &s
                     if op == "authorize_edit" { gov["edits_authorized"] = json!(gov["edits_authorized"].as_i64().unwrap_or(0) + cnt); }
                     else if op == "approve_plan" || op == "approve" { gov["plans_approved"] = json!(gov["plans_approved"].as_i64().unwrap_or(0) + cnt); }
                     else if op == "verify" || op == "pass_verification" { gov["verifications_passed"] = json!(gov["verifications_passed"].as_i64().unwrap_or(0) + cnt); }
+                    else if op == "set_stage" || op == "advance" { gov["stages_transitioned"] = json!(gov["stages_transitioned"].as_i64().unwrap_or(0) + cnt); }
                 } else if tool_name == "guidance" && op == "verify" {
                     gov["verifications_passed"] = json!(gov["verifications_passed"].as_i64().unwrap_or(0) + cnt);
                 }
@@ -126,10 +127,22 @@ pub fn query_timeframe_summary(conn: &Connection, cutoff: i64, is_proj: bool, p1
         ).unwrap_or((0, 0, 0))
     };
 
-    let (skills_cnt, r_skills): (i64, i64) = (
-        conn.query_row("SELECT COUNT(*) FROM skill_loads WHERE loaded_at >= ?1", [cutoff], |r| r.get(0)).unwrap_or(0),
-        conn.query_row("SELECT COALESCE(SUM(calls), 0) FROM daily_skill_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1", [cutoff], |r| r.get(0)).unwrap_or(0),
-    );
+    let skills_cnt: i64 = conn
+        .query_row("SELECT COUNT(*) FROM skill_loads WHERE loaded_at >= ?1", [cutoff], |r| r.get(0))
+        .unwrap_or(0);
+    let r_skills: i64 = if is_proj {
+        conn.query_row(
+            "SELECT COALESCE(SUM(calls), 0) FROM daily_skill_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1 AND (project_path = ?2 COLLATE NOCASE OR project_path = ?3 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?2 COLLATE NOCASE OR rtrim(project_path, '/\\') = ?3 COLLATE NOCASE)",
+            params![cutoff, p1, p2],
+            |r| r.get(0),
+        ).unwrap_or(0)
+    } else {
+        conn.query_row(
+            "SELECT COALESCE(SUM(calls), 0) FROM daily_skill_rollups WHERE CAST(strftime('%s', day) AS INTEGER) >= ?1",
+            [cutoff],
+            |r| r.get(0),
+        ).unwrap_or(0)
+    };
     let skills = skills_cnt + r_skills;
 
     let (r_calls, r_orig, r_opt): (i64, i64, i64) = if is_proj {

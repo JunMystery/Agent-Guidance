@@ -31,7 +31,7 @@ Query: "xử lý timeout khi gọi API bên thứ 3"
 ## Operations Reference
 
 ### 1. `operation="search"`
-Executes the 5-phase search cascade across symbols, code content, and learned aliases.
+Executes the 6-phase search cascade across aliases, symbols, code content, vectors, and linked sibling projects.
 ```json
 {
   "operation": "search",
@@ -173,18 +173,40 @@ Executes Hierarchical Leiden GraphRAG across multi-level community hierarchies a
 - `"drift"`: Dual-route search combining Top-down Community Context with Bottom-up factual AST traversal.
 - `"basic"`: Standard top-$k$ fallback vector/FTS search.
 
+### 10. `operation="subgraph_bundle"` / `operation="bundle"`
+Packs a target symbol definition together with its 1-hop inbound callers and 1-hop outbound callees into a single token-bounded bundle (default `loc_budget=250`, clamped `50..=500`). Supports `path#symbol` syntax and optional `authorize` / `authorize_all`.
+```json
+{
+  "operation": "subgraph_bundle",
+  "project_path": "/path/to/project",
+  "target_symbol": "src/payment/service.rs#process_payment",
+  "loc_budget": 250,
+  "authorize": true
+}
+```
+
+### 11. `operation="data_flow"`
+Runs bidirectional intra-procedural taint flow and dynamic dispatch tracing backed by read-only SQLite queries against `code_graph.db` (aliases: `dataflow`, `taint`, `flow`).
+```json
+{
+  "operation": "data_flow",
+  "project_path": "/path/to/project",
+  "query": "process_payment"
+}
+```
+
 ---
 
 ## Proactive Background File Watcher
 
 The engine automatically runs an OS-level inotify/file watcher in the background:
 - **5s Debounce**: File edits are buffered for 5 seconds before triggering incremental indexing and GraphRAG community re-clustering.
-- **Incremental Indexing**: Uses SHA256 hashes to only re-parse modified files.
+- **Incremental Indexing**: Uses SHA256 hashes inside RAII-guarded SQLite transactions to only re-parse modified files, refreshes metadata when mtime/size changes without content changes, and prunes deleted files safely.
 - **Unified Exclusion Engine**: Powered by `src/context/exclusion.rs` to prune temporary directories, build caches, bytecodes, virtual environments, and media files across scanning, indexing, watching, and invalidation.
 
 ---
 
-## 🧹 Unified Cache, Temp & Binary Artifact Exclusion
+## Unified Cache, Temp & Binary Artifact Exclusion
 
 To prevent GraphRAG and SQLite bloat, `src/context/exclusion.rs` enforces centralized O(1)/slice exclusions across the entire context pipeline:
 
@@ -202,19 +224,21 @@ To prevent GraphRAG and SQLite bloat, `src/context/exclusion.rs` enforces centra
 | **Retained Structured Config** | `.json`, `.toml`, `.yaml`, `.yml`, `.xml`, `.ini`, `.env`, `.properties`, `.conf` (*kept indexed for project detection and monorepo workspace federation*) |
 
 - **Subtree Pruning**: During scanning, the walker prunes entire directories at the parent level without reading child entries.
-- **Housekeeping**: `prune_orphaned_files` actively purges legacy database entries matching the exclusion rules upon full re-indexing.
+- **Housekeeping**: `prune_orphaned_files` actively purges deleted or excluded database entries on full and incremental indexing (guarded against empty directory scans).
 
 ---
 
-## 🔒 Per-Project Storage Isolation
+## Per-Project Storage Isolation
 
 All code graph databases, FTS5 virtual tables, and vector embeddings are stored locally within the project directory:
 ```
 <project_root>/
 └── .agent-context/
-    ├── architecture.json      # Inferred architectural topology
-    ├── communities.json       # GraphRAG Leiden Community Hierarchy & Summaries
+    ├── architecture.json      # Inferred architectural topology (atomic write)
+    ├── communities.json       # GraphRAG Leiden Community Hierarchy & Summaries (atomic write)
     ├── code_graph.db          # SQLite DB (symbols, edges, vectors, chunks, aliases)
+    ├── learnings.md           # Project-specific memorized learnings (atomic write)
+    ├── snapshots/             # Session pre-edit snapshots ({session_id}/<rel_path>)
     └── sessions/              # Multi-session continuity state
 ```
 No data is shared between different repositories.

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use super::document::SkillSemanticDocument;
+use crate::catalog::language_detector::{contains_word, contains_word_prefix};
 
 /// Infers action triggers, file patterns, and applicable phases from name, keywords, and content.
 pub fn infer_document_metadata(doc: &mut SkillSemanticDocument) {
@@ -13,24 +14,38 @@ pub fn infer_document_metadata(doc: &mut SkillSemanticDocument) {
     let mut phases = HashSet::new();
 
     // 1. Action Triggers
-    let domain_actions = [
-        ("sql", "query"), ("database", "migration"), ("db", "database"),
-        ("docker", "container"), ("k8s", "deploy"), ("test", "testing"),
-        ("bench", "benchmark"), ("auth", "security"), ("security", "audit"),
-        ("clean", "refactor"), ("perf", "optimize"), ("async", "concurrency"),
-        ("api", "endpoint"), ("error", "error-handling"), ("log", "telemetry"),
-        ("cache", "caching"), ("jwt", "authentication"), ("orm", "data-model"),
+    // Match mode: 0 = substring, 1 = word prefix, 2 = whole word
+    let domain_actions: [(&str, &str, u8); 17] = [
+        ("sql", "query", 0), ("database", "migration", 0), ("db", "database", 2),
+        ("docker", "container", 0), ("k8s", "deploy", 2), ("test", "testing", 0),
+        ("bench", "benchmark", 1), ("auth", "security", 1), ("security", "audit", 0),
+        ("clean", "refactor", 1), ("perf", "optimize", 1), ("async", "concurrency", 1),
+        ("api", "endpoint", 1), ("error", "error-handling", 0),
+        ("cache", "caching", 1), ("jwt", "authentication", 2), ("orm", "data-model", 2),
     ];
-    for (kw, act) in domain_actions {
-        if combined.contains(kw) {
+    for (kw, act, mode) in domain_actions {
+        let matched = match mode {
+            2 => contains_word(&combined, kw),
+            1 => contains_word_prefix(&combined, kw),
+            _ => combined.contains(kw),
+        };
+        if matched {
             actions.insert(act.to_string());
             actions.insert(kw.to_string());
         }
     }
+    if ["log", "logs", "logging", "logger"]
+        .iter()
+        .any(|w| contains_word(&combined, w))
+    {
+        actions.insert("telemetry".to_string());
+        actions.insert("log".to_string());
+    }
 
     for word in doc.name.replace('-', " ").replace('_', " ").split_whitespace() {
-        if word.len() >= 3 && !matches!(word, "and" | "the" | "for" | "with" | "cheat" | "sheet") {
-            actions.insert(word.to_lowercase());
+        let lower = word.to_lowercase();
+        if lower.len() >= 3 && !matches!(lower.as_str(), "and" | "the" | "for" | "with" | "cheat" | "sheet") {
+            actions.insert(lower);
         }
     }
 
@@ -48,7 +63,7 @@ pub fn infer_document_metadata(doc: &mut SkillSemanticDocument) {
         patterns.insert("*_test.*".to_string());
         patterns.insert("tests/*".to_string());
     }
-    if combined.contains("api") || combined.contains("route") || combined.contains("endpoint") {
+    if contains_word_prefix(&combined, "api") || combined.contains("route") || combined.contains("endpoint") {
         patterns.insert("routes/*".to_string());
         patterns.insert("controllers/*".to_string());
     }
@@ -58,7 +73,7 @@ pub fn infer_document_metadata(doc: &mut SkillSemanticDocument) {
         patterns.insert("*.ts".to_string());
         patterns.insert("*.tsx".to_string());
     }
-    if name_lower.contains("go") || name_lower.contains("golang") { patterns.insert("*.go".to_string()); }
+    if contains_word(&name_lower, "go") || name_lower.contains("golang") { patterns.insert("*.go".to_string()); }
 
     // 3. Applicable Phases
     if combined.contains("test") {

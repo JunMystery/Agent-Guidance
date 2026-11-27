@@ -71,6 +71,28 @@ impl CandleBertInner {
         }
     }
 
+    pub(crate) fn pool_and_normalize_tensor(
+        embeddings: &Tensor,
+        attention_mask: &Tensor,
+    ) -> Result<Tensor> {
+        let mask_f32 = attention_mask.to_dtype(candle_core::DType::F32)?;
+        let mask_expanded = mask_f32.unsqueeze(2)?;
+        let sum_embeddings = embeddings.broadcast_mul(&mask_expanded)?.sum(1)?;
+        let sum_mask = mask_f32
+            .sum(1)?
+            .unsqueeze(1)?
+            .clamp(1e-9f32, f32::MAX)?;
+        let mean_embedding = sum_embeddings.broadcast_div(&sum_mask)?;
+
+        let norm = mean_embedding
+            .sqr()?
+            .sum_keepdim(1)?
+            .sqrt()?
+            .clamp(1e-9f32, f32::MAX)?;
+        let normalized = mean_embedding.broadcast_div(&norm)?;
+        Ok(normalized)
+    }
+
     pub fn embed_text(&self, text: &str, prefix: Option<&str>) -> Result<Vec<f32>> {
         let formatted = match prefix {
             Some("query") => format!("query: {}", text),
@@ -94,15 +116,7 @@ impl CandleBertInner {
             .model
             .forward(&input_ids, &token_type_ids, Some(&attention_mask_tensor))?;
 
-        let mask_f32 = attention_mask_tensor.to_dtype(candle_core::DType::F32)?;
-        let mask_expanded = mask_f32.unsqueeze(2)?;
-        let sum_embeddings = embeddings.broadcast_mul(&mask_expanded)?.sum(1)?;
-        let sum_mask = mask_f32.sum(1)?.unsqueeze(1)?;
-        let mean_embedding = sum_embeddings.broadcast_div(&sum_mask)?;
-
-        let norm = mean_embedding.sqr()?.sum_keepdim(1)?.sqrt()?;
-        let normalized = mean_embedding.broadcast_div(&norm)?;
-
+        let normalized = Self::pool_and_normalize_tensor(&embeddings, &attention_mask_tensor)?;
         let vector = normalized.squeeze(0)?.to_vec1::<f32>()?;
         Ok(vector)
     }
@@ -138,7 +152,10 @@ impl CandleBertInner {
             let b_size = encodings.len();
             let max_len = encodings.iter().map(|e| e.get_ids().len()).max().unwrap_or(0);
             if max_len == 0 {
-                continue;
+                anyhow::bail!(
+                    "Batch tokenization produced empty sequences (max_len == 0) for {} inputs",
+                    b_size
+                );
             }
 
             let mut batch_input_ids = vec![0u32; b_size * max_len];
@@ -164,19 +181,35 @@ impl CandleBertInner {
                 .model
                 .forward(&input_ids, &token_type_ids, Some(&attention_mask))?;
 
-            let mask_f32 = attention_mask.to_dtype(candle_core::DType::F32)?;
-            let mask_expanded = mask_f32.unsqueeze(2)?;
-            let sum_embeddings = embeddings.broadcast_mul(&mask_expanded)?.sum(1)?;
-            let sum_mask = mask_f32.sum(1)?.unsqueeze(1)?;
-            let mean_embedding = sum_embeddings.broadcast_div(&sum_mask)?;
-
-            let norm = mean_embedding.sqr()?.sum_keepdim(1)?.sqrt()?;
-            let normalized = mean_embedding.broadcast_div(&norm)?;
-
+            let normalized = Self::pool_and_normalize_tensor(&embeddings, &attention_mask)?;
             let batch_vectors = normalized.to_vec2::<f32>()?;
             results.extend(batch_vectors);
         }
 
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pool_and_normalize_zero_mask_and_zero_norm_no_nan() {
+        let device = Device::Cpu;
+        let embeddings =
+            Tensor::from_vec(vec![1.0f32, 2.0, 0.0, 0.0], (2, 1, 2), &device).unwrap();
+        let attention_mask = Tensor::from_vec(vec![0u32, 1u32], (2, 1), &device).unwrap();
+
+        let normalized =
+            CandleBertInner::pool_and_normalize_tensor(&embeddings, &attention_mask).unwrap();
+        let rows = normalized.to_vec2::<f32>().unwrap();
+        assert_eq!(rows.len(), 2);
+        for row in &rows {
+            for val in row {
+                assert!(val.is_finite(), "Expected finite value, got {}", val);
+                assert_eq!(*val, 0.0);
+            }
+        }
     }
 }

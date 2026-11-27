@@ -7,28 +7,30 @@ pub fn extract_semantic_document(name: &str, content: &str) -> SkillSemanticDocu
         ..Default::default()
     };
 
-    let mut lines = content.lines().peekable();
-    let mut in_frontmatter = false;
+    let clean_content = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let all_lines: Vec<&str> = clean_content.lines().collect();
     let mut frontmatter_lines = Vec::new();
     let mut body_lines = Vec::new();
 
-    if let Some(first_line) = lines.peek() {
-        if first_line.trim() == "---" {
-            in_frontmatter = true;
-            lines.next();
-        }
-    }
-
-    while let Some(line) = lines.next() {
-        if in_frontmatter {
-            if line.trim() == "---" {
-                in_frontmatter = false;
-                continue;
-            }
-            frontmatter_lines.push(line);
+    // Only parse YAML frontmatter if an opening `---` (after optional leading blank lines)
+    // has a matching closing `---`; otherwise treat the entire document as body.
+    let first_non_empty = all_lines.iter().position(|l| !l.trim().is_empty());
+    let closed_frontmatter = first_non_empty.and_then(|start| {
+        if all_lines[start].trim() == "---" {
+            all_lines[start + 1..]
+                .iter()
+                .position(|l| l.trim() == "---")
+                .map(|rel_end| (start, start + 1 + rel_end))
         } else {
-            body_lines.push(line);
+            None
         }
+    });
+
+    if let Some((start, end)) = closed_frontmatter {
+        frontmatter_lines.extend_from_slice(&all_lines[start + 1..end]);
+        body_lines.extend_from_slice(&all_lines[end + 1..]);
+    } else {
+        body_lines.extend_from_slice(&all_lines);
     }
 
     // Parse Frontmatter
@@ -40,32 +42,48 @@ pub fn extract_semantic_document(name: &str, content: &str) -> SkillSemanticDocu
         if trimmed.is_empty() {
             continue;
         }
+        let is_indented = line.starts_with(' ') || line.starts_with('\t');
 
-        if let Some(rest) = trimmed.strip_prefix("name:") {
-            doc.name = rest.trim().trim_matches('"').trim_matches('\'').to_string();
-            current_key = "name".to_string();
-        } else if let Some(rest) = trimmed.strip_prefix("description:") {
-            current_key = "description".to_string();
-            let desc_val = rest.trim().trim_matches('"').trim_matches('\'');
-            if !desc_val.is_empty() && desc_val != ">" && desc_val != "|" {
-                desc_accumulator.push(desc_val.to_string());
-            }
-        } else if let Some(rest) = trimmed.strip_prefix("tools:").or_else(|| trimmed.strip_prefix("tags:")) {
-            current_key = "tags".to_string();
-            for t in rest.split(',') {
-                let cleaned = t.trim().trim_matches('[').trim_matches(']').trim_matches('"').trim_matches('\'');
-                if !cleaned.is_empty() {
-                    doc.keywords.push(cleaned.to_string());
+        if !is_indented {
+            if let Some(rest) = trimmed.strip_prefix("name:") {
+                let parsed_name = rest.trim().trim_matches('"').trim_matches('\'').trim();
+                if !parsed_name.is_empty() {
+                    doc.name = parsed_name.to_string();
                 }
+                current_key = "name".to_string();
+                continue;
+            } else if let Some(rest) = trimmed.strip_prefix("description:") {
+                current_key = "description".to_string();
+                let desc_val = rest.trim().trim_matches('"').trim_matches('\'');
+                if !desc_val.is_empty() && !matches!(desc_val, ">" | "|" | ">-" | "|-" | ">+" | "|+") {
+                    desc_accumulator.push(desc_val.to_string());
+                }
+                continue;
+            } else if let Some(rest) = trimmed.strip_prefix("tools:").or_else(|| trimmed.strip_prefix("tags:")) {
+                current_key = "tags".to_string();
+                for t in rest.split(',') {
+                    let cleaned = t.trim().trim_matches('[').trim_matches(']').trim_matches('"').trim_matches('\'');
+                    if !cleaned.is_empty() {
+                        doc.keywords.push(cleaned.to_string());
+                    }
+                }
+                continue;
+            } else if trimmed.contains(':') && !trimmed.starts_with("- ") {
+                current_key.clear();
+                continue;
             }
-        } else if trimmed.starts_with("- ") && current_key == "tags" {
-            let tag = trimmed.trim_start_matches("- ").trim().trim_matches('"').trim_matches('\'');
-            if !tag.is_empty() {
-                doc.keywords.push(tag.to_string());
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("- ") {
+            if current_key == "tags" {
+                let tag = rest.trim().trim_matches('"').trim_matches('\'');
+                if !tag.is_empty() {
+                    doc.keywords.push(tag.to_string());
+                }
+            } else if current_key == "description" {
+                desc_accumulator.push(rest.trim().to_string());
             }
-        } else if trimmed.starts_with("- ") && current_key == "description" {
-            desc_accumulator.push(trimmed.trim_start_matches("- ").trim().to_string());
-        } else if current_key == "description" && !trimmed.contains(':') {
+        } else if current_key == "description" {
             desc_accumulator.push(trimmed.to_string());
         }
     }
@@ -74,21 +92,26 @@ pub fn extract_semantic_document(name: &str, content: &str) -> SkillSemanticDocu
         doc.description = desc_accumulator.join(" ");
     }
 
-    // Parse Markdown Body
+    // Parse Markdown Body (ignoring lines inside fenced code blocks)
     let mut in_trigger_section = false;
     let mut in_rules_section = false;
     let mut trigger_count = 0;
     let mut first_heading_captured = false;
     let mut body_text_collector = Vec::new();
+    let mut open_fence: Option<(char, usize)> = None;
 
     for line in &body_lines {
+        if crate::optimizer::compressor::update_code_fence(line, &mut open_fence) || open_fence.is_some() {
+            continue;
+        }
+
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
 
-        if trimmed.starts_with("# ") && !first_heading_captured {
-            doc.title = trimmed.trim_start_matches("# ").trim().to_string();
+        if let (false, Some(title)) = (first_heading_captured, trimmed.strip_prefix("# ")) {
+            doc.title = title.trim().to_string();
             first_heading_captured = true;
             continue;
         }
@@ -115,18 +138,25 @@ pub fn extract_semantic_document(name: &str, content: &str) -> SkillSemanticDocu
             continue;
         }
 
-        if in_trigger_section && (trimmed.starts_with("- ") || trimmed.starts_with("* ")) {
-            let item = trimmed.trim_start_matches("- ").trim_start_matches("* ").trim();
-            if !item.is_empty() && trigger_count < 8 {
-                doc.triggers.push(item.to_string());
-                trigger_count += 1;
+        if let Some(item) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .map(str::trim)
+        {
+            if in_trigger_section {
+                if !item.is_empty() && trigger_count < 8 {
+                    doc.triggers.push(item.to_string());
+                    trigger_count += 1;
+                }
+                continue;
+            } else if in_rules_section {
+                if !item.is_empty() && doc.micro_rules.len() < 3 && item.len() < 140 {
+                    doc.micro_rules.push(item.to_string());
+                }
+                continue;
             }
-        } else if in_rules_section && (trimmed.starts_with("- ") || trimmed.starts_with("* ")) {
-            let item = trimmed.trim_start_matches("- ").trim_start_matches("* ").trim();
-            if !item.is_empty() && doc.micro_rules.len() < 3 && item.len() < 140 {
-                doc.micro_rules.push(item.to_string());
-            }
-        } else if body_text_collector.len() < 6 && !trimmed.starts_with("```") && !trimmed.starts_with('#') {
+        }
+        if body_text_collector.len() < 6 && !trimmed.starts_with('#') {
             body_text_collector.push(trimmed);
         }
     }
@@ -162,4 +192,34 @@ pub fn extract_semantic_document(name: &str, content: &str) -> SkillSemanticDocu
     // Build summary snippet
     doc.summary_snippet = doc.to_passage(1500);
     doc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_folded_block_scalar_and_colons_in_description() {
+        let md = "---\nname: adaptive-language\ndescription: >-\n  Adapt tone carefully.\n  Note: preserve accuracy.\nlicense: MIT\n---\n\n# Adaptive Language\n";
+        let doc = extract_semantic_document("adaptive-language", md);
+        assert_eq!(doc.description, "Adapt tone carefully. Note: preserve accuracy.");
+        assert_eq!(doc.intent, "Adapt tone carefully");
+        assert!(!doc.description.contains("MIT"));
+    }
+
+    #[test]
+    fn test_unclosed_leading_dashes_and_empty_name_and_code_fences() {
+        let unclosed = "---\n# Real Heading\nSome useful guidance.\n";
+        let doc_unclosed = extract_semantic_document("fallback-name", unclosed);
+        assert_eq!(doc_unclosed.title, "Real Heading");
+        assert!(doc_unclosed.description.contains("Some useful guidance."));
+
+        let fenced = "\u{feff}---\nname: \n---\n```bash\n# Fake Title\n## When to Activate\n- Fake trigger\n```\n# Actual Title\n\n## Guidelines\n- Real rule\n```yaml\n- fake-code-rule\n```\n";
+        let doc_fenced = extract_semantic_document("fallback-name", fenced);
+        assert_eq!(doc_fenced.name, "fallback-name");
+        assert_eq!(doc_fenced.title, "Actual Title");
+        assert!(doc_fenced.triggers.is_empty());
+        assert_eq!(doc_fenced.micro_rules, vec!["Real rule".to_string()]);
+        assert_eq!(doc_fenced.headings, vec!["Guidelines".to_string()]);
+    }
 }

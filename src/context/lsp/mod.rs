@@ -18,7 +18,26 @@ pub use protocol::{
 #[cfg(test)]
 pub use protocol::{decode_message, encode_message};
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
+
+fn resolve_safe_project_path(proj_path: &Path, rel_path: &str) -> Option<PathBuf> {
+    if rel_path.is_empty() || rel_path.contains('\0') {
+        return None;
+    }
+    let rel = Path::new(rel_path);
+    if rel.is_absolute() {
+        return None;
+    }
+    for comp in rel.components() {
+        if matches!(
+            comp,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        ) {
+            return None;
+        }
+    }
+    Some(proj_path.join(rel))
+}
 
 /// Dispatches a `textDocument/references` query via the auto-detected LSP server.
 /// Returns `Some((server_name, locations))` on success, or `None` if LSP is unavailable or errored.
@@ -28,11 +47,11 @@ pub fn query_lsp_references(
     line: usize,
     col: usize,
 ) -> Option<(String, Vec<LspLocation>)> {
+    let full_path = resolve_safe_project_path(proj_path, rel_path)?;
     let config = detect_lsp_server(proj_path)?;
     let mut client = LspClient::start(&config, proj_path).ok()?;
     let server_name = client.server_name.clone();
 
-    let full_path = proj_path.join(rel_path);
     let uri = path_to_uri(&full_path);
     let lsp_line = line_to_lsp(line);
     let lsp_col = col.saturating_sub(1) as u32;
@@ -49,11 +68,11 @@ pub fn query_lsp_definition(
     line: usize,
     col: usize,
 ) -> Option<(String, Vec<LspLocation>)> {
+    let full_path = resolve_safe_project_path(proj_path, rel_path)?;
     let config = detect_lsp_server(proj_path)?;
     let mut client = LspClient::start(&config, proj_path).ok()?;
     let server_name = client.server_name.clone();
 
-    let full_path = proj_path.join(rel_path);
     let uri = path_to_uri(&full_path);
     let lsp_line = line_to_lsp(line);
     let lsp_col = col.saturating_sub(1) as u32;
@@ -70,11 +89,11 @@ pub fn query_lsp_type_definition(
     line: usize,
     col: usize,
 ) -> Option<(String, Vec<LspLocation>)> {
+    let full_path = resolve_safe_project_path(proj_path, rel_path)?;
     let config = detect_lsp_server(proj_path)?;
     let mut client = LspClient::start(&config, proj_path).ok()?;
     let server_name = client.server_name.clone();
 
-    let full_path = proj_path.join(rel_path);
     let uri = path_to_uri(&full_path);
     let lsp_line = line_to_lsp(line);
     let lsp_col = col.saturating_sub(1) as u32;

@@ -1,10 +1,10 @@
 use anyhow::Result;
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use tracing::info;
 
 use crate::mcp::state::ServerState;
-use super::{LearningItem, parse_learnings_file, handoff_file_path};
+use super::{LearningItem, parse_learnings_file, handoff_file_path, write_file_atomically};
 
 /// Matches category keywords when ML embeddings are offline.
 pub fn match_category_keywords(items: &[LearningItem], task: &str, limit: usize) -> Vec<String> {
@@ -150,6 +150,44 @@ pub fn compute_line_delta(original: &str, current: &str) -> (usize, usize) {
     (additions, deletions)
 }
 
+fn resolve_snapshot_file(proj_path: &Path, snapshots_dir: &Path, file: &str) -> Option<PathBuf> {
+    let trimmed = file.trim();
+    if trimmed.is_empty() || trimmed.contains("..") {
+        return None;
+    }
+    let candidate = Path::new(trimmed);
+    let rel = if candidate.is_absolute() {
+        let can_proj = proj_path.canonicalize().ok();
+        candidate
+            .strip_prefix(proj_path)
+            .ok()
+            .or_else(|| can_proj.as_ref().and_then(|cp| candidate.strip_prefix(cp).ok()))
+            .map(Path::to_path_buf)
+            .or_else(|| {
+                let can_cand = candidate.canonicalize().ok()?;
+                can_cand
+                    .strip_prefix(can_proj.as_ref()?)
+                    .ok()
+                    .map(Path::to_path_buf)
+            })?
+    } else {
+        candidate.to_path_buf()
+    };
+
+    if rel.as_os_str().is_empty()
+        || !rel.components().all(|c| matches!(c, Component::Normal(_)))
+    {
+        return None;
+    }
+
+    let snap_file = snapshots_dir.join(&rel);
+    if snap_file.is_file() {
+        Some(snap_file)
+    } else {
+        None
+    }
+}
+
 /// Generates a comprehensive markdown modification summary for the active session.
 pub fn generate_session_diff_summary(proj_path: &Path, state: &ServerState) -> String {
     if state.modified_files.is_empty() {
@@ -160,20 +198,18 @@ pub fn generate_session_diff_summary(proj_path: &Path, state: &ServerState) -> S
     }
 
     let mut table = String::from("| File Path | Impact Risk | Snapshot Available | Lines Delta |\n| :--- | :---: | :---: | :---: |\n");
-    let snapshots_dir = proj_path.join(".agent-context").join("snapshots").join(&state.session_id);
+    let snapshots_dir = crate::mcp::snapshots::get_session_snapshot_dir(proj_path, &state.session_id);
 
     for file in &state.modified_files {
         let impact = crate::mcp::impact::assess_file_risk(proj_path, file);
-        let mangled = file.replace('/', "_").replace('\\', "_");
-        let snap_file = snapshots_dir.join(format!("{}.snapshot", mangled));
-        let has_snap = snap_file.exists();
-        let snap_str = if has_snap { "Yes" } else { "No" };
+        let snap_file = resolve_snapshot_file(proj_path, &snapshots_dir, file);
+        let snap_str = if snap_file.is_some() { "Yes" } else { "No" };
 
         let curr_file_path = proj_path.join(file);
         let curr_content = fs::read_to_string(&curr_file_path).unwrap_or_default();
 
-        let delta_str = if has_snap {
-            let orig_content = fs::read_to_string(&snap_file).unwrap_or_default();
+        let delta_str = if let Some(ref snap_path) = snap_file {
+            let orig_content = fs::read_to_string(snap_path).unwrap_or_default();
             let (adds, dels) = compute_line_delta(&orig_content, &curr_content);
             format!("+{} / -{}", adds, dels)
         } else {
@@ -198,9 +234,6 @@ pub fn generate_session_diff_summary(proj_path: &Path, state: &ServerState) -> S
 /// Writes and returns a concise Cross-Agent Handoff Summary document.
 pub fn write_handoff_summary(proj_path: &Path, state: &ServerState, next_action: &str) -> Result<String> {
     let handoff_path = handoff_file_path(proj_path);
-    if let Some(parent) = handoff_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
 
     let next_step = if next_action.trim().is_empty() {
         "Inspect recent changes via `project_context(operation=\"read\")` and continue task execution."
@@ -212,12 +245,14 @@ pub fn write_handoff_summary(proj_path: &Path, state: &ServerState, next_action:
         "None (No files modified during this session).".to_string()
     } else {
         let mut table = String::from("| File Path | Impact Risk | Snapshot Available |\n| :--- | :---: | :---: |\n");
-        let snapshots_dir = proj_path.join(".agent-context").join("snapshots").join(&state.session_id);
+        let snapshots_dir = crate::mcp::snapshots::get_session_snapshot_dir(proj_path, &state.session_id);
         for file in &state.modified_files {
             let impact = crate::mcp::impact::assess_file_risk(proj_path, file);
-            let mangled = file.replace('/', "_").replace('\\', "_");
-            let snap_file = snapshots_dir.join(format!("{}.snapshot", mangled));
-            let has_snap = if snap_file.exists() { "Yes" } else { "No" };
+            let has_snap = if resolve_snapshot_file(proj_path, &snapshots_dir, file).is_some() {
+                "Yes"
+            } else {
+                "No"
+            };
             table.push_str(&format!("| `{}` | {:?} | {} |\n", file, impact.risk_level, has_snap));
         }
         table
@@ -235,8 +270,83 @@ pub fn write_handoff_summary(proj_path: &Path, state: &ServerState, next_action:
         next_step
     );
 
-    fs::write(&handoff_path, &summary)?;
+    write_file_atomically(&handoff_path, &summary)?;
     info!("Saved cross-agent handoff summary to `.agent-context/handoff.md`");
     Ok(summary)
+}
+
+#[cfg(test)]
+mod matching_tests {
+    use super::*;
+
+    #[test]
+    fn test_session_diff_and_handoff_resolve_real_snapshots() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ag_matching_snap_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        let src_dir = temp_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+
+        let rel_path = "src/example.rs";
+        let file_path = temp_dir.join(rel_path);
+        fs::write(&file_path, "line 1\nline 2\nline 3\n").unwrap();
+
+        let mut state = ServerState::new();
+        state.session_id = "sess.pass7:test".to_string();
+        let created =
+            crate::mcp::snapshots::create_file_snapshot(&temp_dir, rel_path, &state.session_id)
+                .unwrap();
+        assert!(created);
+
+        fs::write(&file_path, "line 1\nline 2 edited\nline 3\nline 4\n").unwrap();
+        state.record_modified_file(rel_path);
+        state.record_modified_file("../escape.rs");
+
+        let diff_summary = generate_session_diff_summary(&temp_dir, &state);
+        assert!(
+            diff_summary.contains("| `src/example.rs` |") && diff_summary.contains("| Yes | +2 / -1 |"),
+            "Expected snapshot Yes and +2 / -1 delta, got:\n{}",
+            diff_summary
+        );
+        assert!(
+            diff_summary.contains("| `../escape.rs` |") && diff_summary.contains("| No |"),
+            "Expected traversal path to report No snapshot, got:\n{}",
+            diff_summary
+        );
+
+        let handoff = write_handoff_summary(&temp_dir, &state, "Continue Pass 7").unwrap();
+        assert!(
+            handoff.contains("| `src/example.rs` |") && handoff.contains("| Yes |"),
+            "Expected handoff summary to find snapshot, got:\n{}",
+            handoff
+        );
+        assert!(handoff_file_path(&temp_dir).is_file());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_parse_learnings_non_ascii_header_no_panic() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ag_learnings_utf8_header_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_dir);
+        let learnings_path = super::super::learnings_file_path(&temp_dir);
+        let content = "## [pinned:arch]\n- Keep modules cohesive\n## [\u{00df}123456]\n- Safe non-ascii header\n## [a\u{00e9}\u{00e9}\u{00e9}\u{00e9}]\n- Multi-byte boundary test\n";
+        write_file_atomically(&learnings_path, content).unwrap();
+
+        let items = parse_learnings_file(&temp_dir);
+        assert_eq!(items.len(), 3);
+        assert!(items[0].is_pinned);
+        assert_eq!(items[0].category, "arch");
+        assert!(!items[1].is_pinned);
+        assert_eq!(items[1].category, "\u{00df}123456");
+        assert!(!items[2].is_pinned);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }
 

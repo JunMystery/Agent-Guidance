@@ -17,7 +17,7 @@ export function initFileContainerList(container, nodes = [], onSelectFile, onDri
     <div style="margin-top: 20px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 14px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 13px; font-weight: 600; color: #f8fafc;">📁 ${t('graph.file_navigator_title')}</span>
+          <span style="font-size: 13px; font-weight: 600; color: #f8fafc;">${t('graph.file_navigator_title')}</span>
           <span id="file-list-count" style="font-size: 11px; background: #0284c720; color: #38bdf8; border: 1px solid #0284c740; padding: 2px 8px; border-radius: 12px; font-family: var(--font-mono); font-weight: 600;"></span>
         </div>
         <div style="display: flex; gap: 6px; align-items: center;">
@@ -75,7 +75,6 @@ export function initFileContainerList(container, nodes = [], onSelectFile, onDri
         <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 6px; overflow: hidden; flex-shrink: 0;">
           <div style="background: #1e293b; padding: 6px 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155;">
             <div style="display: flex; align-items: center; gap: 6px;">
-              <span style="font-size: 13px;">📁</span>
               <span style="font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: #38bdf8;">${escapeHtml(dir)}</span>
             </div>
             <span style="font-size: 10px; color: #94a3b8; background: #0f172a; padding: 1px 6px; border-radius: 4px;">${fileList.length} ${t('graph.files_count_suffix')}</span>
@@ -90,14 +89,13 @@ export function initFileContainerList(container, nodes = [], onSelectFile, onDri
                 <div class="file-item-card" data-id="${escapeHtml(n.id)}" style="background: ${isSel ? '#0284c725' : '#080c14'}; border: 1px solid ${isSel ? '#00e5ff' : '#1e293b'}; border-radius: 4px; padding: 6px 8px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 6px;">
                   <div style="min-width: 0; flex: 1;">
                     <div style="display: flex; align-items: center; gap: 4px;">
-                      <span style="font-size: 11px;">📄</span>
                       <span style="font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: #f1f5f9; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" title="${escapeHtml(p)}">${escapeHtml(fname)}</span>
                     </div>
                     <div style="font-size: 9px; color: #64748b; margin-top: 2px;">
                       ${n.loc || 0} LOC • ${n.total_symbols || 0} ${t('graph.syms_abbr')} • <span style="color:#38bdf8">${t('graph.in_abbr')}: ${inD}</span> / <span style="color:#10b981">${t('graph.out_abbr')}: ${outD}</span>
                     </div>
                   </div>
-                  <button class="btn-card-drilldown" data-id="${escapeHtml(n.id)}" title="${t('graph.drilldown_title')}" style="padding: 2px 6px; font-size: 10px; background: #0284c718; border: 1px solid #0284c740; color: #38bdf8; border-radius: 3px; cursor: pointer; white-space: nowrap;">⚡ ${t('graph.drill_btn')}</button>
+                  <button class="btn-card-drilldown" data-id="${escapeHtml(n.id)}" title="${t('graph.drilldown_title')}" style="padding: 2px 6px; font-size: 10px; background: #0284c718; border: 1px solid #0284c740; color: #38bdf8; border-radius: 3px; cursor: pointer; white-space: nowrap;">${t('graph.drill_btn')}</button>
                 </div>
               `;
             }).join('')}

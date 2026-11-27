@@ -16,6 +16,12 @@ let activeCanvas = null;
 let cachedFiles = [];
 let currentSelectedFile = '';
 
+function escapeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, m => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[m]));
+}
+
 export async function switchGraphMode(mode, targetFile = null) {
   let file = targetFile;
   if (mode === 'file_functions') {
@@ -36,6 +42,12 @@ export function renderGraphView(data) {
   const container = el('view-graph');
   if (!container) return;
 
+  const oldToolbar = el('graph-toolbar-wrap');
+  if (oldToolbar && typeof oldToolbar._comboboxDestroy === 'function') {
+    oldToolbar._comboboxDestroy();
+    oldToolbar._comboboxDestroy = null;
+  }
+
   if (activeCanvas && activeCanvas.destroy) {
     activeCanvas.destroy();
     activeCanvas = null;
@@ -43,14 +55,16 @@ export function renderGraphView(data) {
 
   if (!data || !data.graph_available) {
     const isProjRequired = data?.reason === 'PROJECT_REQUIRED';
+    const messageHtml = isProjRequired
+      ? t('graph.select_project_prompt')
+      : escapeHtml(data?.message || t('graph.not_indexed_msg'));
     container.innerHTML = `
       <div style="padding: 48px 32px; text-align: center; color: var(--text-secondary);">
-        <div style="font-size: 40px; margin-bottom: 12px;">${isProjRequired ? '📂' : '🕸️'}</div>
         <h3 style="color: var(--text-primary); margin-bottom: 8px;">${isProjRequired ? t('graph.select_project_title') : t('graph.not_available')}</h3>
-        <p style="max-width: 520px; margin: 0 auto 16px auto; font-size: 13px; line-height: 1.5;">${isProjRequired ? t('graph.select_project_prompt') : (data?.message || t('graph.not_indexed_msg'))}</p>
+        <p style="max-width: 520px; margin: 0 auto 16px auto; font-size: 13px; line-height: 1.5;">${messageHtml}</p>
         ${data?.project_path ? `
         <div style="font-family: var(--font-mono); font-size: 11px; background: var(--bg-tertiary); padding: 8px 12px; display: inline-block; border-radius: var(--border-radius-sm);">
-          ${t('graph.project_label', { project: data?.project_path || '--' })}
+          ${t('graph.project_label', { project: escapeHtml(data.project_path) })}
         </div>` : ''}
       </div>
     `;
@@ -93,10 +107,10 @@ export function renderGraphView(data) {
 
   const copyDag = () => {
     const dag = data.mermaid_dag || `graph TD\n${edges.map(e => `  ${e.source.replace(/[^a-zA-Z0-9_]/g, '_')} --> ${e.target.replace(/[^a-zA-Z0-9_]/g, '_')}`).join('\n')}`;
-    navigator.clipboard.writeText(dag).then(() => {
+    navigator.clipboard?.writeText(dag)?.then(() => {
       const b = el('btn-copy-mermaid');
       if (b) { b.textContent = t('graph.copied'); setTimeout(() => { b.textContent = t('graph.copy_dag'); }, 2000); }
-    });
+    })?.catch(() => {});
   };
 
   if (activeMode === 'files') {
@@ -238,7 +252,7 @@ export function renderGraphView(data) {
         if (activeCanvas) activeCanvas.selectNode(jump.id);
         handleSelect(jump, true);
       });
-      if (sync && symbolList) symbolList.setActiveNode(sel.id);
+      if (sync && symbolList) symbolList.setActiveNode(sel ? sel.id : null);
     };
 
     renderGraphToolbar(toolbarWrap, {

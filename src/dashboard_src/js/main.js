@@ -112,8 +112,10 @@ function initLanguageSelector() {
       loadAndRenderGraph();
     } else if (current === 'logs') {
       loadAndRenderLogs();
+    } else if (current === 'rules') {
+      renderRulesView();
     } else {
-      fetchData();
+      fetchData({ force: true });
     }
   });
 }

@@ -8,6 +8,18 @@ use crate::catalog::store::{SkillItem, SkillSource, get_embedded_skill, list_emb
 use super::model::EmbeddingModel;
 use super::precomputed::{catalog_fingerprint, save_passage_cache};
 
+fn resolve_src_ml_dir() -> Option<PathBuf> {
+    let manifest_ml = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/ml");
+    if manifest_ml.is_dir() {
+        return Some(manifest_ml);
+    }
+    let cwd_ml = PathBuf::from("src/ml");
+    if cwd_ml.is_dir() {
+        return Some(cwd_ml);
+    }
+    None
+}
+
 pub fn generate_precomputed_cache() -> Result<()> {
     let candidates: Vec<SkillItem> = list_embedded_skills()
         .iter()
@@ -103,8 +115,7 @@ pub fn generate_precomputed_cache() -> Result<()> {
     save_passage_cache(&vecs, &candidates);
 
     // If running in development repository with src/ml directory, update build artifacts
-    let src_ml = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/ml");
-    if src_ml.exists() {
+    if let Some(src_ml) = resolve_src_ml_dir() {
         let vec_out = src_ml.join("precomputed_vectors.bin");
         let man_out = src_ml.join("precomputed_manifest.json");
         let _ = std::fs::write(&vec_out, &bin_data);
@@ -164,8 +175,7 @@ pub fn generate_manifest_only() -> Result<()> {
     });
 
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
-    let src_ml = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/ml");
-    if src_ml.exists() {
+    if let Some(src_ml) = resolve_src_ml_dir() {
         let man_out = src_ml.join("precomputed_manifest.json");
         std::fs::write(&man_out, &manifest_bytes)?;
         println!(

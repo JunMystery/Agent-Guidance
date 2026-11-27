@@ -44,7 +44,7 @@
   </nav>
   <div class="sidebar-footer">
     <div style="margin-bottom:8px">
-      <label for="lang-selector" style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:4px" data-i18n="sidebar.language">🌐 Language / Ngôn ngữ:</label>
+      <label for="lang-selector" style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:4px" data-i18n="sidebar.language">Language / Ngôn ngữ:</label>
       <select id="lang-selector" style="width:100%;padding:4px 6px;border-radius:var(--border-radius-sm);background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);font-size:12px;font-family:var(--font-mono)">
         <option value="en">English (EN)</option>
         <option value="vi">Tiếng Việt (VI)</option>
@@ -53,12 +53,12 @@
     <div style="margin-bottom:8px">
       <label for="project-selector" style="font-size:11px;color:var(--text-secondary);display:block;margin-bottom:4px" data-i18n="sidebar.tracked_project">Tracked Project:</label>
       <select id="project-selector" style="width:100%;padding:4px 6px;border-radius:var(--border-radius-sm);background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);font-size:12px;font-family:var(--font-mono)">
-        <option value="all" data-i18n="sidebar.all_projects">🌐 All Projects (Global)</option>
+        <option value="all" data-i18n="sidebar.all_projects">All Projects (Global)</option>
       </select>
     </div>
     <div id="project-status-badge" style="font-size:11px;margin-bottom:8px;display:none"></div>
-    <button id="btn-prune-projects" data-i18n="sidebar.prune_missing" data-i18n-title="sidebar.prune_missing_title" title="Prune non-existent/deleted projects from registry" style="width:100%;padding:4px 6px;font-size:11px;margin-bottom:8px;background:var(--bg-secondary);border:1px solid var(--border-color);color:var(--text-secondary);border-radius:var(--border-radius-sm);cursor:pointer">🧹 Prune Missing</button>
-    <button id="btn-auto-cleanup" data-i18n="sidebar.vacuum_db" data-i18n-title="sidebar.vacuum_db_title" title="Clean expired logs, enforce caps, and vacuum database" style="width:100%;padding:4px 6px;font-size:11px;margin-bottom:8px;background:var(--bg-secondary);border:1px solid var(--border-color);color:var(--text-secondary);border-radius:var(--border-radius-sm);cursor:pointer">⚡ Vacuum & Optimize DB</button>
+    <button id="btn-prune-projects" data-i18n="sidebar.prune_missing" data-i18n-title="sidebar.prune_missing_title" title="Prune non-existent/deleted projects from registry" style="width:100%;padding:4px 6px;font-size:11px;margin-bottom:8px;background:var(--bg-secondary);border:1px solid var(--border-color);color:var(--text-secondary);border-radius:var(--border-radius-sm);cursor:pointer">Prune Missing</button>
+    <button id="btn-auto-cleanup" data-i18n="sidebar.vacuum_db" data-i18n-title="sidebar.vacuum_db_title" title="Clean expired logs, enforce caps, and vacuum database" style="width:100%;padding:4px 6px;font-size:11px;margin-bottom:8px;background:var(--bg-secondary);border:1px solid var(--border-color);color:var(--text-secondary);border-radius:var(--border-radius-sm);cursor:pointer">Vacuum &amp; Optimize DB</button>
     <div id="sidebar-db-size" style="font-size:11px;color:var(--text-secondary);margin-bottom:4px">db size: --</div>
     <div class="proj" id="sidebar-proj" style="font-size:11px;color:var(--text-muted)">--</div>
     <div id="sidebar-port">port: --</div>
@@ -104,7 +104,7 @@
         <div class="terminal-title" id="dialog-title" data-i18n="dialog.confirm_title">Confirmation</div>
       </div>
       <div class="terminal-body-raw dialog-body">
-        <div class="dialog-icon-wrap" id="dialog-icon">⚠️</div>
+        <div class="dialog-icon-wrap" id="dialog-icon">!</div>
         <div class="dialog-content-wrap">
           <div class="dialog-message" id="dialog-message" data-i18n="dialog.confirm_default_msg">Are you sure?</div>
           <div class="dialog-subtext" id="dialog-subtext"></div>
@@ -133,7 +133,7 @@
           </div>
         </div>
         <select id="header-project-selector" class="hud-project-select hidden" aria-label="Filter dashboard by project" data-i18n-aria-label="kpi.filter_project_aria">
-          <option value="all" data-i18n="sidebar.all_projects_analytics">🌐 All Projects (Global Analytics)</option>
+          <option value="all" data-i18n="sidebar.all_projects_analytics">All Projects (Global Analytics)</option>
         </select>
         <div id="header-project-badge" class="header-project-badge"></div>
       </div>
@@ -228,7 +228,7 @@
                   <h3 data-i18n="deck.title">Subsystems &amp; Neural Engine Matrix</h3>
                 </div>
                 <div class="hud-deck-meta">
-                  <span class="hud-meta-pill">VERSION <span id="sys-version">v1.6.1</span></span>
+                  <span class="hud-meta-pill">VERSION <span id="sys-version">--</span></span>
                   <span class="hud-meta-pill">PORT <span id="sidebar-port-badge">11997</span></span>
                 </div>
               </div>
@@ -280,7 +280,7 @@
               <div class="hud-side-body">
                 <p class="hud-side-desc" data-i18n="deck.engine_desc">Hot-refresh candle-bert neural vector embeddings cache and reload active inference checkpoints.</p>
                 <button id="btn-embed-refresh" class="hud-btn-refresh">
-                  <span class="hud-refresh-icon">🔄</span>
+                  <span class="hud-refresh-icon" aria-hidden="true">&#8635;</span>
                   <span id="btn-embed-refresh-text" data-i18n="deck.refresh_model">Refresh Model Status</span>
                 </button>
               </div>
@@ -396,10 +396,10 @@
         <div class="terminal-title"><span data-i18n="actions.title">Actions &amp; Recent Calls</span> <span id="actions-poll" class="live-poll-rate"></span></div>
         <div class="terminal-actions-controls">
           <div class="view-mode-toggle" role="group" aria-label="Actions display mode" data-i18n-aria-label="actions.display_mode_aria">
-            <button class="view-mode-btn active" data-mode="breakdown" title="Aggregated tool breakdown" data-i18n-title="actions.breakdown_title" data-i18n="actions.breakdown">📊 Breakdown</button>
-            <button class="view-mode-btn" data-mode="stream" title="Chronological execution stream" data-i18n-title="actions.stream_title" data-i18n="actions.stream">⏱️ Recent Stream</button>
+            <button class="view-mode-btn active" data-mode="breakdown" title="Aggregated tool breakdown" data-i18n-title="actions.breakdown_title" data-i18n="actions.breakdown">Breakdown</button>
+            <button class="view-mode-btn" data-mode="stream" title="Chronological execution stream" data-i18n-title="actions.stream_title" data-i18n="actions.stream">Live Stream</button>
           </div>
-          <button id="btn-export-actions" class="btn-actions-secondary" title="Export actions telemetry as JSON" data-i18n-title="actions.export_json_title" data-i18n="actions.export_json">📥 Export JSON</button>
+          <button id="btn-export-actions" class="btn-actions-secondary" title="Export actions telemetry as JSON" data-i18n-title="actions.export_json_title" data-i18n="actions.export_json">Export JSON</button>
         </div>
       </div>
       <div class="terminal-body-raw">
@@ -429,7 +429,7 @@
 
         <div class="actions-toolbar">
           <div class="actions-search-wrap">
-            <span class="actions-search-icon">🔍</span>
+            <span class="actions-search-icon" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></span>
             <input type="text" id="actions-filter" placeholder="Filter tools, operations, status…" aria-label="Filter actions" data-i18n-placeholder="actions.filter_placeholder" data-i18n-aria-label="actions.filter_aria">
           </div>
           <div class="actions-chips-wrap">
@@ -547,8 +547,10 @@
             <label style="font-size:12px;font-weight:600;display:block;margin-bottom:6px">Bearer API Key / Secret Token (Optional):</label>
             <div style="display:flex;gap:8px;max-width:500px">
               <input type="password" id="setting-server-key" placeholder="Optional token if server binds to 0.0.0.0" style="flex:1;padding:8px 10px;border-radius:var(--border-radius-sm);background:var(--bg-tertiary);color:var(--text-primary);border:1px solid var(--border-color);font-size:13px;font-family:var(--font-mono)">
-              <button id="btn-generate-token" type="button" class="btn-secondary" style="padding:6px 12px;font-size:12px;cursor:pointer" title="Generate random secure 256-bit token">🔑 Gen Token</button>
+              <button id="btn-generate-token" type="button" class="btn-secondary" style="padding:6px 12px;font-size:12px;cursor:pointer" title="Generate random secure 256-bit token">Gen Token</button>
+              <button id="btn-clear-token" type="button" class="btn-secondary hidden" style="padding:6px 12px;font-size:12px;cursor:pointer;color:#ef4444" title="Remove stored API key on save">Clear Key</button>
             </div>
+            <span id="setting-server-key-status" style="display:block;margin-top:4px;font-size:11px;color:var(--text-muted)"></span>
           </div>
 
           <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:16px;max-width:500px">
@@ -584,13 +586,13 @@
           <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Run this command on any developer machine or terminal to connect to this server:</div>
           <div style="display:flex;gap:8px;align-items:center">
             <code id="cli-helper-command" style="flex:1;background:var(--bg-secondary);border:1px solid var(--border-color);padding:8px 12px;border-radius:4px;font-family:var(--font-mono);font-size:12px;color:#3b82f6;overflow-x:auto">agent-guidance --set-server http://127.0.0.1:11998</code>
-            <button id="btn-copy-cli-command" class="btn-secondary" style="padding:8px 14px;font-size:12px;cursor:pointer">📋 Copy</button>
+            <button id="btn-copy-cli-command" class="btn-secondary" style="padding:8px 14px;font-size:12px;cursor:pointer">Copy</button>
           </div>
         </div>
 
         <div style="display:flex;gap:12px;align-items:center">
-          <button id="btn-test-connection" class="btn-secondary" style="padding:8px 16px;cursor:pointer">🔌 Test Connection</button>
-          <button id="btn-save-server-config" class="btn-accent" style="padding:8px 16px;cursor:pointer">💾 Apply &amp; Auto-Configure</button>
+          <button id="btn-test-connection" class="btn-secondary" style="padding:8px 16px;cursor:pointer">Test Connection</button>
+          <button id="btn-save-server-config" class="btn-accent" style="padding:8px 16px;cursor:pointer">Apply &amp; Auto-Configure</button>
         </div>
 
         <div id="test-connection-result" style="margin-top:16px"></div>

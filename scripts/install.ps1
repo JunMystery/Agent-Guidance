@@ -88,7 +88,7 @@ function Try-DownloadPrebuilt {
     try {
         $meta = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -UseBasicParsing -ErrorAction Stop
         $version = $meta.tag_name
-    } catch { $version = "v2.0.2" }
+    } catch { $version = "v2.0.3" }
 
     $tag = switch ($Prof) { { $_ -in "Client", "2" } { "client" }; { $_ -in "Server", "3" } { "server" }; default { "standalone" } }
     $candidates = @("agent-guidance-$tag-windows-x86_64.zip")
@@ -105,6 +105,24 @@ function Try-DownloadPrebuilt {
             Write-Host "  Probing release asset: $asset..." -ForegroundColor Gray
             Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -ErrorAction Stop
             if ((Test-Path $zipPath) -and ((Get-Item $zipPath).Length -gt 0)) {
+                $shaUrl = "$url.sha256"
+                $shaPath = "$zipPath.sha256"
+                $shaOk = $true
+                try {
+                    Invoke-WebRequest -Uri $shaUrl -OutFile $shaPath -UseBasicParsing -ErrorAction Stop
+                    if ((Test-Path $shaPath) -and ((Get-Item $shaPath).Length -gt 0)) {
+                        $expectedHash = ((Get-Content $shaPath -Raw).Trim() -split '\s+')[0].ToLower()
+                        $actualHash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLower()
+                        if ($expectedHash -and ($expectedHash -ne $actualHash)) {
+                            Write-Host "  WARN SHA256 mismatch for $asset ($actualHash != $expectedHash)" -ForegroundColor Yellow
+                            $shaOk = $false
+                        }
+                    }
+                } catch {}
+                if (-not $shaOk) {
+                    Remove-Item -Force $zipPath, $shaPath -ErrorAction SilentlyContinue
+                    continue
+                }
                 Expand-Archive -Path $zipPath -DestinationPath $tmpDir -Force -ErrorAction Stop
                 $bin = Join-Path $tmpDir "agent-guidance.exe"
                 if (Test-Path $bin) {
@@ -210,6 +228,8 @@ switch ($InstallProfile) {
             $inDPort = Read-Host "Dashboard Port [$DashboardPort]"; if ($inDPort) { $DashboardPort = [int]$inDPort }
             $inKey = Read-Host "Optional Bearer API Key [$ApiKey]"; if ($inKey) { $ApiKey = $inKey }
         }
+        if ($Bind -notmatch '^[A-Za-z0-9.:-]+$') { throw "Invalid Bind address format: $Bind" }
+        if ($ApiKey -and ($ApiKey -notmatch '^[A-Za-z0-9._-]+$')) { throw "Invalid API key characters" }
         $keyArg = if ($ApiKey) { " --api-key $ApiKey" } else { "" }
         $taskCmd = "`"$binPath`" --server --bind $Bind --worker-port $WorkerPort --port $DashboardPort$keyArg"
         try {

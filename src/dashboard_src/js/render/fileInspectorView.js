@@ -1,9 +1,5 @@
+import { escapeHtml } from '../dom.js';
 import { t } from '../i18n/index.js';
-
-function escapeHtml(str) {
-  if (!str) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
 
 export function renderFileInspector(container, node, edges = [], allNodes = [], onJumpFile, onDrilldown) {
   if (!container) return;
@@ -40,8 +36,8 @@ export function renderFileInspector(container, node, edges = [], allNodes = [], 
           ${escapeHtml(filePath)}
         </div>
       </div>
-      <button id="btn-copy-file-path" title="${t('inspector.copy_id_title')}" style="background: var(--bg-tertiary); border: 1px solid var(--border-color); color: #94a3b8; border-radius: 4px; padding: 4px 8px; font-size: 11px; cursor: pointer;">
-        📋
+      <button id="btn-copy-file-path" title="${escapeHtml(t('inspector.copy_id_title'))}" style="background: var(--bg-tertiary); border: 1px solid var(--border-color); color: #94a3b8; border-radius: 4px; padding: 4px 8px; font-size: 11px; cursor: pointer;">
+        Copy
       </button>
     </div>
 
@@ -112,10 +108,10 @@ export function renderFileInspector(container, node, edges = [], allNodes = [], 
   const copyBtn = container.querySelector('#btn-copy-file-path');
   if (copyBtn) {
     copyBtn.onclick = () => {
-      navigator.clipboard.writeText(filePath).then(() => {
-        copyBtn.textContent = '✅';
-        setTimeout(() => { copyBtn.textContent = '📋'; }, 1500);
-      });
+      navigator.clipboard?.writeText(filePath)?.then(() => {
+        copyBtn.textContent = 'Copied';
+        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+      })?.catch(() => {});
     };
   }
 
@@ -139,7 +135,7 @@ function renderEdgeItem(edge, targetProp, onJumpFile) {
     const pct = Math.round(rawVal <= 1.0 ? rawVal * 100 : rawVal);
     badgeHtml = `
       <span style="font-size: 10px; font-weight: 600; color: #ec4899; background: #ec489918; border: 1px solid #ec489935; padding: 1px 5px; border-radius: 3px;">
-        🧠 ${pct}% ${t('graph.semantic_match')}
+        ${pct}% ${t('graph.semantic_match')}
       </span>
     `;
   } else {
@@ -156,7 +152,7 @@ function renderEdgeItem(edge, targetProp, onJumpFile) {
     <div class="file-edge-link" data-target-file="${escapeHtml(fileKey)}" style="background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px; cursor: pointer;">
       <div style="display: flex; align-items: center; justify-content: space-between;">
         <span style="font-family: var(--font-mono); font-size: 11px; color: #e2e8f0; font-weight: 500;">
-          📁 ${escapeHtml(shortName)}
+          ${escapeHtml(shortName)}
         </span>
         ${badgeHtml}
       </div>

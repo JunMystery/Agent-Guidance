@@ -1,6 +1,7 @@
 // Magnetic crosshair scrubber & rich glass card tooltip.
 
 import { fmtTokens } from '../../format.js';
+import { escapeHtml } from '../../dom.js';
 import { t } from '../../i18n/index.js';
 
 export function bindChartTooltip(scope) {
@@ -44,10 +45,10 @@ export function bindChartTooltip(scope) {
       const opt = meta.opt || 0;
 
       tip.innerHTML = '<div class="glass-tip-inner">' +
-        '<div class="tip-header"><span>' + hourTitle + '</span><span class="tip-badge font-mono">' + latency + 'ms</span></div>' +
-        '<div class="tip-row"><span class="tip-label">' + t('chart.tip_calls') + '</span><span class="tip-val tip-saved font-bold">' + calls + ' ' + t('chart.calls_unit') + '</span></div>' +
-        '<div class="tip-row"><span class="tip-label">' + t('chart.tip_latency') + '</span><span class="tip-val font-mono">' + latency + 'ms</span></div>' +
-        '<div class="tip-row"><span class="tip-label">' + t('chart.tip_payload') + '</span><span class="tip-val font-mono text-muted">' + fmtTokens(opt) + '</span></div>' +
+        '<div class="tip-header"><span>' + escapeHtml(hourTitle) + '</span><span class="tip-badge font-mono">' + Number(latency) + 'ms</span></div>' +
+        '<div class="tip-row"><span class="tip-label">' + escapeHtml(t('chart.tip_calls')) + '</span><span class="tip-val tip-saved font-bold">' + Number(calls) + ' ' + escapeHtml(t('chart.calls_unit')) + '</span></div>' +
+        '<div class="tip-row"><span class="tip-label">' + escapeHtml(t('chart.tip_latency')) + '</span><span class="tip-val font-mono">' + Number(latency) + 'ms</span></div>' +
+        '<div class="tip-row"><span class="tip-label">' + escapeHtml(t('chart.tip_payload')) + '</span><span class="tip-val font-mono text-muted">' + escapeHtml(fmtTokens(opt)) + '</span></div>' +
         '</div>';
       tip.style.opacity = '1';
     };
