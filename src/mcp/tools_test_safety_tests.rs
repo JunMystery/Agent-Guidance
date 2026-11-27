@@ -145,3 +145,64 @@ fn test_workflow_gate_advance_blocks_test_safety_violation() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_guidance_verify_checkpoints_and_flags_partial_registration() {
+    let temp_dir = std::env::temp_dir().join(format!("ag_verify_cp_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let mut state = ServerState::new();
+    state.plan_approved = true;
+    state.set_stage("Build").unwrap();
+    state.update_project_path(&temp_dir);
+
+    let partial = handle_tool_call(
+        "guidance",
+        json!({
+            "operation": "verify",
+            "project_path": temp_dir.to_str().unwrap(),
+            "verification_command": "cargo test",
+            "expected_output_keyword": "  "
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let p_text = partial["content"][0]["text"].as_str().unwrap();
+    assert!(p_text.contains("NOT REGISTERED"), "Got: {}", p_text);
+
+    let ok = handle_tool_call(
+        "guidance",
+        json!({
+            "operation": "verify",
+            "project_path": temp_dir.to_str().unwrap(),
+            "verification_command": "cargo test",
+            "expected_output_keyword": "test result: ok"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    assert!(ok["content"][0]["text"].as_str().unwrap().contains("REGISTERED"));
+    assert!(
+        temp_dir.join(format!(".agent-context/sessions/{}.json", state.session_id)).exists(),
+        "Verify registration must auto_checkpoint session state"
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_verification_command_blocks_comment_bypass_and_catastrophic_memory_mix() {
+    use crate::context::ast::analyze_verification_command;
+
+    assert!(analyze_verification_command("NODE_ENV=production npm test # :memory:").has_blockers());
+    assert!(analyze_verification_command("NODE_ENV=production npm test # --dry-run").has_blockers());
+    assert!(analyze_verification_command("NODE_ENV=production npm test # test-safety-allow: prod").has_blockers());
+
+    assert!(analyze_verification_command("sqlite3 :memory: && psql -c \"DROP DATABASE prod\"").has_blockers());
+    assert!(analyze_verification_command("psql test_db -c \"TRUNCATE TABLE users\"").has_blockers());
+    assert!(analyze_verification_command("rm -rf / && echo :memory:").has_blockers());
+
+    assert!(!analyze_verification_command("rm -rf /tmp/test_sandbox && pytest").has_blockers());
+    assert!(!analyze_verification_command("TEST_SAFETY_ALLOW=test-safety-allow:prod NODE_ENV=production npm test").has_blockers());
+}

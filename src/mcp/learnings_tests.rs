@@ -163,3 +163,65 @@
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_additive_category_keywords_pinned_priority_and_multiline_sanitization() {
+        let items = vec![
+            LearningItem {
+                category: "architecture".to_string(),
+                content: "Keep domain isolated".to_string(),
+                is_pinned: false,
+            },
+            LearningItem {
+                category: "environment".to_string(),
+                content: "Set RUST_LOG=info".to_string(),
+                is_pinned: true,
+            },
+            LearningItem {
+                category: "build_test".to_string(),
+                content: "Use temp dirs for tests".to_string(),
+                is_pinned: false,
+            },
+            LearningItem {
+                category: "domain_rule".to_string(),
+                content: "Validate risk before edit".to_string(),
+                is_pinned: true,
+            },
+            LearningItem {
+                category: "general".to_string(),
+                content: "Watch out for trailing spaces error".to_string(),
+                is_pinned: false,
+            },
+        ];
+
+        let matched = match_category_keywords(
+            &items,
+            "Fix architecture config path domain rule and test error",
+            5,
+        );
+        assert_eq!(matched.len(), 5, "Additive matching should include all 5 categories");
+        assert!(matched[0].contains("[PINNED:"), "Pinned items must sort first: {:?}", matched);
+        assert!(matched[1].contains("[PINNED:"), "Pinned items must sort first: {:?}", matched);
+
+        // Duplicate line delta handling
+        let (adds, dels) = compute_line_delta("}\n}\n", "}\n}\n}\n");
+        assert_eq!((adds, dels), (1, 0));
+
+        // Multiline learning and bracket category sanitization
+        let temp_dir = std::env::temp_dir().join(format!("learnings_sanitize_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        record_project_learning(
+            &temp_dir,
+            "Line one\n## [PINNED:fake]\n- injected",
+            "architecture]\n## [evil",
+            false,
+        )
+        .unwrap();
+        let parsed = parse_learnings_file(&temp_dir);
+        assert_eq!(parsed.len(), 1);
+        assert!(!parsed[0].is_pinned);
+        assert!(!parsed[0].category.contains([']', '\n']));
+        assert!(!parsed[0].content.contains('\n'));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }

@@ -1,13 +1,58 @@
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use crate::mcp::state::ServerState;
 
+static RECORDED_CO_CHANGES: OnceLock<Mutex<HashMap<String, HashSet<(String, String)>>>> =
+    OnceLock::new();
+
+fn co_change_session_key(proj_path: &Path, session_id: &str) -> String {
+    let canon = proj_path
+        .canonicalize()
+        .unwrap_or_else(|_| proj_path.to_path_buf());
+    format!("{}::{}", canon.to_string_lossy(), session_id)
+}
+
 pub(crate) fn handle_save(state: &ServerState, proj_path: &Path) -> String {
-    // Milestone v1.9.0: Evolutionary Coupling Graph - record pairwise co-changes
+    // Milestone v1.9.0: Evolutionary Coupling Graph - record pairwise co-changes once per session
     if state.modified_files.len() >= 2 {
         if let Ok(db) = crate::context::db::CodeGraphDb::open_for_project(proj_path) {
-            let _ = crate::context::co_change::record_session_co_changes(&db.conn, &state.modified_files);
+            let mut unique_files: Vec<String> = state
+                .modified_files
+                .iter()
+                .map(|f| crate::context::co_change::recorder::clean_path(f))
+                .filter(|f| !f.is_empty())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            unique_files.sort();
+
+            let key = co_change_session_key(proj_path, &state.session_id);
+            let map = RECORDED_CO_CHANGES.get_or_init(|| Mutex::new(HashMap::new()));
+            let mut guard = map.lock().unwrap_or_else(|p| p.into_inner());
+            let seen_pairs = guard.entry(key).or_default();
+
+            for i in 0..unique_files.len() {
+                for j in (i + 1)..unique_files.len() {
+                    if let Some(pair) = crate::context::co_change::recorder::normalize_file_pair(
+                        &unique_files[i],
+                        &unique_files[j],
+                    ) {
+                        if !seen_pairs.contains(&pair)
+                            && crate::context::co_change::recorder::record_co_change(
+                                &db.conn,
+                                &pair.0,
+                                &pair.1,
+                            )
+                            .unwrap_or(false)
+                        {
+                            seen_pairs.insert(pair);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -21,6 +66,7 @@ pub(crate) fn handle_save(state: &ServerState, proj_path: &Path) -> String {
 }
 
 fn apply_zero_trust_reset(state: &mut ServerState, reset_session_scope: bool) {
+    state.priority_gate_passed = false;
     state.plan_approved = false;
     state.edit_authorized = false;
     state.verification_passed = false;
@@ -32,7 +78,6 @@ fn apply_zero_trust_reset(state: &mut ServerState, reset_session_scope: bool) {
     state.pending_skill_proposals.clear();
     if reset_session_scope {
         state.active_architecture_pattern = None;
-        state.priority_gate_passed = false;
     }
 }
 
@@ -63,16 +108,86 @@ pub(crate) fn handle_load(state: &mut ServerState, proj_path: &Path) -> String {
     }
 }
 
-pub(crate) fn handle_clear(state: &mut ServerState, proj_path: &Path) -> String {
-    let dir = proj_path.join(".agent-context").join("sessions");
-    if dir.exists() {
-        let _ = std::fs::remove_dir_all(&dir);
-    }
+pub(crate) fn handle_clear(
+    arguments: &Value,
+    state: &mut ServerState,
+    proj_path: &Path,
+) -> String {
+    let clear_all = arguments
+        .get("all")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let sessions_dir = proj_path.join(".agent-context").join("sessions");
     let legacy_file = proj_path.join(".agent-context").join("session.json");
-    if legacy_file.exists() {
-        let _ = std::fs::remove_file(&legacy_file);
+
+    if clear_all {
+        if sessions_dir.exists() {
+            let _ = std::fs::remove_dir_all(&sessions_dir);
+        }
+        if legacy_file.exists() {
+            let _ = std::fs::remove_file(&legacy_file);
+        }
+        let _ = crate::mcp::snapshots::clear_all_snapshots(proj_path);
+        if let Some(map) = RECORDED_CO_CHANGES.get() {
+            let prefix = format!(
+                "{}::",
+                proj_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| proj_path.to_path_buf())
+                    .to_string_lossy()
+            );
+            if let Ok(mut guard) = map.lock() {
+                guard.retain(|k, _| !k.starts_with(&prefix));
+            }
+        }
+    } else {
+        if ServerState::is_valid_session_id(&state.session_id) {
+            let active_session_file = sessions_dir.join(format!("{}.json", state.session_id));
+            if active_session_file.exists() {
+                let _ = std::fs::remove_file(&active_session_file);
+            }
+            let clean_snap = state.session_id.replace(['/', '\\', ':', '.'], "_");
+            let active_snap_dir = proj_path
+                .join(".agent-context")
+                .join("snapshots")
+                .join(clean_snap);
+            if active_snap_dir.exists() {
+                let _ = std::fs::remove_dir_all(&active_snap_dir);
+            }
+        }
+        if legacy_file.exists() {
+            let legacy_matches_active = std::fs::read_to_string(&legacy_file)
+                .ok()
+                .and_then(|c| serde_json::from_str::<ServerState>(&c).ok())
+                .map(|s| s.session_id == state.session_id)
+                .unwrap_or(false);
+            let no_remaining_sessions = !sessions_dir.exists()
+                || std::fs::read_dir(&sessions_dir)
+                    .map(|mut d| {
+                        !d.any(|e| {
+                            e.ok()
+                                .and_then(|ent| {
+                                    ent.path()
+                                        .extension()
+                                        .and_then(|ext| ext.to_str())
+                                        .map(|ext| ext == "json")
+                                })
+                                .unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(true);
+            if legacy_matches_active || no_remaining_sessions {
+                let _ = std::fs::remove_file(&legacy_file);
+            }
+        }
+        if let Some(map) = RECORDED_CO_CHANGES.get() {
+            let key = co_change_session_key(proj_path, &state.session_id);
+            if let Ok(mut guard) = map.lock() {
+                guard.remove(&key);
+            }
+        }
     }
-    let _ = crate::mcp::snapshots::clear_all_snapshots(proj_path);
+
     let prev_cancel = state.cancellation.clone();
     let prev_roots = state.workspace_roots.clone();
     let prev_client = state.agent_client_name.clone();
@@ -80,7 +195,12 @@ pub(crate) fn handle_clear(state: &mut ServerState, proj_path: &Path) -> String 
     fresh.workspace_roots = prev_roots;
     fresh.cancellation = prev_cancel;
     *state = fresh;
-    "# Session Continuity: [clear]\n\nSession state and rollback snapshots cleared successfully. Active session state reset.".to_string()
+
+    if clear_all {
+        "# Session Continuity: [clear]\n\nAll saved sessions and rollback snapshots cleared successfully. Active session state reset.".to_string()
+    } else {
+        "# Session Continuity: [clear]\n\nActive session state and rollback snapshots cleared successfully.".to_string()
+    }
 }
 
 pub(crate) fn handle_list(state: &ServerState, proj_path: &Path) -> String {
@@ -180,7 +300,7 @@ mod tests {
         let legacy_file = temp_dir.join(".agent-context").join("session.json");
         assert!(legacy_file.exists());
 
-        handle_clear(&mut state, &temp_dir);
+        handle_clear(&serde_json::json!({}), &mut state, &temp_dir);
         assert!(!legacy_file.exists(), "Legacy session.json must be deleted on clear");
         assert_eq!(state.workspace_roots, vec![temp_dir.to_string_lossy().to_string()]);
         assert!(state.cancellation.is_some());

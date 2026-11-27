@@ -68,9 +68,20 @@ pub(crate) fn handle(
             let _ = crate::context::indexer::invalidator::sync_dirty_files(&proj_path, &dirty_paths);
         }
 
-        // 2. Targeted JIT sync for the requested file (bypasses 3s debounce, < 10ms)
-        if !rel_path.is_empty() {
-            let _ = crate::context::graph_rag::jit_sync::ensure_fresh_targeted_file(&proj_path, rel_path);
+        // 2. Targeted JIT sync for requested file(s) (bypasses 3s debounce, < 10ms)
+        let mut synced = Vec::new();
+        for raw_target in target_paths.iter().chain(std::iter::once(&rel_path.to_string())) {
+            let spec = super::helpers::TargetPathSpec::parse(raw_target);
+            if !spec.clean_path.is_empty()
+                && !spec.clean_path.starts_with("linked:")
+                && !synced.contains(&spec.clean_path)
+            {
+                let _ = crate::context::graph_rag::jit_sync::ensure_fresh_targeted_file(
+                    &proj_path,
+                    &spec.clean_path,
+                );
+                synced.push(spec.clean_path);
+            }
         }
 
         match ensure_fresh_graph(&proj_path, 3) {
@@ -108,32 +119,41 @@ pub(crate) fn handle(
             handle_read(&arguments, &proj_path, rel_path, state)
         }
         "search" => handle_search(query, &proj_path, intent, state),
-        "navigate" => handle_navigate(&arguments, query, &proj_path, state),
+        "navigate" => handle_navigate(&arguments, query, &proj_path, state)?,
         "learn_alias" => handle_learn_alias(&arguments, &proj_path, rel_path),
         "enrich_graph" | "enrich" => handle_enrich_graph(&arguments, &proj_path),
         "semantic_query" | "semantic" => handle_query_semantic(&arguments, &proj_path),
         "reindex" => {
             match IncrementalIndexer::new(&proj_path) {
-                Ok(mut indexer) => {
-                    let report = indexer.full_index().unwrap_or_default();
-                    let path = proj_path.clone();
-                    std::thread::spawn(move || {
-                        if let Ok(idx) = IncrementalIndexer::new(&path) {
-                            let _ = idx.embed_symbols();
-                            let _ = idx.embed_chunks();
-                        }
-                    });
-                    format!(
-                        "# Project Re-Indexed Successfully\n\n- Files Scanned: {}\n- Files Indexed: {}\n- Files Skipped: {}\n- Symbols Extracted: {}\n- Edges Created: {}\n- Content Chunks: {}\n- Duration: {}ms\n- Background Embedding: Rayon ML pool active\n- Persistence: `.agent-context/code_graph.db`",
-                        report.files_scanned,
-                        report.files_indexed,
-                        report.files_skipped,
-                        report.symbols_extracted,
-                        report.edges_created,
-                        report.chunks_created,
-                        report.duration_ms
-                    )
-                }
+                Ok(mut indexer) => match indexer.full_index() {
+                    Ok(report) => {
+                        state.ast_cache.clear();
+                        let path = proj_path.clone();
+                        let arch = state
+                            .active_architecture_pattern
+                            .clone()
+                            .unwrap_or_else(|| super::helpers::detect_project_architecture(&proj_path));
+                        std::thread::spawn(move || {
+                            if let Ok(idx) = IncrementalIndexer::new(&path) {
+                                let _ = idx.embed_symbols();
+                                let _ = idx.embed_chunks();
+                            }
+                            let engine = crate::context::graph_rag::GraphRagEngine::new(&path);
+                            let _ = engine.build_or_update(&arch);
+                        });
+                        format!(
+                            "# Project Re-Indexed Successfully\n\n- Files Scanned: {}\n- Files Indexed: {}\n- Files Skipped: {}\n- Symbols Extracted: {}\n- Edges Created: {}\n- Content Chunks: {}\n- Duration: {}ms\n- Background Embedding & GraphRAG Communities: Rayon ML pool + Leiden refresh active\n- Persistence: `.agent-context/code_graph.db`",
+                            report.files_scanned,
+                            report.files_indexed,
+                            report.files_skipped,
+                            report.symbols_extracted,
+                            report.edges_created,
+                            report.chunks_created,
+                            report.duration_ms
+                        )
+                    }
+                    Err(e) => format!("Failed to reindex project: {}", e),
+                },
                 Err(e) => format!("Failed to reindex project: {}", e),
             }
         }
@@ -144,9 +164,18 @@ pub(crate) fn handle(
         }
         "symbols" | "structure" => handle_symbols(&proj_path, rel_path),
         "references" => handle_references(&arguments, &proj_path, query, rel_path),
-        "callers" | "incoming_calls" => handle_callers(&proj_path, query),
-        "callees" | "outgoing_calls" => handle_callees(&proj_path, query),
-        "blast_radius" | "impact" => handle_blast_radius(&proj_path, query),
+        "callers" | "incoming_calls" => {
+            let rel_opt = (!rel_path.is_empty()).then_some(rel_path);
+            handle_callers(&proj_path, query, rel_opt)
+        }
+        "callees" | "outgoing_calls" => {
+            let rel_opt = (!rel_path.is_empty()).then_some(rel_path);
+            handle_callees(&proj_path, query, rel_opt)
+        }
+        "blast_radius" | "impact" => {
+            let rel_opt = (!rel_path.is_empty()).then_some(rel_path);
+            handle_blast_radius(&proj_path, query, rel_opt)
+        }
         "definition" | "goto_definition" => handle_definition(&arguments, &proj_path, query, rel_path),
         "type_definition" => handle_type_definition(&arguments, &proj_path, query, rel_path),
         "subgraph_bundle" | "bundle" => {
@@ -160,9 +189,19 @@ pub(crate) fn handle(
             handle_subgraph_bundle(&arguments, &proj_path, target, state)
         }
         "data_flow" | "dataflow" | "taint" | "flow" => {
-            handle_data_flow(&proj_path, query)
+            let target = if !query.trim().is_empty() {
+                query
+            } else {
+                arguments
+                    .get("target_symbol")
+                    .or_else(|| arguments.get("symbol"))
+                    .or_else(|| arguments.get("name"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+            };
+            handle_data_flow(&proj_path, target)
         }
-        _ => format!("Project context operation '{}' completed.", op),
+        _ => return Err((-32602, format!("Unknown project_context operation '{}'.", op))),
     };
 
     Ok(format!("{}{}", sync_notice, resp))

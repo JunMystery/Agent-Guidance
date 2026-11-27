@@ -97,3 +97,25 @@ fn test_create_file_snapshot_rejects_external_and_traversal_paths() {
 
     let _ = fs::remove_dir_all(&base);
 }
+
+#[test]
+fn test_readonly_snapshot_ops_no_gitignore_mutation_and_exact_gitignore_match() {
+    let temp_dir = std::env::temp_dir().join(format!("snap_ro_git_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    let gitignore = temp_dir.join(".gitignore");
+    fs::write(&gitignore, ".agent-context-old/\n").unwrap();
+
+    // Read-only snapshot lookup/restore must NOT mutate .gitignore
+    let _ = get_session_snapshot_dir(&temp_dir, "sess_ro");
+    let restored = restore_session_snapshots(&temp_dir, "sess_ro").unwrap();
+    assert!(restored.is_empty());
+    assert_eq!(fs::read_to_string(&gitignore).unwrap(), ".agent-context-old/\n");
+
+    // Prefix ".agent-context-old/" must NOT prevent adding exact ".agent-context/"
+    crate::mcp::impact::ensure_agent_context_gitignored(&temp_dir);
+    let updated = fs::read_to_string(&gitignore).unwrap();
+    assert!(updated.lines().any(|l| l.trim() == ".agent-context/"), "Got: {}", updated);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

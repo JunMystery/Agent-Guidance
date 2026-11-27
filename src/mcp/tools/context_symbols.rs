@@ -1,9 +1,72 @@
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::Path;
 
+use crate::context::ast::{AstEngine, AstLanguage};
 use crate::context::db::CodeGraphDb;
 use crate::context::scanner::scan_project;
 use super::helpers::validate_path;
+
+fn extract_symbols_via_db(proj_path: &Path, rel_path: &str) -> Vec<(usize, String)> {
+    let db_path = proj_path.join(".agent-context").join("code_graph.db");
+    if !db_path.exists() {
+        return Vec::new();
+    }
+    let Ok(db) = CodeGraphDb::open_read_only(&db_path) else {
+        return Vec::new();
+    };
+    let norm = rel_path.trim().trim_start_matches("./").replace('\\', "/");
+    let mut stmt = match db.conn.prepare(
+        "SELECT start_line, kind, name, signature
+         FROM symbols
+         WHERE REPLACE(file_path, '\\', '/') = ?1
+         ORDER BY start_line ASC",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let Ok(rows) = stmt.query_map([norm], |row| {
+        let line: i64 = row.get(0)?;
+        let kind: String = row.get(1)?;
+        let name: String = row.get(2)?;
+        let sig: Option<String> = row.get(3)?;
+        Ok((line.max(1) as usize, kind, name, sig))
+    }) else {
+        return Vec::new();
+    };
+
+    rows.flatten()
+        .map(|(line, kind, name, sig)| {
+            let label = sig
+                .as_deref()
+                .and_then(|s| s.lines().next())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| format!("[{}] {}", kind, s))
+                .unwrap_or_else(|| format!("[{}] {}", kind, name));
+            (line, label)
+        })
+        .collect()
+}
+
+fn is_modifier_symbol_line(trimmed: &str) -> bool {
+    if trimmed.is_empty()
+        || trimmed.starts_with("//")
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with('*')
+        || trimmed.starts_with('#')
+    {
+        return false;
+    }
+    let prefixes = [
+        "pub ", "pub(", "async fn ", "fn ", "struct ", "enum ", "trait ", "impl ",
+        "type ", "mod ", "def ", "async def ", "class ", "fun ", "suspend fun ",
+        "override fun ", "object ", "companion object", "interface ", "export ",
+        "async function ", "function ", "func ", "public ", "private ", "protected ",
+        "internal ", "abstract ", "sealed ", "open ", "data class ",
+    ];
+    prefixes.iter().any(|p| trimmed.starts_with(p))
+}
 
 pub(crate) fn handle_symbols(proj_path: &Path, rel_path: &str) -> String {
     if rel_path.is_empty() {
@@ -13,36 +76,58 @@ pub(crate) fn handle_symbols(proj_path: &Path, rel_path: &str) -> String {
     match validate_path(proj_path, rel_path) {
         Ok(full_path) => {
             if let Ok(content) = std::fs::read_to_string(&full_path) {
-                let mut symbols = Vec::new();
-                for (idx, line) in content.lines().enumerate() {
-                    let trimmed = line.trim();
-                    if trimmed.starts_with("pub fn ")
-                        || trimmed.starts_with("fn ")
-                        || trimmed.starts_with("pub struct ")
-                        || trimmed.starts_with("struct ")
-                        || trimmed.starts_with("pub enum ")
-                        || trimmed.starts_with("enum ")
-                        || trimmed.starts_with("pub trait ")
-                        || trimmed.starts_with("trait ")
-                        || trimmed.starts_with("impl ")
-                        || trimmed.starts_with("def ")
-                        || trimmed.starts_with("async def ")
-                        || trimmed.starts_with("class ")
-                        || trimmed.starts_with("fun ")
-                        || trimmed.starts_with("suspend fun ")
-                        || trimmed.starts_with("override fun ")
-                        || trimmed.starts_with("object ")
-                        || trimmed.starts_with("companion object")
-                        || trimmed.starts_with("interface ")
-                        || trimmed.starts_with("export function")
-                        || trimmed.starts_with("export class")
-                        || trimmed.starts_with("export const")
-                        || trimmed.starts_with("export interface")
-                        || trimmed.starts_with("func ")
-                    {
-                        symbols.push(format!("L{:04}: {}", idx + 1, trimmed));
+                let lang = AstLanguage::from_path(rel_path);
+                let mut by_line: BTreeMap<usize, String> = BTreeMap::new();
+
+                if lang.is_supported() {
+                    for sym in AstEngine::extract_symbols(&content, lang) {
+                        let sig_line = sym
+                            .signature
+                            .lines()
+                            .next()
+                            .unwrap_or(&sym.signature)
+                            .trim();
+                        let display = if sig_line.is_empty() {
+                            format!("[{}] {}", sym.kind, sym.name)
+                        } else {
+                            format!("[{}] {}", sym.kind, sig_line)
+                        };
+                        by_line.entry(sym.start_line.max(1)).or_insert(display);
+                    }
+                    if lang == AstLanguage::Kotlin {
+                        for (idx, line) in content.lines().enumerate() {
+                            let trimmed = line.trim();
+                            if trimmed.starts_with("companion object")
+                                || trimmed.starts_with("object ")
+                            {
+                                by_line
+                                    .entry(idx + 1)
+                                    .or_insert_with(|| format!("[object] {}", trimmed));
+                            }
+                        }
                     }
                 }
+
+                if by_line.is_empty() {
+                    for (line, label) in extract_symbols_via_db(proj_path, rel_path) {
+                        by_line.entry(line).or_insert(label);
+                    }
+                }
+
+                if by_line.is_empty() && !lang.is_supported() {
+                    for (idx, line) in content.lines().enumerate() {
+                        let trimmed = line.trim();
+                        if is_modifier_symbol_line(trimmed) {
+                            by_line.insert(idx + 1, trimmed.to_string());
+                        }
+                    }
+                }
+
+                let symbols: Vec<String> = by_line
+                    .into_iter()
+                    .map(|(line, sig)| format!("L{:04}: {}", line, sig))
+                    .collect();
+
                 format!(
                     "# Code Symbol Signatures: {}\n\n{}",
                     rel_path,
@@ -81,14 +166,28 @@ pub(crate) fn handle_references(
     // Fast Path 2: Query SQLite CodeGraphDb FTS5 index (< 5ms)
     if let Ok(db) = CodeGraphDb::open_for_project(proj_path) {
         if let Ok(hits) = db.search_content_fts(search_term, 30) {
-            for (path, start_line, _end_line, snippet) in hits {
-                let bounded_snip = snippet.lines().next().unwrap_or(&snippet).trim();
-                let bounded = if bounded_snip.chars().count() > 100 {
-                    crate::mcp::tools::helpers::truncate_chars(bounded_snip, 100)
+            let term_lower = search_term.to_lowercase();
+            for (path, start_line, end_line, snippet) in hits {
+                let mut reported_line = start_line;
+                let mut reported_snip = snippet.lines().next().unwrap_or(&snippet).trim().to_string();
+                if let Ok(full_file) = validate_path(proj_path, &path) {
+                    if let Ok(file_content) = std::fs::read_to_string(&full_file) {
+                        for (idx, line_text) in file_content.lines().enumerate() {
+                            let line_no = idx + 1;
+                            if line_no >= start_line && line_no <= end_line && line_text.to_lowercase().contains(&term_lower) {
+                                reported_line = line_no;
+                                reported_snip = line_text.trim().to_string();
+                                break;
+                            }
+                        }
+                    }
+                }
+                let bounded = if reported_snip.chars().count() > 100 {
+                    crate::mcp::tools::helpers::truncate_chars(&reported_snip, 100).to_string()
                 } else {
-                    bounded_snip
+                    reported_snip
                 };
-                refs.push(format!("{}:L{} -> {}", path, start_line, bounded));
+                refs.push(format!("{}:L{} -> {}", path, reported_line, bounded));
                 if refs.len() >= 30 {
                     break;
                 }
@@ -96,9 +195,9 @@ pub(crate) fn handle_references(
         }
     }
 
-    // Fallback: Shallow filesystem scan (depth 4) if DB is empty/uninitialized
+    // Fallback: Filesystem scan (depth 12) if DB is empty/uninitialized
     if refs.is_empty() {
-        let files = scan_project(proj_path, 4);
+        let files = scan_project(proj_path, 12);
         let query_lower = search_term.to_lowercase();
         for file in files.iter().filter(|f| f.file_type == "file") {
             if let Ok(path) = validate_path(proj_path, &file.path) {

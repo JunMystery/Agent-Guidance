@@ -83,13 +83,91 @@ pub fn analyze_file_safety(content: &str, rel_path: &str) -> SafetyReport {
     SafetyReport { findings }
 }
 
+fn strip_shell_comments(cmd: &str) -> String {
+    let mut out = String::with_capacity(cmd.len());
+    for (idx, line) in cmd.lines().enumerate() {
+        if idx > 0 {
+            out.push('\n');
+        }
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut escaped = false;
+        let mut prev_ws = true;
+        for (byte_idx, ch) in line.char_indices() {
+            if escaped {
+                out.push(ch);
+                escaped = false;
+                prev_ws = ch.is_whitespace();
+                continue;
+            }
+            if ch == '\\' && !in_single {
+                out.push(ch);
+                escaped = true;
+                prev_ws = false;
+                continue;
+            }
+            if ch == '\'' && !in_double {
+                in_single = !in_single;
+                out.push(ch);
+                prev_ws = false;
+                continue;
+            }
+            if ch == '"' && !in_single {
+                in_double = !in_double;
+                out.push(ch);
+                prev_ws = false;
+                continue;
+            }
+            if ch == '#' && !in_single && !in_double && (byte_idx == 0 || prev_ws) {
+                break;
+            }
+            out.push(ch);
+            prev_ws = ch.is_whitespace();
+        }
+    }
+    out
+}
+
+fn has_valid_allow_token(uncommented_lower: &str) -> bool {
+    let needle = "test-safety-allow:";
+    let mut start = 0;
+    while let Some(pos) = uncommented_lower[start..].find(needle) {
+        let rest = uncommented_lower[start + pos + needle.len()..].trim_start();
+        let tag: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        if !tag.is_empty() {
+            return true;
+        }
+        start += pos + needle.len();
+    }
+    false
+}
+
+fn contains_rm_rf_root(lower: &str) -> bool {
+    for pattern in ["rm -rf /", "rm -fr /"] {
+        let mut start = 0;
+        while let Some(pos) = lower[start..].find(pattern) {
+            let after_idx = start + pos + pattern.len();
+            let next_ch = lower[after_idx..].chars().next();
+            if matches!(
+                next_ch,
+                None | Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some('*') | Some(';') | Some('&') | Some('|') | Some('"') | Some('\'')
+            ) {
+                return true;
+            }
+            start = after_idx;
+        }
+    }
+    false
+}
+
 pub fn analyze_verification_command(cmd: &str) -> SafetyReport {
-    let lower = cmd.to_lowercase();
-    let has_safe_override = lower.contains(":memory:")
-        || lower.contains("--dry-run")
-        || lower.contains("test_db")
-        || lower.contains("test-safety-allow:");
-    if has_safe_override {
+    let uncommented = strip_shell_comments(cmd);
+    let lower = uncommented.to_lowercase();
+
+    if has_valid_allow_token(&lower) {
         return SafetyReport::default();
     }
 
@@ -119,6 +197,20 @@ pub fn analyze_verification_command(cmd: &str) -> SafetyReport {
             };
         }
     }
+    if contains_rm_rf_root(&lower) {
+        return SafetyReport {
+            findings: vec![SafetyFinding {
+                code: "VERIFY_COMMAND_PROD_TARGET",
+                severity: SafetySeverity::Block,
+                line: None,
+                message: "Verification command contains destructive root removal (`rm -rf /`). Run against an isolated test/in-memory target instead.".to_string(),
+            }],
+        };
+    }
+
+    let _has_safe_override = lower.contains(":memory:")
+        || lower.contains("--dry-run")
+        || lower.contains("test_db");
     SafetyReport::default()
 }
 

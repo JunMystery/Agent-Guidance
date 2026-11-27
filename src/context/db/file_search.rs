@@ -8,12 +8,27 @@ pub struct FileMatchResult {
     pub top_symbols: Vec<String>,
 }
 
+fn escape_like_literal(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 impl CodeGraphDb {
     pub fn search_files(&self, query: &str, limit: usize) -> Result<Vec<FileMatchResult>> {
         let clean = query.trim().trim_start_matches("./").replace('\\', "/");
         if clean.is_empty() {
             return Ok(Vec::new());
         }
+        let escaped = escape_like_literal(&clean);
 
         let mut found_paths = Vec::new();
 
@@ -26,9 +41,9 @@ impl CodeGraphDb {
 
         // 2. Basename match (e.g. %/filename.ext or %/filename)
         if found_paths.len() < limit {
-            let basename_pattern = format!("%/{}", clean);
+            let basename_pattern = format!("%/{}", escaped);
             let mut stmt = self.conn.prepare(
-                "SELECT path FROM files WHERE path LIKE ? AND path != ? ORDER BY length(path) ASC LIMIT ?"
+                "SELECT path FROM files WHERE path LIKE ? ESCAPE '\\' AND path != ? ORDER BY length(path) ASC LIMIT ?"
             )?;
             let rows = stmt.query_map(params![basename_pattern, clean, (limit - found_paths.len()) as i64], |r| {
                 r.get::<_, String>(0)
@@ -42,9 +57,9 @@ impl CodeGraphDb {
 
         // 3. Substring match if still room and query has >= 3 chars
         if found_paths.len() < limit && clean.len() >= 3 {
-            let sub_pattern = format!("%{}%", clean);
+            let sub_pattern = format!("%{}%", escaped);
             let mut stmt = self.conn.prepare(
-                "SELECT path FROM files WHERE path LIKE ? ORDER BY length(path) ASC LIMIT ?"
+                "SELECT path FROM files WHERE path LIKE ? ESCAPE '\\' ORDER BY length(path) ASC LIMIT ?"
             )?;
             let rows = stmt.query_map(params![sub_pattern, (limit - found_paths.len()) as i64], |r| {
                 r.get::<_, String>(0)

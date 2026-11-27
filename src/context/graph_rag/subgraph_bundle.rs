@@ -51,6 +51,33 @@ pub struct SubgraphBundle {
     pub loc_budget: usize,
 }
 
+pub fn compute_blast_radius(upstream_callers: usize, downstream_callees: usize) -> (f64, &'static str) {
+    let raw_score = (upstream_callers * 3 + downstream_callees + 1) as f64;
+    let score = raw_score.log2().clamp(1.0, 10.0);
+    let level = if score > 5.0 {
+        "HIGH"
+    } else if score > 2.5 {
+        "MEDIUM"
+    } else {
+        "LOW"
+    };
+    (score, level)
+}
+
+fn escape_like_literal(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 pub fn build_subgraph_bundle(
     proj_path: &Path,
     target_query: &str,
@@ -76,7 +103,8 @@ pub fn build_subgraph_bundle(
     }
 
     let target_file_raw = rel_path_hint.or(inferred_path).unwrap_or("").trim().replace('\\', "/");
-    let target_file = target_file_raw.trim_start_matches('/').to_string();
+    let target_file = target_file_raw.trim_start_matches("./").trim_start_matches('/').to_string();
+    let escaped_target_file = escape_like_literal(&target_file);
 
     let db = CodeGraphDb::open_for_project(proj_path)?;
 
@@ -85,13 +113,13 @@ pub fn build_subgraph_bundle(
         "SELECT id, name, kind, file_path, start_line, end_line, signature
          FROM symbols
          WHERE (name = ?1 OR id = ?1)
-           AND (?2 = '' OR REPLACE(file_path, '\\', '/') = ?2 OR REPLACE(file_path, '\\', '/') LIKE '%' || ?2)
+           AND (?2 = '' OR REPLACE(file_path, '\\', '/') = ?2 OR REPLACE(file_path, '\\', '/') LIKE '%' || ?3 ESCAPE '\\')
          ORDER BY (REPLACE(file_path, '\\', '/') = ?2) DESC, (end_line - start_line) DESC
          LIMIT 1",
     )?;
 
     let target_opt = target_stmt
-        .query_row(rusqlite::params![clean_target, target_file], |row| {
+        .query_row(rusqlite::params![clean_target, target_file, escaped_target_file], |row| {
             Ok(SubgraphTarget {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -162,15 +190,9 @@ pub fn build_subgraph_bundle(
         .collect();
 
     // 4. Calculate blast radius accurately from full counts
-    let raw_score = (total_callers_count * 3 + total_callees_count + 1) as f64;
-    let blast_radius_score = raw_score.log2().clamp(1.0, 10.0);
-    let risk_level = if blast_radius_score > 5.0 {
-        "HIGH".to_string()
-    } else if blast_radius_score > 2.5 {
-        "MEDIUM".to_string()
-    } else {
-        "LOW".to_string()
-    };
+    let (blast_radius_score, risk_level_str) =
+        compute_blast_radius(total_callers_count, total_callees_count);
+    let risk_level = risk_level_str.to_string();
 
     // 5. Budget distribution
     let budget = loc_budget.clamp(50, 500);

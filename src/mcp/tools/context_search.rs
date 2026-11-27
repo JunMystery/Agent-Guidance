@@ -10,7 +10,7 @@ pub(crate) fn handle_search(
     intent: Option<&str>,
     _state: &mut ServerState,
 ) -> String {
-    if query.is_empty() {
+    if query.trim().is_empty() {
         return "Error: query is required for search operation. Example: project_context(operation=\"search\", project_path=\"...\", query=\"search_term\")".to_string();
     }
 
@@ -18,6 +18,7 @@ pub(crate) fn handle_search(
     let mut results = Vec::new();
     let mut source = "fallback_scan";
     let mut detected_intent = crate::context::search::SearchIntent::Universal;
+    let mut top_hit: Option<(String, Option<String>, usize, f64, &'static str)> = None;
 
     if let Some(ref db) = db_opt {
         let exec = crate::context::search::execute_ranked_search(
@@ -29,6 +30,20 @@ pub(crate) fn handle_search(
         );
         source = exec.source;
         detected_intent = exec.intent;
+
+        if let Some(first) = exec.results.first() {
+            let sym_opt = match first.source {
+                "symbol_fts" | "symbol_vector" if !first.name.is_empty() => Some(first.name.clone()),
+                _ => None,
+            };
+            top_hit = Some((
+                first.path.clone(),
+                sym_opt,
+                first.line,
+                first.score,
+                first.source,
+            ));
+        }
 
         for r in exec.results {
             let label = match r.source {
@@ -95,13 +110,9 @@ pub(crate) fn handle_search(
         && query.trim().len() >= 4;
 
     if can_auto_learn {
-        if let Some(ref db) = db_opt {
-            let first_line = &results[0];
-            if let Some(path_part) = first_line.strip_prefix("- ") {
-                let rel = path_part.split(':').next().unwrap_or("").trim();
-                if !rel.is_empty() {
-                    let _ = db.upsert_alias(query, rel, None, None);
-                }
+        if let (Some(db), Some((top_path, top_sym, top_line, top_score, top_src))) = (&db_opt, &top_hit) {
+            if *top_score >= 0.70 && *top_src != "alias_cache" && !top_path.trim().is_empty() {
+                let _ = db.upsert_alias(query, top_path, top_sym.as_deref(), Some(*top_line));
             }
         }
     }
@@ -130,98 +141,177 @@ pub(crate) fn handle_navigate(
     query: &str,
     proj_path: &Path,
     _state: &mut ServerState,
-) -> String {
-                    if query.is_empty() {
-                        "Error: query is required for navigate operation.".to_string()
-                    } else {
-                        let db_opt = ensure_indexed(&proj_path);
-                        let scope = arguments.get("scope").and_then(|s| s.as_str()).unwrap_or("all");
-                        let mut sections = Vec::new();
+) -> Result<String, (i32, String)> {
+    let trimmed_query = query.trim();
+    if trimmed_query.is_empty() {
+        return Err((-32602, "Error: query is required for navigate operation.".to_string()));
+    }
 
-                        if let Some(ref db) = db_opt {
-                            // 1. Alias section
-                            if let Ok(aliases) = db.lookup_aliases(query, 5) {
-                                if !aliases.is_empty() {
-                                    let lines: Vec<String> = aliases.iter().map(|a| {
-                                        format!("- {}:L{} → `{}` (confidence: {:.2})", a.resolved_path, a.resolved_line.unwrap_or(1), a.resolved_symbol.as_deref().unwrap_or("—"), a.confidence)
-                                    }).collect();
-                                    sections.push(format!("## From Alias Cache (Instant)\n\n{}", lines.join("\n")));
-                                }
-                            }
+    let scope = arguments
+        .get("scope")
+        .and_then(|s| s.as_str())
+        .unwrap_or("all");
+    if !matches!(scope, "all" | "files" | "symbols" | "edges" | "content" | "linked") {
+        return Err((
+            -32602,
+            format!(
+                "Invalid scope '{}'. Expected one of: all, files, symbols, edges, content, linked.",
+                scope
+            ),
+        ));
+    }
 
-                            // 2. Symbol FTS section
-                            if scope == "all" || scope == "symbols" {
-                                if let Ok(syms) = db.search_symbols(query, 5) {
-                                    if !syms.is_empty() {
-                                        let lines: Vec<String> = syms.iter().map(|(p, n, l)| format!("- {}:L{} → `{}`", p, l, n)).collect();
-                                        sections.push(format!("## From Symbol Index (FTS5)\n\n{}", lines.join("\n")));
-                                    }
-                                }
-                            }
+    let db_opt = ensure_indexed(proj_path);
+    let mut sections = Vec::new();
 
-                            // 3. Content FTS section
-                            if scope == "all" || scope == "content" {
-                                if let Ok(content_hits) = db.search_content_fts(query, 5) {
-                                    if !content_hits.is_empty() {
-                                        let lines: Vec<String> = content_hits.iter().map(|(p, s, e, snip)| format!("- {}:L{}-{} → `{}`", p, s, e, snip.replace('\n', " "))).collect();
-                                        sections.push(format!("## From Content Full-Text (FTS5)\n\n{}", lines.join("\n")));
-                                    }
-                                }
-                            }
+    if let Some(ref db) = db_opt {
+        // 1. Alias section
+        if matches!(scope, "all" | "symbols" | "files") {
+            if let Ok(aliases) = db.lookup_aliases(trimmed_query, 5) {
+                if !aliases.is_empty() {
+                    let lines: Vec<String> = aliases
+                        .iter()
+                        .map(|a| {
+                            format!(
+                                "- {}:L{} → `{}` (confidence: {:.2})",
+                                a.resolved_path,
+                                a.resolved_line.unwrap_or(1),
+                                a.resolved_symbol.as_deref().unwrap_or("—"),
+                                a.confidence
+                            )
+                        })
+                        .collect();
+                    sections.push(format!("## From Alias Cache (Instant)\n\n{}", lines.join("\n")));
+                }
+            }
+        }
 
-                            // 4. Vector Semantic section
-                            if let Some(qv) = embed_query(query) {
-                                if scope == "all" || scope == "symbols" {
-                                    if let Ok(sym_vecs) = db.vector_search_symbols(&qv, 5, 0.65) {
-                                        if !sym_vecs.is_empty() {
-                                            let lines: Vec<String> = sym_vecs.iter().map(|v| format!("- {}:L{} → `{}` (cosine: {:.2})", v.file_path, v.start_line, v.name, v.score)).collect();
-                                            sections.push(format!("## From Symbol Semantic Vector\n\n{}", lines.join("\n")));
-                                        }
-                                    }
-                                }
-
-                                if scope == "all" || scope == "content" {
-                                    if let Ok(chunk_vecs) = db.vector_search_chunks(&qv, 5, 0.60) {
-                                        if !chunk_vecs.is_empty() {
-                                            let lines: Vec<String> = chunk_vecs.iter().map(|c| format!("- {}:L{}-{} (cosine: {:.2})", c.file_path, c.start_line, c.end_line, c.score)).collect();
-                                            sections.push(format!("## From RAG Code Chunk Semantic Vector\n\n{}", lines.join("\n")));
-                                        }
-                                    }
-                                }
-                            }
-
-                            // 5. Related Graph Edges
-                            if scope == "all" || scope == "edges" {
-                                if let Ok(related) = db.search_related_symbols(query) {
-                                    if !related.is_empty() {
-                                        let lines: Vec<String> = related.iter().map(|(s1, edge, s2)| format!("- `{}` --[{}]--> `{}`", s1, edge, s2)).collect();
-                                        sections.push(format!("## Related Graph Symbols (DAG)\n\n{}", lines.join("\n")));
-                                    }
-                                }
-                            }
-                        }
-
-                        // 6. Linked Projects section
-                        let linked = crate::context::multi_project::discover_linked_projects(proj_path);
-                        if !linked.is_empty() && (scope == "all" || scope == "symbols" || scope == "linked") {
-                            let syms = crate::context::multi_project::search_linked_symbols(&linked, query, 5);
-                            if !syms.is_empty() {
-                                let lines: Vec<String> = syms
-                                    .into_iter()
-                                    .map(|(proj, p, n, l)| format!("- linked:{}/{}:L{} → `{}`", proj, p, l, n))
-                                    .collect();
-                                sections.push(format!("## From Linked Projects (Cross-Workspace)\n\n{}", lines.join("\n")));
-                            }
-                        }
-
-                        format!(
-                            "# Code Graph Navigation for '{}'\n\n{}",
-                            query,
-                            if sections.is_empty() {
-                                "No navigation nodes found.".to_string()
+        // 2. File index section
+        if scope == "all" || scope == "files" {
+            if let Ok(files) = db.search_files(trimmed_query, 15) {
+                if !files.is_empty() {
+                    let lines: Vec<String> = files
+                        .iter()
+                        .map(|f| {
+                            if f.top_symbols.is_empty() {
+                                format!("- {}", f.path)
                             } else {
-                                sections.join("\n\n")
+                                format!("- {} (symbols: {})", f.path, f.top_symbols.join(", "))
                             }
-                        )
+                        })
+                        .collect();
+                    sections.push(format!("## From File Index\n\n{}", lines.join("\n")));
+                }
+            }
+        }
+
+        // 3. Symbol FTS section
+        if scope == "all" || scope == "symbols" {
+            if let Ok(syms) = db.search_symbols(trimmed_query, 5) {
+                if !syms.is_empty() {
+                    let lines: Vec<String> = syms
+                        .iter()
+                        .map(|(p, n, l)| format!("- {}:L{} → `{}`", p, l, n))
+                        .collect();
+                    sections.push(format!("## From Symbol Index (FTS5)\n\n{}", lines.join("\n")));
+                }
+            }
+        }
+
+        // 4. Content FTS section
+        if scope == "all" || scope == "content" {
+            if let Ok(content_hits) = db.search_content_fts(trimmed_query, 5) {
+                if !content_hits.is_empty() {
+                    let lines: Vec<String> = content_hits
+                        .iter()
+                        .map(|(p, s, e, snip)| {
+                            format!("- {}:L{}-{} → `{}`", p, s, e, snip.replace('\n', " "))
+                        })
+                        .collect();
+                    sections.push(format!("## From Content Full-Text (FTS5)\n\n{}", lines.join("\n")));
+                }
+            }
+        }
+
+        // 5. Vector Semantic section (only embed when vector scopes are requested)
+        if matches!(scope, "all" | "symbols" | "content") {
+            if let Some(qv) = embed_query(trimmed_query) {
+                if scope == "all" || scope == "symbols" {
+                    if let Ok(sym_vecs) = db.vector_search_symbols(&qv, 5, 0.65) {
+                        if !sym_vecs.is_empty() {
+                            let lines: Vec<String> = sym_vecs
+                                .iter()
+                                .map(|v| {
+                                    format!(
+                                        "- {}:L{} → `{}` (cosine: {:.2})",
+                                        v.file_path, v.start_line, v.name, v.score
+                                    )
+                                })
+                                .collect();
+                            sections.push(format!("## From Symbol Semantic Vector\n\n{}", lines.join("\n")));
+                        }
                     }
+                }
+
+                if scope == "all" || scope == "content" {
+                    if let Ok(chunk_vecs) = db.vector_search_chunks(&qv, 5, 0.60) {
+                        if !chunk_vecs.is_empty() {
+                            let lines: Vec<String> = chunk_vecs
+                                .iter()
+                                .map(|c| {
+                                    format!(
+                                        "- {}:L{}-{} (cosine: {:.2})",
+                                        c.file_path, c.start_line, c.end_line, c.score
+                                    )
+                                })
+                                .collect();
+                            sections.push(format!(
+                                "## From RAG Code Chunk Semantic Vector\n\n{}",
+                                lines.join("\n")
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // 6. Related Graph Edges
+        if scope == "all" || scope == "edges" {
+            if let Ok(related) = db.search_related_symbols(trimmed_query) {
+                if !related.is_empty() {
+                    let lines: Vec<String> = related
+                        .iter()
+                        .map(|(s1, edge, s2)| format!("- `{}` --[{}]--> `{}`", s1, edge, s2))
+                        .collect();
+                    sections.push(format!("## Related Graph Symbols (DAG)\n\n{}", lines.join("\n")));
+                }
+            }
+        }
+    }
+
+    // 7. Linked Projects section
+    let linked = crate::context::multi_project::discover_linked_projects(proj_path);
+    if !linked.is_empty() && (scope == "all" || scope == "symbols" || scope == "linked") {
+        let syms = crate::context::multi_project::search_linked_symbols(&linked, trimmed_query, 5);
+        if !syms.is_empty() {
+            let lines: Vec<String> = syms
+                .into_iter()
+                .map(|(proj, p, n, l)| format!("- linked:{}/{}:L{} → `{}`", proj, p, l, n))
+                .collect();
+            sections.push(format!(
+                "## From Linked Projects (Cross-Workspace)\n\n{}",
+                lines.join("\n")
+            ));
+        }
+    }
+
+    Ok(format!(
+        "# Code Graph Navigation for '{}'\n\n{}",
+        trimmed_query,
+        if sections.is_empty() {
+            "No navigation nodes found.".to_string()
+        } else {
+            sections.join("\n\n")
+        }
+    ))
 }

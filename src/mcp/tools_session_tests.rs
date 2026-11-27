@@ -268,3 +268,82 @@ fn test_session_switch_failed_lookup_preserves_state_and_resets_flags() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_session_clear_scoped_to_active_and_save_no_double_count() {
+    let temp_dir = std::env::temp_dir().join(format!("tools_sess_m12_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    // 1. Unknown operation returns Err((-32602, ...))
+    let mut state_a = ServerState::new();
+    let bad = handle_tool_call(
+        "session_continuity",
+        json!({"operation": "unknown_op", "project_path": temp_dir.to_str().unwrap()}),
+        &mut state_a,
+    );
+    assert!(matches!(bad, Err((-32602, _))));
+
+    // 2. Repeated save does not double-count co-changes
+    state_a.record_modified_file("src/a.rs");
+    state_a.record_modified_file("src/b.rs");
+    let _ = handle_tool_call(
+        "session_continuity",
+        json!({"operation": "save", "project_path": temp_dir.to_str().unwrap()}),
+        &mut state_a,
+    )
+    .unwrap();
+    let _ = handle_tool_call(
+        "session_continuity",
+        json!({"operation": "save", "project_path": temp_dir.to_str().unwrap()}),
+        &mut state_a,
+    )
+    .unwrap();
+    let db = crate::context::db::CodeGraphDb::open_for_project(&temp_dir).unwrap();
+    let count: i64 = db
+        .conn
+        .query_row(
+            "SELECT co_change_count FROM co_change_edges WHERE file_a='src/a.rs' AND file_b='src/b.rs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1, "Repeated save in same session must not double-count co-changes");
+
+    // 3. Default clear removes only active session, preserving other sessions
+    let mut state_b = ServerState::new();
+    state_b.priority_gate_pass();
+    state_b.save_to_dir(&temp_dir).unwrap();
+    let id_a = state_a.session_id.clone();
+    let id_b = state_b.session_id.clone();
+
+    let _ = handle_tool_call(
+        "session_continuity",
+        json!({"operation": "clear", "project_path": temp_dir.to_str().unwrap()}),
+        &mut state_a,
+    )
+    .unwrap();
+    assert!(!temp_dir.join(format!(".agent-context/sessions/{}.json", id_a)).exists());
+    assert!(temp_dir.join(format!(".agent-context/sessions/{}.json", id_b)).exists());
+
+    // 4. Switch resets priority_gate_passed consistently with load
+    state_a.priority_gate_pass();
+    let _ = handle_tool_call(
+        "session_continuity",
+        json!({"operation": "switch", "session_id": id_b, "project_path": temp_dir.to_str().unwrap()}),
+        &mut state_a,
+    )
+    .unwrap();
+    assert!(!state_a.priority_gate_passed);
+
+    // 5. clear with all=true wipes everything
+    let _ = handle_tool_call(
+        "session_continuity",
+        json!({"operation": "clear", "all": true, "project_path": temp_dir.to_str().unwrap()}),
+        &mut state_a,
+    )
+    .unwrap();
+    assert!(!temp_dir.join(".agent-context/sessions").exists());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

@@ -3,6 +3,20 @@
 use rusqlite::Connection;
 use std::path::Path;
 
+fn escape_like_literal(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 pub fn handle_data_flow(project_path: &Path, query: &str) -> String {
     let query = query.trim();
     if query.is_empty() {
@@ -10,6 +24,9 @@ pub fn handle_data_flow(project_path: &Path, query: &str) -> String {
     }
 
     let db_path = project_path.join(".agent-context").join("code_graph.db");
+    if !db_path.exists() {
+        let _ = super::helpers::ensure_indexed(project_path);
+    }
     if !db_path.exists() {
         return "No code graph index found. Run task_pipeline or project_context first to generate index.".to_string();
     }
@@ -23,7 +40,7 @@ pub fn handle_data_flow(project_path: &Path, query: &str) -> String {
     let mut output = Vec::new();
     output.push(format!("# Data Flow & Dispatch Analysis for '{}'", query));
 
-    let pattern = format!("%{}%", query);
+    let pattern = format!("%{}%", escape_like_literal(query));
 
     // 1. Forward Data Flow (Sinks: where does this variable/function output flow into?)
     let forward_flows = query_forward_flows(conn, &pattern, query);
@@ -47,7 +64,7 @@ pub fn handle_data_flow(project_path: &Path, query: &str) -> String {
     } else {
         for b in &backward_flows {
             output.push(format!(
-                "- `{}` passed `{}` from `{}` (param: `{}`, L{}) [conf: {:.2}]",
+                "- `{}` passed `{}` to `{}` (param: `{}`, L{}) [conf: {:.2}]",
                 b.caller_id, b.source_variable, b.callee_id, b.target_parameter, b.call_line, b.confidence
             ));
         }
@@ -85,7 +102,7 @@ fn query_forward_flows(conn: &Connection, pattern: &str, exact_var: &str) -> Vec
     let mut items = Vec::new();
     let sql = "SELECT caller_symbol_id, callee_symbol_id, source_variable, target_parameter, arg_index, call_line, flow_type, confidence
                FROM data_flow_edges
-               WHERE caller_symbol_id LIKE ?1 OR source_variable = ?2 OR source_variable LIKE ?1
+               WHERE caller_symbol_id LIKE ?1 ESCAPE '\\' OR source_variable = ?2 OR source_variable LIKE ?1 ESCAPE '\\'
                ORDER BY call_line ASC LIMIT 40";
     if let Ok(mut stmt) = conn.prepare(sql) {
         if let Ok(rows) = stmt.query_map(rusqlite::params![pattern, exact_var], |row| {
@@ -112,7 +129,7 @@ fn query_backward_flows(conn: &Connection, pattern: &str, exact_param: &str) -> 
     let mut items = Vec::new();
     let sql = "SELECT caller_symbol_id, callee_symbol_id, source_variable, target_parameter, arg_index, call_line, flow_type, confidence
                FROM data_flow_edges
-               WHERE callee_symbol_id LIKE ?1 OR target_parameter = ?2 OR target_parameter LIKE ?1
+               WHERE callee_symbol_id LIKE ?1 ESCAPE '\\' OR target_parameter = ?2 OR target_parameter LIKE ?1 ESCAPE '\\'
                ORDER BY call_line ASC LIMIT 40";
     if let Ok(mut stmt) = conn.prepare(sql) {
         if let Ok(rows) = stmt.query_map(rusqlite::params![pattern, exact_param], |row| {
@@ -146,7 +163,7 @@ fn query_dispatch_links(conn: &Connection, pattern: &str) -> Vec<DispatchItem> {
     let mut items = Vec::new();
     let sql = "SELECT source_id, target_id, edge_type, confidence
                FROM symbol_edges
-               WHERE (source_id LIKE ?1 OR target_id LIKE ?1)
+               WHERE (source_id LIKE ?1 ESCAPE '\\' OR target_id LIKE ?1 ESCAPE '\\')
                  AND edge_type IN ('implements_trait', 'implements_method', 'dynamic_dispatch')
                ORDER BY weight DESC LIMIT 30";
     if let Ok(mut stmt) = conn.prepare(sql) {
