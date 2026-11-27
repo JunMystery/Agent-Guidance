@@ -456,3 +456,23 @@ fn test_guidance_unknown_op_workflow_traversal_list_filter_and_precode_files() {
     assert_eq!(tiered[0].1.name, "beta-skill");
     assert_eq!(tiered[1].1.name, "alpha-skill");
 }
+
+#[test]
+fn test_task_pipeline_compacted_output_omits_json_template_and_duplicate_rules() {
+    let mut state = ServerState::new();
+    let res = handle_tool_call(
+        "task_pipeline",
+        json!({
+            "task": "Refactor auth module and compact mcp output",
+            "phase": "plan"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let text = res["content"][0]["text"].as_str().unwrap();
+    assert!(!text.contains("ask_question({"));
+    assert!(!text.contains("CRITICAL MULTILINGUAL MANDATE"));
+    assert!(!text.contains("[Rule:task_pipeline"));
+    let toks = crate::optimizer::compressor::estimate_tokens(text, false);
+    assert!(toks < 650, "Expected compacted task_pipeline < 650 tokens, got {}", toks);
+}

@@ -162,7 +162,7 @@ pub fn handle_tool_call(
 
             let resolved_proj = detect_project_path(explicit_proj.as_deref().unwrap_or(""), state);
             let proj_path = resolved_proj.to_str();
-            micro_rules::inject_tool_micro_rule(name, proj_path, &mut val);
+            micro_rules::inject_tool_micro_rule_once(name, proj_path, state, &mut val);
 
             // Universal token optimization & compression across all MCP tool responses
             let opt_enabled = std::env::var("AGENT_GUIDANCE_TOKEN_OPT")

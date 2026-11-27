@@ -123,7 +123,7 @@ pub(crate) fn handle_authorize_edit(
 
     if paths.is_empty() {
         return format!(
-            "# Edit Approval Gate Authorization\n\n- Status: BLOCKED (RELATIVE_PATH_REQUIRED)\n- Project Path: {}\n- Declared Architecture: '{}'\n\n**Error: RELATIVE_PATH_REQUIRED**: `workflow_gate(action=\"authorize_edit\")` requires target `relative_path` or `relative_paths` (for batch authorization).\n\nBlanket or global edit authorizations without a target file are prohibited to enforce:\n1. **Soft Complexity & Domain Cohesion Checks**: Surfacing function complexity and 300 LOC soft review advisories.\n2. **Code Graph Diff Impact Guard**: Evaluating module blast radius and incoming dependencies.\n3. **Pre-Edit Rollback Snapshot**: Creating safe checkpoints for rollback protection.\n4. **Domain/Feature Alignment**: Encouraging cohesive file organization.\n\n**Action**: Call `workflow_gate(action=\"authorize_edit\", project_path=\"...\", relative_paths=[\"path1\", \"path2\"])` to authorize all planned files in a single turn.",
+            "# Edit Approval Gate Authorization\n\nStatus: BLOCKED (RELATIVE_PATH_REQUIRED) | Project: {} | Arch: '{}'\nError: RELATIVE_PATH_REQUIRED: Pass `relative_path` or `relative_paths=[...]` (needed for 300 LOC cohesion check, impact guard, and rollback snapshot).",
             proj_path.display(),
             if arch_pattern.is_empty() { "Auto" } else { &arch_pattern }
         );
@@ -196,14 +196,11 @@ pub(crate) fn handle_authorize_edit(
 
     let is_exempt = is_exempt_from_loc_limit(&outcome.rel_path);
     let mut resp = format!(
-        "# Edit Approval Gate Authorization\n\n- Status: PASSED\n- Project Path: {}\n- Target File: `{}`{}\n- Assessed Risk Level: {:?} (Dependencies: {})\n- Architecture Pattern: {}\n- Justification: {}\n- Active Stage: {}\n- Plan Approved: true\n\nFile edits are fully authorized under {} Architecture.",
-        proj_path.display(),
+        "# Edit Approval Gate Authorization\n\nStatus: PASSED | Target: `{}`{} | Risk: {:?} (Deps: {}) | Stage: {} | Plan Approved: true | {} Architecture",
         outcome.rel_path,
         if outcome.is_new { " [NEW FILE]" } else { "" },
         outcome.risk_level,
         outcome.dependent_count,
-        arch_pattern,
-        if justification.is_empty() { "Standard development task" } else { justification },
         state.workflow_stage,
         arch_pattern
     );

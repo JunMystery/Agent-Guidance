@@ -1,5 +1,4 @@
 use std::path::Path;
-use serde_json::json;
 use crate::catalog::store::get_embedded_skill;
 use crate::mcp::state::ServerState;
 use super::validate_path;
@@ -107,18 +106,14 @@ pub(crate) fn check_confirmation_gate(
     if !proposals.is_empty() {
         state.pending_skill_proposals = proposals.to_vec();
     }
-    let question_json = json!({
-        "questions": [
-            {
-                "question": "Which skills would you like to inject for this task?",
-                "options": options,
-                "is_multi_select": true
-            }
-        ]
-    });
+    let options_list = options
+        .iter()
+        .map(|o| format!("- {}", o))
+        .collect::<Vec<_>>()
+        .join("\n");
     Some(format!(
-        "# Skill Selection Gate: [select_skills]\n\nStatus: BLOCKED | Error: USER_CONFIRMATION_REQUIRED: You must NEVER auto-select skills on behalf of the user.\n\nTrigger the IDE tool `ask_question` with `is_multi_select: true` so the user selects skills.\n\nCRITICAL MULTILINGUAL MANDATE:\n1. Match User Language: Translate the question and each skill's description into the active conversational language used by the user (e.g. Vietnamese, Japanese, French, English, etc.).\n2. Accents & Diacritics: For languages with diacritics (like Vietnamese), MUST write natural accented text with full diacritics ('tiếng Việt có dấu đầy đủ'). NEVER strip accents or emit unaccented text ('tiếng Việt không dấu').\n3. Option Format: Format each option as `[(Recommended) ]{{name}} - {{translated_short_desc}}` (keep `{{name}}` exact, `{{translated_short_desc}}` <= 50 chars).\n\nSuggested template:\n```json\nask_question({})\n```\nOnce the user submits their choice, call `select_skills(skills=[...], user_confirmed=true)`.",
-        serde_json::to_string_pretty(&question_json).unwrap_or_default()
+        "# Skill Selection Gate: [select_skills]\n\nStatus: BLOCKED | Error: USER_CONFIRMATION_REQUIRED: Never auto-select skills. Call `ask_question` (`\"is_multi_select\": true`) with these options translated to user's language (full diacritics, `<= 50 chars`), then `select_skills(skills=[...], user_confirmed=true)`:\n{}",
+        options_list
     ))
 }
 

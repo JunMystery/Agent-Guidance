@@ -62,6 +62,7 @@ pub(crate) fn handle(
         state.workflow_stage = "Build".to_string();
         state.plan_approved = true;
         state.edit_authorized = false;
+        state.auth_tip_shown = false;
         state.is_fast_path = true;
         state.fast_path_files.clear();
         state.pending_skill_proposals.clear();
@@ -125,6 +126,7 @@ pub(crate) fn handle(
         state.workflow_stage = "Build".to_string();
         state.approve_plan();
         state.edit_authorized = false;
+        state.auth_tip_shown = false;
         state.pending_skill_proposals.clear();
         tracing::info!("Detected plan approval in task pipeline; transitioned to Build stage with plan_approved=true.");
     } else if !is_same_task
@@ -136,6 +138,7 @@ pub(crate) fn handle(
         state.workflow_stage = "Plan".to_string();
         state.plan_approved = false;
         state.edit_authorized = false;
+        state.auth_tip_shown = false;
         state.verification_passed = false;
         state.verification_command = None;
         state.expected_output_keyword = None;
@@ -209,7 +212,7 @@ pub(crate) fn handle(
     let blueprint_section = if dynamic_blueprint.trim().is_empty() {
         String::new()
     } else {
-        format!("\n\n## Dynamic Split Blueprint\n{}", dynamic_blueprint)
+        format!("\n{}", dynamic_blueprint.trim_end())
     };
 
     let should_bundle_skills = !is_approval_msg && matches!(raw_phase, None | Some("plan"));
@@ -224,24 +227,24 @@ pub(crate) fn handle(
 
     let next_step_prompt = if !skills_section.is_empty() {
         if skills_section.contains("SKILL_PROPOSAL: MANDATORY USER INTERACTION REQUIRED") {
-            "-> NEXT STEP: Ask user via `ask_question` using the bundled Skill Proposal above, then invoke `select_skills(skills=[...], user_confirmed=true)`."
+            "-> NEXT STEP: Ask user via `ask_question`, then call `select_skills(skills=[...], user_confirmed=true)`."
         } else {
-            "-> NEXT STEP: Skill discovery complete (no confirmation needed). Proceed directly to task planning or codebase inspection (`project_context`)."
+            "-> NEXT STEP: Skill discovery complete. Proceed to planning or `project_context`."
         }
     } else if phase == "plan" {
-        "-> NEXT STEP: Call `guidance(operation=\"search\", query=\"...\")` FIRST to discover and propose required domain skills. When skills are proposed, ask user via `ask_question` before invoking `select_skills(skills=[...], user_confirmed=true)`. If no matching skills are found, proceed directly to task planning or codebase inspection (`project_context`) without asking."
+        "-> NEXT STEP: Call `guidance(operation=\"search\", query=\"...\")`; ask via `ask_question` before `select_skills(skills=[...], user_confirmed=true)` if matched."
     } else if phase == "build" || phase == "fix" || phase == "refactor" {
-        "-> NEXT STEP: If codebase inspection is needed, use `project_context(operation=\"search\" | \"read\")`. When ready to write code, obtain authorization via `workflow_gate(action=\"authorize_edit\", ...)`."
+        "-> NEXT STEP: Inspect via `project_context`; authorize edits via `workflow_gate(action=\"authorize_edit\", ...)`."
     } else if phase == "test" {
-        "-> NEXT STEP: Run verification commands with `guidance(operation=\"verify\", verification_command=\"...\", expected_output_keyword=\"...\")`."
+        "-> NEXT STEP: Verify via `guidance(operation=\"verify\", verification_command=\"...\", expected_output_keyword=\"...\")`."
     } else if phase == "review" {
-        "-> NEXT STEP: Inspect changes with `project_context(operation=\"read\")` and review domain cohesion, function complexity, and static linter output."
+        "-> NEXT STEP: Inspect changes via `project_context(operation=\"read\")` and run static linters."
     } else {
-        "-> NEXT STEP: If codebase inspection is needed, use `project_context(operation=\"search\" | \"read\")`. Otherwise, proceed with task planning."
+        "-> NEXT STEP: Inspect via `project_context` or proceed to planning."
     };
 
     let indexing_suffix = if crate::context::graph_rag::jit_sync::is_indexing(&proj_path) {
-        ", background GraphRAG indexing active"
+        ", indexing"
     } else {
         ""
     };
@@ -249,7 +252,7 @@ pub(crate) fn handle(
     state.last_raw_baseline_tokens = Some(800);
     let _ = state.save_to_dir(&proj_path);
     Ok(format!(
-        "# Task Pipeline Activated\n\nTask: {}\nActive Phase: {}\nProject: {} ({} files scanned{}){}{}\n\n## Architecture Guidance\n- Active Pattern: {}\n- Enforce: Organize modules by domain/feature, keep functions focused (<= 60 LOC), and treat 300 LOC as a soft cohesion threshold\n\n{}{}\n\nPriority Gate: PASSED\nStatus: Ready for execution.\n\n{}",
+        "# Task Pipeline Activated\n\nTask: {} | Active Phase: {} | Project: {} ({} files{}) | Priority Gate: PASSED{}{}\n\n## Architecture Guidance\nPattern: {}\n\n{}{}\n\n{}",
         effective_task,
         display_phase,
         proj_path.display(),

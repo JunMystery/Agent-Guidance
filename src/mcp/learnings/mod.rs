@@ -257,8 +257,6 @@ pub fn record_project_learning(
     ))
 }
 
-/// Reads the most recent project learnings up to `limit` entries for context injection.
-
 #[cfg(test)]
 #[path = "../learnings_tests.rs"]
 mod tests;

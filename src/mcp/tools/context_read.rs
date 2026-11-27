@@ -210,7 +210,7 @@ pub(crate) fn handle_read(
             let abs_target = full_path.to_string_lossy().replace('\\', "/");
             return super::helpers_auth::evaluate_read_authorization(
                 arguments,
-                &resolved.auth_root,
+                proj_path,
                 &[abs_target],
                 st,
             );

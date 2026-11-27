@@ -6,6 +6,7 @@ use crate::mcp::tools::handle_tool_call;
 #[test]
 fn test_project_context_callers_and_callees() {
     let temp_dir = std::env::temp_dir().join(format!("ag_graph_mcp_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
     let _ = std::fs::create_dir_all(&temp_dir);
 
     {
@@ -115,6 +116,7 @@ fn test_query_graph_data_on_actual_project() {
 #[test]
 fn test_neighborhood_and_drift_retrieval() {
     let temp_dir = std::env::temp_dir().join(format!("ag_neighborhood_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
     let _ = std::fs::create_dir_all(&temp_dir);
 
     {

@@ -7,6 +7,7 @@ use std::time::SystemTime;
 use crate::config::current_config;
 use crate::config::project_rules::{get_project_rules_path, load_project_rules};
 use crate::config::schema::{ToolRuleItem, ToolRulesConfig};
+use crate::mcp::state::ServerState;
 
 type CachedRuleEntry = (Option<(SystemTime, u64)>, Option<ToolRulesConfig>);
 static DEFAULT_RULES_CACHE: OnceLock<HashMap<String, ToolRuleItem>> = OnceLock::new();
@@ -49,7 +50,8 @@ fn load_project_rules_cached(project_path: &Path) -> Option<ToolRulesConfig> {
 
 fn should_suppress_micro_rule(existing_text: &str) -> bool {
     let trimmed = existing_text.trim_start();
-    trimmed.starts_with("# Informational Query Detected")
+    trimmed.starts_with("# Task Pipeline Activated")
+        || trimmed.starts_with("# Informational Query Detected")
         || trimmed.starts_with("# Generative UI Active")
         || trimmed.starts_with("# Slash Command Detected:")
         || trimmed.starts_with("# Workflow Stage Status")
@@ -107,44 +109,74 @@ pub fn resolve_effective_rule(
         .map(|item| (item, RuleScope::Default))
 }
 
+fn append_rule_banner(
+    canonical: &str,
+    scope: RuleScope,
+    rule_text: &str,
+    output: &mut Value,
+) -> bool {
+    let banner = format!(
+        "\n\n> [Rule:{} ({})] {} *(User RULES take precedence)*",
+        canonical,
+        scope.label(),
+        rule_text.trim().replace('\n', " ")
+    );
+
+    if let Some(arr) = output.get_mut("content").and_then(|c| c.as_array_mut()) {
+        for obj in arr.iter_mut() {
+            if let Some(first_obj) = obj.as_object_mut()
+                && let Some(text_val) = first_obj.get_mut("text")
+                && let Some(existing_text) = text_val.as_str()
+            {
+                if should_suppress_micro_rule(existing_text) {
+                    return false;
+                }
+                let mut updated = existing_text.to_string();
+                updated.push_str(&banner);
+                *text_val = Value::String(updated);
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn inject_tool_micro_rule(
     tool_name: &str,
     project_path: Option<&str>,
     output: &mut Value,
 ) {
     let canonical = normalize_tool_name(tool_name);
-    let (item, scope) = match resolve_effective_rule(canonical, project_path) {
-        Some(res) => res,
-        None => return,
+    let Some((item, scope)) = resolve_effective_rule(canonical, project_path) else {
+        return;
     };
-
     if !item.enabled || item.rule.trim().is_empty() {
         return;
     }
+    append_rule_banner(canonical, scope, &item.rule, output);
+}
 
-    let banner = format!(
-        "\n\n> [Rule:{} ({})] {} *(User RULES take precedence)*",
-        canonical,
-        scope.label(),
-        item.rule.trim().replace('\n', " ")
-    );
-
-    if let Some(arr) = output.get_mut("content").and_then(|c| c.as_array_mut()) {
-        for obj in arr.iter_mut() {
-            if let Some(first_obj) = obj.as_object_mut() {
-                if let Some(text_val) = first_obj.get_mut("text") {
-                    if let Some(existing_text) = text_val.as_str() {
-                        if should_suppress_micro_rule(existing_text) {
-                            break;
-                        }
-                        let mut updated = existing_text.to_string();
-                        updated.push_str(&banner);
-                        *text_val = Value::String(updated);
-                        break;
-                    }
-                }
-            }
-        }
+pub fn inject_tool_micro_rule_once(
+    tool_name: &str,
+    project_path: Option<&str>,
+    state: &mut ServerState,
+    output: &mut Value,
+) {
+    let canonical = normalize_tool_name(tool_name);
+    let Some((item, scope)) = resolve_effective_rule(canonical, project_path) else {
+        return;
+    };
+    if !item.enabled || item.rule.trim().is_empty() {
+        return;
+    }
+    let normalized_rule = item.rule.trim().replace('\n', " ");
+    if state.emitted_micro_rules.get(canonical).map(String::as_str) == Some(normalized_rule.as_str()) {
+        return;
+    }
+    if append_rule_banner(canonical, scope, &item.rule, output) {
+        state
+            .emitted_micro_rules
+            .insert(canonical.to_string(), normalized_rule);
     }
 }
 
@@ -237,6 +269,37 @@ mod tests {
         std::fs::write(&rules_file, "[rules.guidance]\nenabled = true\nrule = \"Rule v2 updated\"\n").unwrap();
         let (item2, _) = resolve_effective_rule("guidance", tmp.to_str()).unwrap();
         assert_eq!(item2.rule, "Rule v2 updated");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_micro_rule_once_dedups_per_session_and_reemits_on_rule_change() {
+        let tmp = std::env::temp_dir().join(format!("ag_microrule_once_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let ctx_dir = tmp.join(".agent-context");
+        std::fs::create_dir_all(&ctx_dir).unwrap();
+        let rules_file = ctx_dir.join("tool_rules.toml");
+        std::fs::write(&rules_file, "[rules.project_context]\nenabled = true\nrule = \"Rule v1\"\n").unwrap();
+
+        let mut state = ServerState::new();
+        let mut out1 = json!({ "content": [{ "type": "text", "text": "Read 1" }] });
+        inject_tool_micro_rule_once("project_context", tmp.to_str(), &mut state, &mut out1);
+        assert!(out1["content"][0]["text"].as_str().unwrap().contains("[Rule:project_context"));
+
+        let mut out2 = json!({ "content": [{ "type": "text", "text": "Read 2" }] });
+        inject_tool_micro_rule_once("project_context", tmp.to_str(), &mut state, &mut out2);
+        assert_eq!(out2["content"][0]["text"].as_str().unwrap(), "Read 2");
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&rules_file, "[rules.project_context]\nenabled = true\nrule = \"Rule v2\"\n").unwrap();
+        let mut out3 = json!({ "content": [{ "type": "text", "text": "Read 3" }] });
+        inject_tool_micro_rule_once("project_context", tmp.to_str(), &mut state, &mut out3);
+        assert!(out3["content"][0]["text"].as_str().unwrap().contains("Rule v2"));
+
+        let mut pipeline_out = json!({ "content": [{ "type": "text", "text": "# Task Pipeline Activated\n\nOK" }] });
+        inject_tool_micro_rule_once("task_pipeline", tmp.to_str(), &mut state, &mut pipeline_out);
+        assert!(!pipeline_out["content"][0]["text"].as_str().unwrap().contains("[Rule:"));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

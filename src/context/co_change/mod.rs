@@ -6,10 +6,9 @@ pub mod predictor;
 pub mod recorder;
 
 pub use predictor::predict_coupled_files;
-pub use recorder::record_session_co_changes;
 
 #[cfg(test)]
-pub use recorder::{normalize_file_pair, record_co_change};
+pub use recorder::{normalize_file_pair, record_co_change, record_session_co_changes};
 
 #[cfg(test)]
 mod tests;

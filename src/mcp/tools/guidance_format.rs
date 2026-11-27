@@ -9,51 +9,40 @@ pub(crate) fn format_search_output(
     engine_name: &str,
 ) -> Result<String, (i32, String)> {
     let results_body = if formatted_results.is_empty() {
-        "No matching skills found for this task.".to_string()
+        "No matching skills found.".to_string()
     } else {
         format!("Recommended Skills:\n{}", formatted_results.join("\n"))
     };
 
     let context_section = match context_note {
-        Some(note) if !note.trim().is_empty() => format!("\nContext Source: {}\n", note.trim()),
+        Some(note) if !note.trim().is_empty() => format!("\nContext Source: {}", note.trim()),
         _ => String::new(),
     };
-
-    let ask_question_example = serde_json::json!({
-        "questions": [
-            {
-                "question": "Which skills would you like to inject for this task?",
-                "options": options,
-                "is_multi_select": true
-            }
-        ]
-    });
 
     let q_lower = query.to_lowercase();
     let gen_ui_note = if contains_word(&q_lower, "ui")
         || contains_word(&q_lower, "widget")
         || options.iter().any(|o| o.contains("generative_ui"))
     {
-        "\n\n> [!IMPORTANT] **Generative UI Protocol**: When designing UI alternatives, create visual HTML artifact file(s) via `write_file` (with `UserFacing: true`) and inline embed via `<agent-embed src=\"file:///.../widget.html\"></agent-embed>` BEFORE soliciting user layout choices."
+        "\n\n> [!IMPORTANT] **Generative UI Protocol**: Create HTML artifact(s) (`UserFacing: true`) and `<agent-embed>` BEFORE asking layout choices."
     } else {
         ""
     };
 
     let next_step_prompt = if formatted_results.is_empty() {
         format!(
-            "-> No matching skills found. Proceed directly to task planning or codebase inspection (no skills need to be selected).{}",
+            "-> No matching skills found. Proceed to planning or `project_context`.{}",
             gen_ui_note
         )
     } else {
         format!(
-            "-> SKILL_PROPOSAL: MANDATORY USER INTERACTION REQUIRED. Do NOT call `select_skills` automatically.\nYou MUST trigger the IDE tool `ask_question` with `is_multi_select: true` so the user selects which skills to inject.\n\nCRITICAL MULTILINGUAL MANDATE:\n1. Match User Language: Translate the question and each skill's description into the active conversational language used by the user in this chat (e.g. Vietnamese, Japanese, French, English, etc.).\n2. Accents & Diacritics: For languages with diacritics (like Vietnamese), MUST write natural accented text with full diacritics ('tiếng Việt có dấu đầy đủ'). NEVER strip accents or emit unaccented text ('tiếng Việt không dấu').\n3. Option Format: Format each option as `[(Recommended) ]{{name}} - {{translated_short_desc}}` (keep `{{name}}` exact, `{{translated_short_desc}}` <= 50 chars).\n\nSuggested template (translate question & descriptions before calling):\n```json\nask_question({})\n```\nAfter the user responds, call `select_skills(skills=[...], user_confirmed=true)` (or `select_skills(skills=[], user_confirmed=true)` if none selected).{}",
-            serde_json::to_string_pretty(&ask_question_example).unwrap_or_default(),
+            "-> SKILL_PROPOSAL: MANDATORY USER INTERACTION REQUIRED. Call `ask_question` (`is_multi_select: true`) with the options above translated to the user's language (full diacritics, `[(Recommended) ]{{name}} - {{desc <= 50c}}`), then `select_skills(skills=[...], user_confirmed=true)` (or `select_skills(skills=[], user_confirmed=true)` if none).{}",
             gen_ui_note
         )
     };
 
     Ok(format!(
-        "# Skill Search Results for '{}' [{}]\n{}Matches Found: {}\n\n{}\n\n{}",
+        "# Skill Search Results for '{}' [{}]{}\nMatches Found: {}\n\n{}\n\n{}",
         query, engine_name, context_section, formatted_results.len(), results_body, next_step_prompt
     ))
 }

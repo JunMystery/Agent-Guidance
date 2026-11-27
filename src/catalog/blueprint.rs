@@ -66,54 +66,24 @@ pub fn generate_dynamic_blueprint(proj_path: &Path, task: &str, arch_pattern: &s
     let mut blueprint = String::new();
 
     if !large_files.is_empty() {
-        blueprint.push_str("### Cohesion Review Candidates (Soft Limit > 300 LOC):\n");
+        blueprint.push_str("### Cohesion Review Candidates (> 300 LOC soft limit):\n");
         for (file, sym, loc) in &large_files {
             blueprint.push_str(&format!(
-                "- `{}` ({} LOC) containing `{}` — check whether it mixes unrelated domains; keep intact if cohesive, or extract long/complex functions (> 60 LOC).\n",
+                "- `{}` ({} LOC, `{}`) — check cohesion / extract fns >60L.\n",
                 file, loc, sym
             ));
         }
-        blueprint.push('\n');
     }
 
-    blueprint.push_str(&format!("### Upfront Modular Blueprint for [{}]:\n", arch_pattern));
-    match arch_pattern {
-        "Clean_Architecture" => {
-            blueprint.push_str("- `domain/`: Pure data models and trait definitions grouped by domain\n");
-            blueprint.push_str("- `usecase/` or `service/`: Focused business use cases with small functions (15-40 LOC)\n");
-            blueprint.push_str("- `infrastructure/` or `repository/`: Storage and driver adapters\n");
-            blueprint.push_str("- `entrypoint/` or `handler/`: Thin dispatch controllers & REST routers\n");
-            blueprint.push_str("- Frontend `views/` & `components/`: Feature-colocated presentation and reusable UI parts\n");
-        }
-        "Layered_Architecture" => {
-            blueprint.push_str("- `controllers/` or `handler/`: Input validation and routing\n");
-            blueprint.push_str("- `services/`: Domain workflows with shallow, cohesive functions\n");
-            blueprint.push_str("- `models/` or `domain/`: Data structures, schemas, and queries\n");
-            blueprint.push_str("- `repository/`: Data access layer and database queries\n");
-            blueprint.push_str("- Frontend `views/` & `components/`: Route coordinators and focused widgets\n");
-        }
-        "Package_By_Feature" => {
-            blueprint.push_str("- `<feature>/handlers.*`: Request handling and flow control colocated with the feature\n");
-            blueprint.push_str("- `<feature>/service.*`: Feature business logic\n");
-            blueprint.push_str("- `<feature>/types.*`: Feature-scoped models and errors\n");
-            blueprint.push_str("- `<feature>/components/*`: Feature-scoped UI components\n");
-        }
-        "CLI_Pipeline" => {
-            blueprint.push_str("- `main.rs`: Argument parsing & sub-command dispatcher\n");
-            blueprint.push_str("- `commands/`: Dedicated handler per sub-command\n");
-            blueprint.push_str("- `core/`: Domain engine and processing pipelines\n");
-        }
-        "Flat_Library" => {
-            blueprint.push_str("- `lib.rs`: Public API facade and re-exports\n");
-            blueprint.push_str("- `internal/`: Domain-grouped single-responsibility sub-modules\n");
-        }
-        _ => {
-            blueprint.push_str("- Entry Dispatcher: Thin coordinator\n");
-            blueprint.push_str("- Feature Modules: Domain-colocated modules serving a single use case\n");
-            blueprint.push_str("- UI Components: Focused feature sub-components\n");
-        }
-    }
-    blueprint.push_str("\n**Quality & Cohesion Guidelines**: Treat 300 LOC as a soft review threshold (keep cohesive files intact), prioritize small functions (15-40 LOC, warn > 60 LOC, cyclomatic <= 10, cognitive <= 15, nesting <= 4), group related files by domain/feature, and verify with static linters.\n");
+    let layout = match arch_pattern {
+        "Clean_Architecture" => "`domain/` | `usecase/` | `infrastructure/` | `entrypoint/`",
+        "Layered_Architecture" => "`controllers/` | `services/` | `models/` | `repository/`",
+        "Package_By_Feature" => "`<feature>/handlers.*` | `service.*` | `types.*`",
+        "CLI_Pipeline" => "`main.rs` | `commands/` | `core/`",
+        "Flat_Library" => "`lib.rs` | `internal/`",
+        _ => "thin entrypoint | domain-grouped feature modules",
+    };
+    blueprint.push_str(&format!("Blueprint [{}]: {}\n", arch_pattern, layout));
 
     blueprint
 }

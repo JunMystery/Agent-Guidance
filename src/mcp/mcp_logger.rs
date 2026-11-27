@@ -187,7 +187,7 @@ pub(crate) fn log_mcp_direct(level: LogLevel, source: &str, message: &str, detai
             "INSERT INTO mcp_logs (timestamp, level, source, message, details, project_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![now, level.as_str(), source, message, details, project_path],
         )?;
-        if LOG_COUNTER.fetch_add(1, Ordering::Relaxed) % 64 == 0 {
+        if LOG_COUNTER.fetch_add(1, Ordering::Relaxed).is_multiple_of(64) {
             let count: i64 = conn.query_row("SELECT COUNT(*) FROM mcp_logs", [], |r| r.get(0)).unwrap_or(0);
             if count > MAX_SQLITE_LOGS as i64 {
                 let _ = conn.execute(

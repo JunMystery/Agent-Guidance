@@ -5,8 +5,9 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::mcp::state::ServerState;
 
-static RECORDED_CO_CHANGES: OnceLock<Mutex<HashMap<String, HashSet<(String, String)>>>> =
-    OnceLock::new();
+type CoChangeSessionMap = Mutex<HashMap<String, HashSet<(String, String)>>>;
+
+static RECORDED_CO_CHANGES: OnceLock<CoChangeSessionMap> = OnceLock::new();
 
 fn co_change_session_key(proj_path: &Path, session_id: &str) -> String {
     let canon = proj_path

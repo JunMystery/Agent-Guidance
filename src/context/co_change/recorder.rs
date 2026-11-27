@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use rusqlite::{params, Connection};
+#[cfg(test)]
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -53,6 +54,7 @@ pub fn record_co_change(conn: &Connection, file_a: &str, file_b: &str) -> Result
 }
 
 /// Records pairwise co-changes for all unique files touched in an edit session.
+#[cfg(test)]
 pub fn record_session_co_changes(conn: &Connection, files: &[String]) -> Result<usize> {
     let unique_files: Vec<String> = files
         .iter()

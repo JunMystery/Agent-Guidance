@@ -143,7 +143,7 @@ pub(crate) fn handle(
                 crate::mcp::db::log_skill_load(&canonical_name);
                 crate::ml::skill_analytics::record_skill_usage(&proj_path, &canonical_name);
                 raw_token_acc += raw_tokens;
-                loaded_sections.push(format!("### Skill: {}{}\n```markdown\n{}\n```", canonical_name, tag_str, processed));
+                loaded_sections.push(format!("### Skill: {}{}\n{}", canonical_name, tag_str, processed));
             } else {
                 not_found.push(raw_req.clone());
             }

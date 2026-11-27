@@ -68,6 +68,10 @@ pub struct ServerState {
     pub cancellation: Option<Arc<AtomicBool>>,
     #[serde(skip, default)]
     pub ast_cache: crate::mcp::tools::context_cache::AstResponseCache,
+    #[serde(skip, default)]
+    pub emitted_micro_rules: std::collections::HashMap<String, String>,
+    #[serde(skip, default)]
+    pub auth_tip_shown: bool,
 }
 
 fn default_workflow_stage() -> String {
@@ -118,6 +122,8 @@ impl Default for ServerState {
             pending_skill_proposals: Vec::new(),
             cancellation: None,
             ast_cache: crate::mcp::tools::context_cache::AstResponseCache::default(),
+            emitted_micro_rules: std::collections::HashMap::new(),
+            auth_tip_shown: false,
         }
     }
 }

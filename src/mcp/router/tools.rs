@@ -206,7 +206,7 @@ pub fn get_tools_list() -> Value {
                         },
                         "all": {
                             "type": "boolean",
-                            "description": "Whether to clear all saved sessions and snapshots (for 'clear' operation, default: true)"
+                            "description": "Whether to clear all saved sessions and snapshots (for 'clear' operation, default: false)"
                         }
                     },
                     "required": ["operation"]

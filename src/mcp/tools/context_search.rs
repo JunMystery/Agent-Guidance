@@ -47,12 +47,12 @@ pub(crate) fn handle_search(
 
         for r in exec.results {
             let label = match r.source {
-                "file_match" => format!("(score: {:.2}) [file match]", r.score),
-                "alias_cache" => format!("(confidence: {:.2}) [alias cache]", (r.score / 2.0).clamp(0.0, 1.0)),
-                "symbol_fts" => format!("(score: {:.2}) [symbol index: bm25]", r.score),
-                "symbol_vector" => format!("(score: {:.2}) [semantic symbol]", r.score),
-                "content_fts" => format!("(score: {:.2}) [content index: bm25]", r.score),
-                "content_vector" => format!("(score: {:.2}) [RAG content vector]", r.score),
+                "file_match" => format!("({:.2}) [file]", r.score),
+                "alias_cache" => format!("({:.2}) [alias cache]", (r.score / 2.0).clamp(0.0, 1.0)),
+                "symbol_fts" => format!("({:.2}) [sym:bm25]", r.score),
+                "symbol_vector" => format!("({:.2}) [sym:vec]", r.score),
+                "content_fts" => format!("({:.2}) [fts]", r.score),
+                "content_vector" => format!("({:.2}) [rag]", r.score),
                 other => format!("({}) [{}]", r.score, other),
             };
 
@@ -124,12 +124,12 @@ pub(crate) fn handle_search(
     };
 
     format!(
-        "# Context Search Results for '{}' [Intent: {}]\n\nSource: {} | Cascade: [file_match → alias → sym_fts(bm25) → sym_vec → content_fts(bm25) → rag_vec → linked_projects]\n\n{}",
+        "# Context Search Results for '{}' [Intent: {} | Source: {}]\n\n{}",
         query,
         intent_tag,
         source,
         if results.is_empty() {
-            "No matches found across symbol, full-text, and RAG semantic index.".to_string()
+            "No matches found.".to_string()
         } else {
             results.join("\n")
         }

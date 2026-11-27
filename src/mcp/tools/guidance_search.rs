@@ -247,12 +247,9 @@ pub(crate) fn handle_search(
                     } else {
                         format!("{}{} - {}", prefix, item.name, short_desc)
                     };
-                    options.push(opt_label);
+                    options.push(opt_label.clone());
                     proposals.push((item.name.clone(), format!("remote://skills/{}", item.name), item.score));
-                    formatted.push(format!(
-                        "- {} [Remote ML Worker] (Score: {:.2})\n  Path: skills/{}/SKILL.md",
-                        item.name, item.score, item.name
-                    ));
+                    formatted.push(format!("- {} [Remote, {:.2}]", opt_label, item.score));
                 }
 
                 state.pending_skill_proposals = proposals;
@@ -303,15 +300,13 @@ pub(crate) fn handle_search(
 
     let formatted_results: Vec<String> = tiered_results
         .into_iter()
-        .map(|(score, item)| {
-            let source_tag = match &item.source {
-                SkillSource::Embedded => "[Embedded]".to_string(),
-                SkillSource::LocalWorkspace(path) => format!("[Local Workspace: {}]", path),
-            };
-            format!(
-                "- {} {} (Score: {:.2})\n  Path: {}",
-                item.name, source_tag, score, item.relative_path
-            )
+        .enumerate()
+        .map(|(idx, (score, item))| {
+            let opt = options.get(idx).map(String::as_str).unwrap_or(&item.name);
+            match &item.source {
+                SkillSource::Embedded => format!("- {} [Embedded, {:.2}]", opt, score),
+                SkillSource::LocalWorkspace(path) => format!("- {} [Local: {}, {:.2}]", opt, path, score),
+            }
         })
         .collect();
 

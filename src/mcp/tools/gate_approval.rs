@@ -229,15 +229,11 @@ fn is_zero_count_negated(lower: &str, kw_start: usize, kw_end: usize) -> bool {
         }
     }
     let suffix = lower[kw_end..].trim_start_matches(|c: char| c.is_whitespace() || c == ':' || c == '=');
-    if suffix.starts_with('0')
+    suffix.starts_with('0')
         && suffix
             .as_bytes()
             .get(1)
             .is_none_or(|b| !b.is_ascii_digit())
-    {
-        return true;
-    }
-    false
 }
 
 pub(crate) fn output_indicates_failure(output: &str) -> bool {

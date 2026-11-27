@@ -19,10 +19,11 @@ pub(crate) fn evaluate_read_authorization(
     let is_auth_op = op == "read_and_authorize" || op == "read_auth";
 
     if !authorize_requested && !is_auth_op {
-        if !paths.is_empty() {
+        if !paths.is_empty() && !state.edit_authorized && !state.auth_tip_shown {
+            state.auth_tip_shown = true;
             let gate_paths_json = serde_json::to_string(paths).unwrap_or_else(|_| "[]".to_string());
             return format!(
-                "\n---\n> [!TIP] **One-Turn Edit Authorization**:\n> Authorize edits in 1 turn before editing:\n> `workflow_gate(action=\"authorize_edit\", project_path=\"{}\", relative_paths={}, risk_level=\"LOW\", justification=\"Implement planned modifications\", architecture_pattern=\"Auto\")`",
+                "\n---\n> [!TIP] **One-Turn Edit Authorization**: `workflow_gate(action=\"authorize_edit\", project_path=\"{}\", relative_paths={}, risk_level=\"LOW\", justification=\"...\", architecture_pattern=\"Auto\")`",
                 proj_path.display(),
                 gate_paths_json
             );
@@ -109,7 +110,7 @@ pub(crate) fn evaluate_read_authorization(
             format!("\n\n### Domain Cohesion Advisory (Soft Warning)\n{}", advisories.join("\n"))
         };
         format!(
-            "\n---\n> [!NOTE] **Deferred Pre-Authorization Queued**:\n> {} file(s) queued for automatic authorization upon plan approval.\n> Active Stage: '{}' | Plan Approved: {}.\n> Call `workflow_gate(action=\"approve_plan\", user_confirmed=true)` once plan is confirmed to activate authorization in 1 turn.{}",
+            "\n---\n> [!NOTE] **Deferred Pre-Authorization Queued**: {} file(s) queued (Stage: '{}', Plan Approved: {}). Call `workflow_gate(action=\"approve_plan\", user_confirmed=true)` on plan approval.{}",
             normalized_paths.len(), state.workflow_stage, state.plan_approved, adv_section
         )
     }
@@ -135,6 +136,28 @@ mod tests {
         );
         assert!(res.contains("PATH_TRAVERSAL_PROHIBITED"));
         assert!(state.deferred_authorized_paths.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_auth_tip_emitted_once_per_session_and_skipped_when_authorized() {
+        let dir = std::env::temp_dir().join(format!("ag_auth_tip_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let mut state = ServerState::new();
+        let paths = vec!["src/main.rs".to_string()];
+
+        let first = evaluate_read_authorization(&json!({"operation": "read"}), &dir, &paths, &mut state);
+        assert!(first.contains("One-Turn Edit Authorization"));
+        assert!(state.auth_tip_shown);
+
+        let second = evaluate_read_authorization(&json!({"operation": "read"}), &dir, &paths, &mut state);
+        assert!(second.is_empty());
+
+        let mut auth_state = ServerState::new();
+        auth_state.edit_authorized = true;
+        let third = evaluate_read_authorization(&json!({"operation": "read"}), &dir, &paths, &mut auth_state);
+        assert!(third.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

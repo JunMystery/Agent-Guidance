@@ -41,20 +41,11 @@ pub(crate) fn handle_batch_authorize(
 
         if outcome.is_passed {
             passed_count += 1;
-            let status_tag = if outcome.is_new {
-                "PASSED (NEW)"
-            } else {
-                "PASSED"
-            };
+            let new_tag = if outcome.is_new { " [NEW]" } else { "" };
+            let note = outcome.warning.unwrap_or(outcome.snapshot_note);
             details.push(format!(
-                "| `{}` | {} | {} LOC | {:?} | {} |",
-                outcome.rel_path,
-                status_tag,
-                outcome.target_loc,
-                outcome.risk_level,
-                outcome
-                    .warning
-                    .unwrap_or(outcome.snapshot_note)
+                "- `{}` ({}L, {:?}){} — {}",
+                outcome.rel_path, outcome.target_loc, outcome.risk_level, new_tag, note
             ));
             if let Some(tip) = outcome.co_change_tip {
                 co_change_tips.push(tip);
@@ -65,7 +56,7 @@ pub(crate) fn handle_batch_authorize(
         } else {
             blocked_count += 1;
             details.push(format!(
-                "| `{}` | **BLOCKED** | {} LOC | {:?} | {} |",
+                "- `{}` **BLOCKED** ({}L, {:?}) — {}",
                 outcome.rel_path,
                 outcome.target_loc,
                 outcome.risk_level,
@@ -98,11 +89,10 @@ pub(crate) fn handle_batch_authorize(
     };
 
     let mut out = format!(
-        "# Batch Edit Authorization Gate\n\n- Status: {}\n- Project Path: {}\n- Architecture Pattern: {}\n- Active Stage: {}\n- Plan Approved: true\n\n| File Path | Status | Length | Risk Level | Notes |\n|---|---|---|---|---|\n{}\n",
+        "# Batch Edit Authorization Gate\n\nStatus: {} | Stage: {} | Pattern: {} | Plan Approved: true\n{}\n",
         overall_status,
-        proj_path.display(),
-        arch_pattern,
         state.workflow_stage,
+        arch_pattern,
         details.join("\n")
     );
 

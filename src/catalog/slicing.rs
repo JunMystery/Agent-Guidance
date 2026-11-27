@@ -97,8 +97,11 @@ pub fn split_markdown_into_sections(md: &str) -> Vec<MarkdownSection> {
 pub fn slice_skill_markdown(raw_md: &str, task: &str, top_k: usize) -> String {
     let clean_md = strip_yaml_frontmatter(raw_md);
 
-    // If skill is compact (<= 250 LOC), preserve full instructions without destructive slicing.
-    if clean_md.lines().count() <= 250 || task.trim().is_empty() {
+    // If skill is compact (<= 250 LOC AND <= 2400 tokens), preserve full instructions without destructive slicing.
+    if (clean_md.lines().count() <= 250
+        && crate::optimizer::compressor::estimate_tokens(clean_md, false) <= 2400)
+        || task.trim().is_empty()
+    {
         return compress_markdown(clean_md);
     }
 
@@ -289,5 +292,21 @@ mod tests {
         assert!(sections[0].content.contains("# Build image"));
         assert!(sections[0].content.contains("## Push image"));
         assert_eq!(sections[1].title, "Next");
+    }
+
+    #[test]
+    fn test_slice_skill_markdown_slices_prose_heavy_under_250_lines() {
+        let filler = "This paragraph describes unrelated deployment details and historical background. ".repeat(42);
+        let mut md = String::from("# Skill\n\n## Overview\nCore summary.\n");
+        for i in 1..=8 {
+            md.push_str(&format!("\n## Unrelated Section {}\n{}\n", i, filler));
+        }
+        md.push_str("\n## Target Auth Flow\nUse JWT verification here.\n");
+        assert!(md.lines().count() <= 250);
+        assert!(crate::optimizer::compressor::estimate_tokens(&md, false) > 2400);
+
+        let sliced = slice_skill_markdown(&md, "jwt auth flow", 5);
+        assert!(sliced.contains("Target Auth Flow"));
+        assert!(crate::optimizer::compressor::estimate_tokens(&sliced, false) <= 850);
     }
 }

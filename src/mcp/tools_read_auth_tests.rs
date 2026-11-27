@@ -309,3 +309,75 @@ fn test_linked_cross_project_read_authorize_requires_cross_workspace_and_targets
 
     let _ = fs::remove_dir_all(&base);
 }
+
+#[test]
+fn test_linked_cross_project_read_authorize_in_plan_stage_preserves_target_path() {
+    let base = std::env::temp_dir().join(format!("ag_linked_plan_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let primary = base.join("primary");
+    let linked_pkg = base.join("linked_pkg");
+    fs::create_dir_all(primary.join("src")).unwrap();
+    fs::create_dir_all(primary.join(".agent-context")).unwrap();
+    fs::create_dir_all(linked_pkg.join("src")).unwrap();
+
+    fs::write(primary.join("src/shared.rs"), "pub fn primary_only() {}\n").unwrap();
+    fs::write(linked_pkg.join("src/shared.rs"), "pub fn linked_only() {}\n").unwrap();
+    fs::write(
+        primary.join(".agent-context/linked_projects.json"),
+        serde_json::to_string(&vec![serde_json::json!({
+            "name": "linked_pkg",
+            "path": linked_pkg.to_string_lossy()
+        })])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut state = ServerState::new();
+    state.workspace_roots = vec![primary.to_string_lossy().to_string()];
+    state.plan_approved = false;
+    state.workflow_stage = "Plan".to_string();
+
+    let res = call_context(
+        json!({
+            "operation": "read",
+            "project_path": primary.to_string_lossy(),
+            "relative_path": "linked:linked_pkg/src/shared.rs",
+            "authorize": true,
+            "allow_cross_workspace": true,
+            "justification": "Defer cross-project linked edit in Plan stage"
+        }),
+        &mut state,
+    );
+    assert!(res.contains("Deferred Pre-Authorization Queued"), "Got: {}", res);
+    assert_eq!(state.deferred_authorized_paths.len(), 1);
+    let queued = &state.deferred_authorized_paths[0];
+    assert_ne!(
+        queued, "src/shared.rs",
+        "Must not strip linked root to bare relative subpath"
+    );
+    assert!(
+        queued.ends_with("linked_pkg/src/shared.rs"),
+        "Expected full linked target path in deferred queue, got: {}",
+        queued
+    );
+
+    let approve_res = handle_tool_call(
+        "workflow_gate",
+        json!({
+            "action": "approve_plan",
+            "project_path": primary.to_string_lossy(),
+            "user_confirmed": true,
+            "allow_cross_workspace": true,
+            "architecture_pattern": "Flat_Library"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let approve_text = approve_res["content"][0]["text"].as_str().unwrap();
+    assert!(approve_text.contains("Status: PASSED"), "Got: {}", approve_text);
+    assert!(approve_text.contains("linked_pkg/src/shared.rs"), "Got: {}", approve_text);
+    assert!(state.edit_authorized);
+    assert!(state.deferred_authorized_paths.is_empty());
+
+    let _ = fs::remove_dir_all(&base);
+}
