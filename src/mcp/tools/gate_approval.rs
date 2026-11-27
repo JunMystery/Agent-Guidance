@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::path::Path;
 
 use crate::mcp::state::ServerState;
-use super::helpers::resolve_architecture_pattern;
+use super::helpers::{is_valid_architecture_pattern, resolve_architecture_pattern};
 
 pub(crate) fn validate_approval_not_question_response(
     user_msg: Option<&str>,
@@ -64,9 +64,32 @@ pub(crate) fn handle_approve_plan(
         return blocked;
     }
 
+    if user_msg.is_some_and(ServerState::is_negated_message) {
+        if user_confirmed || state.plan_approved {
+            state.plan_approved = false;
+            return "# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED | Error: USER_APPROVAL_NEGATED: Explicit negation detected in `user_message`. `user_confirmed=true` cannot override user rejection or pause.".to_string();
+        }
+        state.plan_approved = false;
+    }
+
     let msg_approves = user_msg.map(ServerState::is_approval_message).unwrap_or(false);
     if !user_confirmed && !msg_approves && !state.plan_approved {
         return "# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED | Error: USER_APPROVAL_REQUIRED: Plan approval cannot be self-granted by AI agents. You MUST present `implementation_plan.md` (`RequestFeedback: true`) in a standalone turn and wait for the user to explicitly click 'Proceed' or send an approval message. Never use `ask_question` answers as a substitute for plan approval.".to_string();
+    }
+
+    let has_explicit_arch = arguments.get("architecture_pattern").is_some();
+    let raw_arch = arguments
+        .get("architecture_pattern")
+        .and_then(|a| a.as_str())
+        .unwrap_or("Auto");
+    let arch_pattern = resolve_architecture_pattern(raw_arch, proj_path, state);
+    if (has_explicit_arch || !state.deferred_authorized_paths.is_empty())
+        && !is_valid_architecture_pattern(&arch_pattern)
+    {
+        return format!(
+            "# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED (ARCHITECTURE_GATE_BLOCKED)\n- Declared Architecture: '{}'\n\nError: ARCHITECTURE_GATE_BLOCKED: Invalid `architecture_pattern`. Allowed: 'Clean_Architecture', 'Layered_Architecture', 'Package_By_Feature', 'Orchestrator', 'CLI_Pipeline', 'Flat_Library', or 'Auto'.",
+            if arch_pattern.is_empty() { "NONE" } else { &arch_pattern }
+        );
     }
 
     let mut paths = super::gate_edit::extract_target_paths(arguments);
@@ -87,6 +110,13 @@ pub(crate) fn handle_approve_plan(
     }
 
     if !paths.is_empty() {
+        if !is_valid_architecture_pattern(&arch_pattern) {
+            return format!(
+                "# Workflow Gate: [approve_plan]\n\nStatus: BLOCKED (ARCHITECTURE_GATE_BLOCKED)\n- Declared Architecture: '{}'\n\nError: ARCHITECTURE_GATE_BLOCKED: Invalid `architecture_pattern`.",
+                if arch_pattern.is_empty() { "NONE" } else { &arch_pattern }
+            );
+        }
+
         let allow_cross = arguments
             .get("allow_cross_workspace")
             .and_then(|v| v.as_bool())
@@ -104,11 +134,6 @@ pub(crate) fn handle_approve_plan(
         state.approve_plan();
         state.clear_deferred_authorized_paths();
         let _ = state.set_stage("Build");
-        let raw_arch = arguments
-            .get("architecture_pattern")
-            .and_then(|a| a.as_str())
-            .unwrap_or("Auto");
-        let arch_pattern = resolve_architecture_pattern(raw_arch, proj_path, state);
         let justification = arguments
             .get("justification")
             .and_then(|j| j.as_str())
@@ -146,11 +171,155 @@ pub(crate) fn handle_approve_plan(
     }
 
     state.approve_plan();
+    state.clear_deferred_authorized_paths();
+    let _ = state.set_stage("Build");
+    if has_explicit_arch && is_valid_architecture_pattern(&arch_pattern) {
+        state.active_architecture_pattern = Some(arch_pattern);
+    }
     let _ = state.auto_checkpoint(proj_path);
     format!(
         "# Workflow Gate: [approve_plan]\n\nStatus: PASSED | Plan Approved: true | Stage: {}",
         state.workflow_stage
     )
+}
+
+fn has_ascii_word_boundary(haystack: &str, start: usize, end: usize) -> bool {
+    let before_ok = haystack[..start]
+        .chars()
+        .next_back()
+        .map(|c| !c.is_ascii_alphanumeric() && c != '_')
+        .unwrap_or(true);
+    let after_ok = haystack[end..]
+        .chars()
+        .next()
+        .map(|c| !c.is_ascii_alphanumeric() && c != '_')
+        .unwrap_or(true);
+    before_ok && after_ok
+}
+
+fn is_zero_count_negated(lower: &str, kw_start: usize, kw_end: usize) -> bool {
+    let prefix = lower[..kw_start].trim_end();
+    if prefix.ends_with("0")
+        && prefix
+            .strip_suffix('0')
+            .and_then(|s| s.chars().next_back())
+            .is_none_or(|c| !c.is_ascii_digit())
+    {
+        return true;
+    }
+    if let Some(before_tests) = prefix.strip_suffix("tests") {
+        let bt = before_tests.trim_end();
+        if bt.ends_with('0')
+            && bt
+                .strip_suffix('0')
+                .and_then(|s| s.chars().next_back())
+                .is_none_or(|c| !c.is_ascii_digit())
+        {
+            return true;
+        }
+    }
+    for neg in ["no", "not", "without", "never"] {
+        if let Some(before) = prefix.strip_suffix(neg)
+            && before
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_')
+        {
+            return true;
+        }
+    }
+    let suffix = lower[kw_end..].trim_start_matches(|c: char| c.is_whitespace() || c == ':' || c == '=');
+    if suffix.starts_with('0')
+        && suffix
+            .as_bytes()
+            .get(1)
+            .is_none_or(|b| !b.is_ascii_digit())
+    {
+        return true;
+    }
+    false
+}
+
+pub(crate) fn output_indicates_failure(output: &str) -> bool {
+    if output.contains("error[E") {
+        return true;
+    }
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Passing cargo test line (e.g. `test my_failed_case ... ok`) is not a failure.
+        if trimmed.starts_with("test ") && trimmed.ends_with("... ok") {
+            continue;
+        }
+
+        // Case-sensitive `FAIL ` / `FAIL:` / `FAIL\t`
+        let mut f_pos = 0;
+        while let Some(idx) = trimmed[f_pos..].find("FAIL") {
+            let abs = f_pos + idx;
+            let after = abs + 4;
+            let before_ok = trimmed[..abs]
+                .chars()
+                .next_back()
+                .is_none_or(|c| c.is_whitespace() || c == '[' || c == '(');
+            let next_ch = trimmed[after..].chars().next();
+            if before_ok && matches!(next_ch, Some(' ' | '\t' | ':')) {
+                return true;
+            }
+            f_pos = after;
+        }
+
+        let lower = trimmed.to_lowercase();
+        // `0 passed` / `0 tests passed` (not `10 passed`)
+        for needle in ["0 passed", "0 tests passed"] {
+            let mut pos = 0;
+            while let Some(idx) = lower[pos..].find(needle) {
+                let abs = pos + idx;
+                let end = abs + needle.len();
+                if has_ascii_word_boundary(&lower, abs, end) {
+                    let prefix = lower[..abs].trim_end();
+                    if !prefix.ends_with("not") {
+                        return true;
+                    }
+                }
+                pos = end;
+            }
+        }
+
+        // `failures:` unless explicitly zero (`failures: 0`)
+        let mut fl_pos = 0;
+        while let Some(idx) = lower[fl_pos..].find("failures:") {
+            let abs = fl_pos + idx;
+            let end = abs + "failures:".len();
+            let before_ok = lower[..abs]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_');
+            if before_ok {
+                let rest = lower[end..].trim_start();
+                let is_zero = rest.starts_with('0')
+                    && rest.as_bytes().get(1).is_none_or(|b| !b.is_ascii_digit());
+                if !is_zero {
+                    return true;
+                }
+            }
+            fl_pos = end;
+        }
+
+        // `failed` unless negated / zero count
+        let mut fd_pos = 0;
+        while let Some(idx) = lower[fd_pos..].find("failed") {
+            let abs = fd_pos + idx;
+            let end = abs + "failed".len();
+            if has_ascii_word_boundary(&lower, abs, end) && !is_zero_count_negated(&lower, abs, end)
+            {
+                return true;
+            }
+            fd_pos = end;
+        }
+    }
+    false
 }
 
 pub(crate) fn handle_pass_verification(
@@ -186,6 +355,14 @@ pub(crate) fn handle_pass_verification(
         return "# Workflow Gate: [pass_verification]\n\nStatus: BLOCKED (VERIFICATION_OUTPUT_MISSING)\n\nVerification command is registered, so non-empty `verification_output` is required to confirm passing verification.".to_string();
     }
 
+    if let Some(actual) = output
+        && output_indicates_failure(actual)
+    {
+        state.verification_passed = false;
+        let _ = state.auto_checkpoint(proj_path);
+        return "# Workflow Gate: [pass_verification]\n\nStatus: BLOCKED (VERIFICATION_OUTPUT_FAILED)\n\nVerification output contains failure indicators (`0 passed`, `failed`, `failures:`, `error[E`, or `FAIL`). Fix the failing checks and re-run verification before calling `pass_verification`.".to_string();
+    }
+
     state.verification_passed = true;
     state.fix_attempts = 0;
     let _ = state.auto_checkpoint(proj_path);
@@ -205,8 +382,14 @@ pub(crate) fn handle_set_architecture(
         .or_else(|| arguments.get("pattern"))
         .and_then(|a| a.as_str())
         .unwrap_or("Auto");
-    state.update_project_path(proj_path);
     let arch_pattern = resolve_architecture_pattern(raw_arch, proj_path, state);
+    if !is_valid_architecture_pattern(&arch_pattern) {
+        return format!(
+            "# Architecture Pattern Locked\n\n- Status: BLOCKED (ARCHITECTURE_GATE_BLOCKED)\n- Declared Architecture: '{}'\n\nError: ARCHITECTURE_GATE_BLOCKED: Invalid `architecture_pattern`. Allowed: 'Clean_Architecture', 'Layered_Architecture', 'Package_By_Feature', 'Orchestrator', 'CLI_Pipeline', 'Flat_Library', or 'Auto'.",
+            if arch_pattern.is_empty() { "NONE" } else { &arch_pattern }
+        );
+    }
+    state.update_project_path(proj_path);
     state.active_architecture_pattern = Some(arch_pattern.clone());
     let _ = ServerState::save_persisted_architecture(proj_path, &arch_pattern);
     let _ = state.auto_checkpoint(proj_path);
@@ -229,6 +412,10 @@ pub(crate) fn handle_rollback(
                     state.session_id
                 )
             } else {
+                for f in &restored {
+                    state.ast_cache.invalidate_file(f);
+                }
+                let _ = state.drain_dirty_files();
                 state.verification_passed = false;
                 state.modified_files.clear();
                 let _ = state.auto_checkpoint(proj_path);

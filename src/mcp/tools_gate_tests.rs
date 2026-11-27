@@ -355,3 +355,146 @@ fn test_pass_verification_sets_flag_and_enforces_exit_gate() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_fix_stage_edit_auth_unknown_action_arch_validation_and_cache_invalidation() {
+    let temp_dir = std::env::temp_dir().join(format!("ag_gate_hardening_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("src")).unwrap();
+    let lib_file = temp_dir.join("src/lib.rs");
+    std::fs::write(&lib_file, "pub fn answer() -> i32 { 42 }\n").unwrap();
+
+    let mut state = ServerState::new();
+    state.plan_approved = true;
+    state.set_stage("Fix").unwrap();
+
+    // 1. Unknown action returns -32602
+    let unknown_err = handle_tool_call(
+        "workflow_gate",
+        json!({ "action": "nonexistent_action" }),
+        &mut state,
+    )
+    .unwrap_err();
+    assert_eq!(unknown_err.0, -32602);
+
+    // 2. Invalid architecture_pattern blocked across set_architecture, approve_plan, advance, authorize_edit
+    for args in [
+        json!({"action": "set_architecture", "architecture_pattern": "Spaghetti", "project_path": temp_dir.to_str().unwrap()}),
+        json!({"action": "approve_plan", "user_confirmed": true, "architecture_pattern": "Spaghetti", "project_path": temp_dir.to_str().unwrap()}),
+        json!({"action": "advance", "target_stage": "Build", "architecture_pattern": "Spaghetti", "project_path": temp_dir.to_str().unwrap()}),
+        json!({"action": "authorize_edit", "relative_path": "src/lib.rs", "architecture_pattern": "Spaghetti", "project_path": temp_dir.to_str().unwrap()}),
+    ] {
+        let res = handle_tool_call("workflow_gate", args.clone(), &mut state).unwrap();
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("ARCHITECTURE_GATE_BLOCKED"), "Expected arch block for {:?}, got: {}", args, text);
+    }
+
+    // 3. Edit authorization succeeds in Fix stage
+    let fix_auth = handle_tool_call(
+        "workflow_gate",
+        json!({
+            "action": "authorize_edit",
+            "relative_path": "src/lib.rs",
+            "architecture_pattern": "Flat_Library",
+            "justification": "Fix bug in lib",
+            "project_path": temp_dir.to_str().unwrap()
+        }),
+        &mut state,
+    )
+    .unwrap();
+    assert!(fix_auth["content"][0]["text"].as_str().unwrap().contains("Status: PASSED"));
+
+    // 4. Proposal exit gate blocks modified code file even without verification_command
+    let prop_blocked = handle_tool_call(
+        "workflow_gate",
+        json!({
+            "action": "advance",
+            "target_stage": "Proposal",
+            "project_path": temp_dir.to_str().unwrap()
+        }),
+        &mut state,
+    )
+    .unwrap();
+    assert!(prop_blocked["content"][0]["text"].as_str().unwrap().contains("VERIFICATION_NOT_PASSED"));
+
+    // 5. pass_verification rejects failure outputs and allows zero-failure outputs
+    for bad_out in [
+        "test result: ok. 0 passed; 0 failed",
+        "0 tests passed",
+        "test result: FAILED. 1 passed; 1 failed",
+        "failures:\n    tests::broken",
+        "error[E0425]: cannot find value",
+        "FAIL src/lib.test.ts",
+    ] {
+        let res = handle_tool_call(
+            "workflow_gate",
+            json!({
+                "action": "pass_verification",
+                "verification_output": bad_out,
+                "project_path": temp_dir.to_str().unwrap()
+            }),
+            &mut state,
+        )
+        .unwrap();
+        assert!(
+            res["content"][0]["text"].as_str().unwrap().contains("VERIFICATION_OUTPUT_FAILED"),
+            "Expected failure rejection for: {}",
+            bad_out
+        );
+        assert!(!state.verification_passed);
+    }
+
+    for ok_out in [
+        "test result: ok. 12 passed; 0 failed; 0 ignored",
+        "Tests: 0 failed, 10 passed",
+        "Failures: 0",
+    ] {
+        let res = handle_tool_call(
+            "workflow_gate",
+            json!({
+                "action": "pass_verification",
+                "verification_output": ok_out,
+                "project_path": temp_dir.to_str().unwrap()
+            }),
+            &mut state,
+        )
+        .unwrap();
+        assert!(
+            res["content"][0]["text"].as_str().unwrap().contains("Status: PASSED"),
+            "Expected pass for: {}",
+            ok_out
+        );
+        assert!(state.verification_passed);
+    }
+
+    // 6. invalidate and rollback invalidate ast_cache
+    let cache_key = crate::mcp::tools::context_cache::AstCacheKey {
+        path: lib_file.canonicalize().unwrap().to_string_lossy().replace('\\', "/"),
+        target_symbol: None,
+        view_mode: "auto".to_string(),
+        start_line: None,
+        end_line: None,
+        show_line_numbers: false,
+    };
+    state.ast_cache.insert(cache_key.clone(), "cached".to_string(), &lib_file, 10);
+    assert_eq!(state.ast_cache.len(), 1);
+    handle_tool_call(
+        "workflow_gate",
+        json!({"action": "invalidate", "relative_path": "src/lib.rs", "project_path": temp_dir.to_str().unwrap()}),
+        &mut state,
+    )
+    .unwrap();
+    assert_eq!(state.ast_cache.len(), 0);
+
+    state.ast_cache.insert(cache_key, "cached2".to_string(), &lib_file, 10);
+    std::fs::write(&lib_file, "pub fn answer() -> i32 { 99 }\n").unwrap();
+    handle_tool_call(
+        "workflow_gate",
+        json!({"action": "rollback", "project_path": temp_dir.to_str().unwrap()}),
+        &mut state,
+    )
+    .unwrap();
+    assert_eq!(state.ast_cache.len(), 0);
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

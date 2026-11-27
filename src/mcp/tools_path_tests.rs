@@ -139,3 +139,52 @@ fn test_detect_project_path() {
     assert_eq!(res_global, explicit); // Must return process current_dir (explicit), not global_path_file (parent_dir)
     let _ = std::fs::remove_file(&global_path_file);
 }
+
+#[test]
+fn test_validate_path_scoped_normalized_and_multi_root_guard() {
+    let base = std::env::temp_dir().join(format!("ag_path_norm_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let root_a = base.join("root_a");
+    let root_b = base.join("root_b");
+    std::fs::create_dir_all(root_a.join("src")).unwrap();
+    std::fs::create_dir_all(root_b.join("src")).unwrap();
+    std::fs::write(root_a.join("src/foo..bar.rs"), "pub fn ok() {}\n").unwrap();
+
+    // Null byte rejected, benign `..` in filename allowed, POSIX normalization returned
+    assert!(crate::mcp::tools::validate_path_scoped_normalized(&root_a, "src/bad\0.rs", false).is_err());
+    let (full, norm) =
+        crate::mcp::tools::validate_path_scoped_normalized(&root_a, "./src\\foo..bar.rs", false)
+            .unwrap();
+    assert_eq!(norm, "src/foo..bar.rs");
+    assert!(full.exists());
+
+    // Multi-root cross-workspace guard accepts 2nd workspace root and new absolute child paths
+    let mut state = ServerState::new();
+    state.workspace_roots = vec![
+        root_a.to_string_lossy().to_string(),
+        root_b.to_string_lossy().to_string(),
+    ];
+    let new_abs_in_b = root_b.join("src/brand_new_file.rs");
+    assert!(
+        crate::mcp::tools::helpers_path::check_cross_workspace_guard(
+            &root_b,
+            &[new_abs_in_b.to_string_lossy().to_string()],
+            &state,
+            false
+        )
+        .is_none()
+    );
+
+    let outside = base.join("outside/evil.rs");
+    assert!(
+        crate::mcp::tools::helpers_path::check_cross_workspace_guard(
+            &root_a,
+            &[outside.to_string_lossy().to_string()],
+            &state,
+            false
+        )
+        .is_some()
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}

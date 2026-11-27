@@ -288,4 +288,58 @@ mod tests {
         assert!(!ServerState::is_valid_session_id("a/b"));
         assert!(!ServerState::is_valid_session_id(""));
     }
+
+    #[test]
+    fn test_negation_anywhere_blocks_user_confirmed_and_ambiguous_phrases() {
+        // Long message (>10 words) with negation mid-sentence must NOT approve
+        let long_neg = "I read the whole plan carefully and please do not proceed with these edits right now";
+        assert!(!ServerState::is_approval_message(long_neg));
+        assert!(!ServerState::is_gui_or_short_plan_approval(long_neg));
+
+        for neg in [
+            "Khoan đã, ok để kiểm tra lại",
+            "Đừng triển khai vội nhé",
+            "Chưa đồng ý đâu",
+            "Wait, ok let me check first",
+            "I never approved this plan",
+            "Reject this change, ok?",
+            "Comments on artifact URI: file:///plan.md\n\nPlease fix section 2",
+            "start the server",
+            "exec query",
+        ] {
+            assert!(!ServerState::is_approval_message(neg), "Should reject: {}", neg);
+            assert!(!ServerState::is_gui_or_short_plan_approval(neg), "GUI check should reject: {}", neg);
+        }
+
+        // user_confirmed=true must NOT override explicit negation in user_message
+        let mut state = ServerState::new();
+        state.workflow_stage = "Plan".to_string();
+        let res = tools::handle_tool_call(
+            "workflow_gate",
+            json!({
+                "action": "approve_plan",
+                "user_confirmed": true,
+                "user_message": "Khoan, đừng triển khai"
+            }),
+            &mut state,
+        )
+        .unwrap();
+        assert!(res["content"][0]["text"].as_str().unwrap().contains("USER_APPROVAL_NEGATED"));
+        assert!(!state.plan_approved);
+
+        let adv = tools::handle_tool_call(
+            "workflow_gate",
+            json!({
+                "action": "advance",
+                "target_stage": "Build",
+                "user_confirmed": true,
+                "user_message": "Wait, do not proceed yet"
+            }),
+            &mut state,
+        )
+        .unwrap();
+        assert!(adv["content"][0]["text"].as_str().unwrap().contains("USER_APPROVAL_NEGATED"));
+        assert!(!state.plan_approved);
+        assert_eq!(state.workflow_stage, "Plan");
+    }
 }

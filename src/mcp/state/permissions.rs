@@ -1,6 +1,63 @@
 use serde_json::Value;
 use super::ServerState;
 
+/// Returns true for the six concrete architecture patterns accepted by edit gates.
+pub fn is_valid_architecture_pattern(pattern: &str) -> bool {
+    matches!(
+        pattern,
+        "Clean_Architecture"
+            | "Layered_Architecture"
+            | "Package_By_Feature"
+            | "Orchestrator"
+            | "CLI_Pipeline"
+            | "Flat_Library"
+    )
+}
+
+fn workflow_gate_requires_priority(args: &Value) -> bool {
+    let action = args
+        .get("action")
+        .and_then(|a| a.as_str())
+        .unwrap_or("check");
+    match action {
+        "approve_plan" | "approve" | "authorize_edit" => true,
+        "set_stage" => args
+            .get("target_stage")
+            .or_else(|| args.get("stage"))
+            .and_then(|s| s.as_str())
+            .is_some_and(|s| matches!(s.trim().to_ascii_lowercase().as_str(), "build" | "fix")),
+        "advance" | "advance_stage" => {
+            let target = args
+                .get("target_stage")
+                .or_else(|| args.get("stage"))
+                .and_then(|s| s.as_str())
+                .unwrap_or("Build");
+            matches!(target.trim().to_ascii_lowercase().as_str(), "build" | "fix")
+        }
+        _ => false,
+    }
+}
+
+fn is_non_edit_gate_or_continuity(tool_name: &str, args: &Value) -> bool {
+    tool_name == "session_continuity"
+        || (tool_name == "workflow_gate"
+            && matches!(
+                args.get("action").and_then(|a| a.as_str()).unwrap_or("check"),
+                "check"
+                    | "status"
+                    | "approve_plan"
+                    | "approve"
+                    | "set_stage"
+                    | "advance"
+                    | "advance_stage"
+                    | "rollback"
+                    | "set_architecture"
+                    | "pass_verification"
+                    | "invalidate"
+                    | "sync_file"
+            ))
+}
+
 impl ServerState {
     pub fn can_call_tool(&mut self, tool_name: &str, args: &Value) -> Result<(), String> {
         // 1. Unlocks gate tool and advances stage from Context to Plan
@@ -12,13 +69,17 @@ impl ServerState {
             return Ok(());
         }
 
-        // 2. Whitelisted & Not Gated tools bypass priority gate check
+        // 2. Whitelisted & Not Gated tools bypass priority gate check,
+        //    except workflow_gate transitions into Build/Fix or approval/edit actions.
         let is_whitelisted_or_ungated = matches!(
             tool_name,
             "workflow_gate" | "session_continuity" | "select_skills" | "select_skill"
         );
 
-        if !is_whitelisted_or_ungated {
+        let gate_needs_priority =
+            tool_name == "workflow_gate" && workflow_gate_requires_priority(args);
+
+        if !is_whitelisted_or_ungated || gate_needs_priority {
             // Check Layer 2 / Layer 3 Priority Gate
             self.priority_gate_check()?;
         }
@@ -97,9 +158,12 @@ impl ServerState {
                 }
                 Ok(())
             }
-            "Build" => {
-                if !self.plan_approved {
-                    Err("WORKFLOW_STAGE_BLOCKED: Tool execution in 'Build' stage is blocked because plan_approved is false. Obtain user approval first.".to_string())
+            "Build" | "Fix" => {
+                if !self.plan_approved && !is_non_edit_gate_or_continuity(tool_name, args) {
+                    Err(format!(
+                        "WORKFLOW_STAGE_BLOCKED: Tool execution in '{}' stage is blocked because plan_approved is false. Obtain user approval first.",
+                        self.workflow_stage
+                    ))
                 } else if tool_name == "workflow_gate"
                     && args.get("action").and_then(|a| a.as_str()) == Some("authorize_edit")
                 {
@@ -107,18 +171,9 @@ impl ServerState {
                         .get("architecture_pattern")
                         .and_then(|a| a.as_str())
                         .unwrap_or("");
-                    if !matches!(
-                        arch_pattern,
-                        ""
-                            | "Auto"
-                            | "auto"
-                            | "Clean_Architecture"
-                            | "Layered_Architecture"
-                            | "Package_By_Feature"
-                            | "Orchestrator"
-                            | "CLI_Pipeline"
-                            | "Flat_Library"
-                    ) {
+                    if !matches!(arch_pattern, "" | "Auto" | "auto")
+                        && !is_valid_architecture_pattern(arch_pattern)
+                    {
                         Err("ARCHITECTURE_GATE_BLOCKED: You must provide a valid `architecture_pattern` ('Clean_Architecture', 'Layered_Architecture', 'Package_By_Feature', 'Orchestrator', 'CLI_Pipeline', 'Flat_Library', or 'Auto') in `workflow_gate(action=\"authorize_edit\")`.".to_string())
                     } else {
                         Ok(())
@@ -136,7 +191,6 @@ impl ServerState {
                 }
                 Ok(())
             }
-            "Fix" => Ok(()),
             "Proposal" => {
                 if tool_name == "project_context" {
                     let op = args.get("operation").and_then(|o| o.as_str()).unwrap_or("");

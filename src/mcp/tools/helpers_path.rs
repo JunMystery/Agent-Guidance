@@ -1,5 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use crate::mcp::state::ServerState;
+use crate::mcp::state::workspace::{canonicalize_or_normalize, strip_verbatim_prefix};
 
 pub use crate::dashboard::projects_container::{is_generic_container_dir, is_generic_home_dir};
 
@@ -24,8 +25,7 @@ fn resolve_safe_root(p: &Path) -> PathBuf {
 
 pub fn detect_parent_process_cwd() -> Option<PathBuf> {
     use sysinfo::{Pid, System};
-    let mut sys = System::new_all();
-    sys.refresh_all();
+    let sys = System::new_all();
 
     let my_pid = Pid::from_u32(std::process::id());
     if let Some(proc_) = sys.process(my_pid)
@@ -137,57 +137,67 @@ pub fn check_cross_workspace_guard(
     state: &ServerState,
     allow_cross_workspace: bool,
 ) -> Option<String> {
-    if allow_cross_workspace {
+    if allow_cross_workspace || state.workspace_roots.is_empty() {
         return None;
     }
-    if let Some(session_root_str) = state.workspace_roots.first() {
-        let session_root = Path::new(session_root_str);
-        let proj_canonical = proj_path.canonicalize().unwrap_or_else(|_| proj_path.to_path_buf());
-        let sess_canonical = session_root.canonicalize().unwrap_or_else(|_| session_root.to_path_buf());
 
-        let mut cross_target: Option<String> = None;
-        if !proj_canonical.starts_with(&sess_canonical) {
-            cross_target = Some(proj_path.display().to_string());
-        } else {
-            for p_str in paths {
-                let p = Path::new(p_str);
-                if p.is_absolute() {
-                    let can_p = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-                    if !can_p.starts_with(&sess_canonical) {
-                        cross_target = Some(p_str.clone());
-                        break;
-                    }
+    let canonical_roots: Vec<PathBuf> = state
+        .workspace_roots
+        .iter()
+        .map(|r| canonicalize_or_normalize(Path::new(r)))
+        .collect();
+    let proj_canonical = canonicalize_or_normalize(proj_path);
+
+    let mut cross_target: Option<String> = None;
+    if !canonical_roots.iter().any(|root| proj_canonical.starts_with(root)) {
+        cross_target = Some(proj_path.display().to_string());
+    } else {
+        for p_str in paths {
+            let p = Path::new(p_str.trim());
+            if p.is_absolute() {
+                let can_p = canonicalize_or_normalize(p);
+                if !canonical_roots.iter().any(|root| can_p.starts_with(root)) {
+                    cross_target = Some(p_str.clone());
+                    break;
                 }
             }
         }
-
-        if let Some(target_loc) = cross_target {
-            return Some(format!(
-                "# Edit Approval Gate Authorization\n\n- Status: BLOCKED (CROSS_WORKSPACE_WARNING)\n- Active Workspace: `{}`\n- Target Location: `{}`\n- Target Files: `{}`\n\n> [!WARNING] **Cross-Workspace Modification Detected**:\n> Target file is outside active workspace (`{}`).\n> To authorize editing in an external workspace, re-run with `allow_cross_workspace=true`.",
-                session_root.display(),
-                target_loc,
-                paths.join(", "),
-                session_root.display()
-            ));
-        }
     }
+
+    if let Some(target_loc) = cross_target {
+        let roots_display = state.workspace_roots.join(", ");
+        return Some(format!(
+            "# Edit Approval Gate Authorization\n\n- Status: BLOCKED (CROSS_WORKSPACE_WARNING)\n- Active Workspace: `{}`\n- Target Location: `{}`\n- Target Files: `{}`\n\n> [!WARNING] **Cross-Workspace Modification Detected**:\n> Target file is outside active workspace (`{}`).\n> To authorize editing in an external workspace, re-run with `allow_cross_workspace=true`.",
+            roots_display,
+            target_loc,
+            paths.join(", "),
+            roots_display
+        ));
+    }
+
     None
 }
 
-#[allow(dead_code)]
-pub fn is_path_inside_workspace(base_path: &Path, target_path: &Path) -> bool {
-    let clean_base = match base_path.canonicalize() {
-        Ok(c) => c,
-        Err(_) => base_path.to_path_buf(),
-    };
-    let clean_target = match target_path.canonicalize() {
-        Ok(c) => c,
-        Err(_) => target_path.to_path_buf(),
-    };
-    clean_target.starts_with(&clean_base)
+fn has_parent_traversal(raw: &str) -> bool {
+    Path::new(raw)
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+        || raw
+            .replace('\\', "/")
+            .split('/')
+            .any(|seg| seg == "..")
 }
 
-/// Validate that a relative or absolute target stays within base directory root
+fn normalize_posix_rel(raw: &str) -> String {
+    raw.trim()
+        .replace('\\', "/")
+        .split('/')
+        .filter(|seg| !seg.is_empty() && *seg != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Validate that a relative or absolute target stays within base directory root.
 pub fn validate_path(base_path: &Path, rel_path: &str) -> Result<PathBuf, String> {
     validate_path_scoped(base_path, rel_path, false)
 }
@@ -209,6 +219,10 @@ fn strip_absolute_or_leading_prefix(
     {
         return Ok(sub.to_string_lossy().to_string());
     }
+    let normalized_abs = canonicalize_or_normalize(p_rel);
+    if let Ok(sub) = normalized_abs.strip_prefix(p_clean_base) {
+        return Ok(sub.to_string_lossy().to_string());
+    }
     if let Ok(can_rel) = p_rel.canonicalize() {
         return can_rel
             .strip_prefix(canonical_base)
@@ -216,7 +230,7 @@ fn strip_absolute_or_leading_prefix(
             .map_err(|_| "Target path resolves outside workspace root.".to_string());
     }
     // On Unix, virtual workspace-root paths like "/Cargo.toml" look absolute due to leading '/'.
-    let candidate = rel_path.trim().trim_start_matches(['/', '\\']).replace('\\', "/");
+    let candidate = normalize_posix_rel(rel_path);
     let has_drive = candidate.as_bytes().get(1) == Some(&b':');
     let joined = canonical_base.join(&candidate);
     if !has_drive
@@ -232,36 +246,96 @@ fn strip_absolute_or_leading_prefix(
     Err("Target path resolves outside workspace root.".to_string())
 }
 
-pub fn validate_path_scoped(base_path: &Path, rel_path: &str, allow_cross_workspace: bool) -> Result<PathBuf, String> {
-    if rel_path.contains("..") {
+fn resolve_nonexistent_within_base(
+    canonical_base: &Path,
+    full_path: &Path,
+) -> Result<PathBuf, String> {
+    let mut missing_parts: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = full_path;
+    let ancestor = loop {
+        if cur.exists() {
+            break cur
+                .canonicalize()
+                .map_err(|e| format!("Invalid target path ancestor: {}", e))?;
+        }
+        if let Some(name) = cur.file_name() {
+            missing_parts.push(name.to_os_string());
+            match cur.parent() {
+                Some(p) if !p.as_os_str().is_empty() => cur = p,
+                _ => return Err("Target path resolves outside workspace root.".to_string()),
+            }
+        } else {
+            return Err("Target path resolves outside workspace root.".to_string());
+        }
+    };
+
+    if !ancestor.starts_with(canonical_base) {
+        return Err("Target path resolves outside workspace root.".to_string());
+    }
+
+    let mut resolved = ancestor;
+    for part in missing_parts.into_iter().rev() {
+        resolved.push(part);
+    }
+    Ok(resolved)
+}
+
+/// Validates a path against `base_path`, blocking null bytes, `..` traversal, and symlink escapes,
+/// and returns `(resolved_full_path, normalized_posix_relative_path)`.
+pub fn validate_path_scoped_normalized(
+    base_path: &Path,
+    rel_path: &str,
+    allow_cross_workspace: bool,
+) -> Result<(PathBuf, String), String> {
+    if rel_path.contains('\0') {
+        return Err("Null byte in path is strictly prohibited.".to_string());
+    }
+    if has_parent_traversal(rel_path) {
         return Err("Path traversal (..) is strictly prohibited.".to_string());
     }
 
     let p_rel = Path::new(rel_path);
     if allow_cross_workspace && p_rel.is_absolute() {
-        if let Ok(can) = p_rel.canonicalize() {
-            return Ok(can);
-        }
-        return Ok(p_rel.to_path_buf());
+        let resolved = if p_rel.exists() {
+            p_rel
+                .canonicalize()
+                .unwrap_or_else(|_| p_rel.to_path_buf())
+        } else {
+            canonicalize_or_normalize(p_rel)
+        };
+        let norm_rel = base_path
+            .canonicalize()
+            .ok()
+            .and_then(|can_base| {
+                let clean_base = strip_verbatim_prefix(&can_base);
+                let clean_res = strip_verbatim_prefix(&resolved);
+                clean_res
+                    .strip_prefix(&clean_base)
+                    .ok()
+                    .map(|sub| normalize_posix_rel(&sub.to_string_lossy()))
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                strip_verbatim_prefix(&resolved)
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            });
+        return Ok((resolved, norm_rel));
     }
 
     let canonical_base = base_path
         .canonicalize()
         .map_err(|e| format!("Invalid project path: {}", e))?;
 
-    let clean_base = canonical_base.to_string_lossy();
-    let clean_base_str = clean_base.strip_prefix(r"\\?\").unwrap_or(&clean_base);
-    let p_clean_base = Path::new(clean_base_str);
+    let p_clean_base = strip_verbatim_prefix(&canonical_base);
 
-    let stripped = strip_absolute_or_leading_prefix(base_path, &canonical_base, p_clean_base, rel_path)?;
+    let stripped =
+        strip_absolute_or_leading_prefix(base_path, &canonical_base, &p_clean_base, rel_path)?;
 
-    let clean_rel = stripped
-        .trim()
-        .trim_start_matches(['/', '\\'])
-        .replace('\\', "/");
+    let clean_rel = normalize_posix_rel(&stripped);
 
     if clean_rel.is_empty() {
-        return Ok(canonical_base);
+        return Ok((canonical_base, String::new()));
     }
 
     let full_path = canonical_base.join(&clean_rel);
@@ -274,10 +348,17 @@ pub fn validate_path_scoped(base_path: &Path, rel_path: &str, allow_cross_worksp
         if !canonical_full.starts_with(&canonical_base) {
             return Err("Target path resolves outside workspace root.".to_string());
         }
-        Ok(canonical_full)
-    } else if full_path.starts_with(&canonical_base) {
-        Ok(full_path)
+        Ok((canonical_full, clean_rel))
     } else {
-        Err("Target path resolves outside workspace root.".to_string())
+        let resolved = resolve_nonexistent_within_base(&canonical_base, &full_path)?;
+        Ok((resolved, clean_rel))
     }
+}
+
+pub fn validate_path_scoped(
+    base_path: &Path,
+    rel_path: &str,
+    allow_cross_workspace: bool,
+) -> Result<PathBuf, String> {
+    validate_path_scoped_normalized(base_path, rel_path, allow_cross_workspace).map(|(p, _)| p)
 }

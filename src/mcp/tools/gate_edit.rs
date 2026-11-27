@@ -4,7 +4,10 @@ use crate::mcp::state::ServerState;
 use super::gate_edit_batch::handle_batch_authorize;
 use super::gate_edit_single::evaluate_single_file_auth;
 pub use super::gate_exemptions::is_exempt_from_loc_limit;
-use super::helpers::{detect_project_path_with_targets, resolve_architecture_pattern};
+use super::helpers::{
+    detect_project_path_with_targets, is_valid_architecture_pattern, resolve_architecture_pattern,
+    validate_path_scoped_normalized,
+};
 
 pub(crate) fn extract_target_paths(arguments: &Value) -> Vec<String> {
     if let Some(arr) = arguments
@@ -55,12 +58,24 @@ pub(crate) fn enforce_edit_boundaries(
     }
 
     if state.is_fast_path {
+        let mut projected = state.fast_path_files.clone();
         for p in paths {
-            state.record_fast_path_file(p);
+            let norm = validate_path_scoped_normalized(proj_path, p, allow_cross)
+                .map(|(_, rel)| rel)
+                .unwrap_or_else(|_| {
+                    p.trim()
+                        .trim_start_matches("./")
+                        .trim_start_matches(".\\")
+                        .trim_start_matches(['/', '\\'])
+                        .replace('\\', "/")
+                });
+            if !norm.is_empty() && !projected.iter().any(|f| f == &norm) {
+                projected.push(norm);
+            }
         }
         let mut code_count = 0;
         let mut doc_count = 0;
-        for f in &state.fast_path_files {
+        for f in &projected {
             if is_exempt_from_loc_limit(f) {
                 doc_count += 1;
             } else {
@@ -72,6 +87,7 @@ pub(crate) fn enforce_edit_boundaries(
             state.workflow_stage = "Plan".to_string();
             state.plan_approved = false;
             state.edit_authorized = false;
+            let _ = state.auto_checkpoint(proj_path);
             return Some(format!(
                 "# Edit Approval Gate: BLOCKED (FAST_PATH_BOUNDARY_EXCEEDED)\n\n\
                 - Status: BLOCKED\n\
@@ -129,15 +145,7 @@ pub(crate) fn handle_authorize_edit(
         let _ = state.set_stage("Build");
     }
 
-    if !matches!(
-        arch_pattern.as_str(),
-        "Clean_Architecture"
-            | "Layered_Architecture"
-            | "Package_By_Feature"
-            | "Orchestrator"
-            | "CLI_Pipeline"
-            | "Flat_Library"
-    ) {
+    if !is_valid_architecture_pattern(&arch_pattern) {
         return format!(
             "# Edit Approval Gate Authorization\n\n- Status: BLOCKED (ORCHESTRATION MANDATE VIOLATION)\n- Project Path: {}\n- Declared Architecture: '{}'\n\nError: ARCHITECTURE_GATE_BLOCKED: Trigger IDE/CLI `ask_question` tool to let user choose a valid `architecture_pattern` ('Clean_Architecture', 'Layered_Architecture', 'Package_By_Feature', 'Orchestrator', 'CLI_Pipeline', 'Flat_Library', or 'Auto'), then re-invoke `workflow_gate(action=\"authorize_edit\", ...) `.",
             proj_path.display(),
@@ -145,9 +153,9 @@ pub(crate) fn handle_authorize_edit(
         );
     }
 
-    if state.workflow_stage != "Build" || !state.plan_approved {
+    if !matches!(state.workflow_stage.as_str(), "Build" | "Fix") || !state.plan_approved {
         return format!(
-            "# Edit Approval Gate Authorization\n\n- Status: BLOCKED\n- Project Path: {}\n- Active Stage: {}\n- Plan Approved: {}\n\nError: WORKFLOW_STAGE_BLOCKED: Edits require Build stage and plan_approved=true. If user approved via GUI/chat, invoke `workflow_gate(action=\"set_stage\", target_stage=\"Build\", user_confirmed=true)`. Only trigger `ask_question` if interactive user approval is required.",
+            "# Edit Approval Gate Authorization\n\n- Status: BLOCKED\n- Project Path: {}\n- Active Stage: {}\n- Plan Approved: {}\n\nError: WORKFLOW_STAGE_BLOCKED: Edits require Build or Fix stage and plan_approved=true. If user approved via GUI/chat, invoke `workflow_gate(action=\"set_stage\", target_stage=\"Build\", user_confirmed=true)`. Only trigger `ask_question` if interactive user approval is required.",
             proj_path.display(),
             state.workflow_stage,
             state.plan_approved
@@ -186,11 +194,11 @@ pub(crate) fn handle_authorize_edit(
     state.active_architecture_pattern = Some(arch_pattern.clone());
     let _ = state.auto_checkpoint(&proj_path);
 
-    let is_exempt = is_exempt_from_loc_limit(rel_path);
+    let is_exempt = is_exempt_from_loc_limit(&outcome.rel_path);
     let mut resp = format!(
         "# Edit Approval Gate Authorization\n\n- Status: PASSED\n- Project Path: {}\n- Target File: `{}`{}\n- Assessed Risk Level: {:?} (Dependencies: {})\n- Architecture Pattern: {}\n- Justification: {}\n- Active Stage: {}\n- Plan Approved: true\n\nFile edits are fully authorized under {} Architecture.",
         proj_path.display(),
-        rel_path,
+        outcome.rel_path,
         if outcome.is_new { " [NEW FILE]" } else { "" },
         outcome.risk_level,
         outcome.dependent_count,

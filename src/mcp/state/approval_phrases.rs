@@ -1,34 +1,86 @@
 use super::ServerState;
 
-fn starts_with_negation(msg: &str) -> bool {
-    if msg.starts_with("từ chối") {
+fn has_explicit_negation(msg: &str) -> bool {
+    let negation_phrases = [
+        "từ chối",
+        "chưa đồng ý",
+        "không đồng ý",
+        "không duyệt",
+        "chưa duyệt",
+        "do not",
+        "does not",
+        "did not",
+        "will not",
+        "would not",
+        "not ok",
+        "not approved",
+        "not yet",
+        "hold on",
+    ];
+    if negation_phrases
+        .iter()
+        .any(|phrase| contains_phrase_boundary(msg, phrase))
+    {
         return true;
     }
-    let first_word = msg
-        .split(|c: char| !c.is_alphanumeric() && c != '\'')
-        .find(|s| !s.is_empty())
-        .unwrap_or("");
-    matches!(
-        first_word,
-        "no" | "not" | "don't" | "dont" | "reject" | "cancel" | "không" | "hủy"
-    )
+
+    msg.split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|s| !s.is_empty())
+        .any(|tok| {
+            matches!(
+                tok,
+                "no" | "not"
+                    | "don't"
+                    | "dont"
+                    | "won't"
+                    | "wont"
+                    | "can't"
+                    | "cant"
+                    | "cannot"
+                    | "shouldn't"
+                    | "wouldn't"
+                    | "reject"
+                    | "rejected"
+                    | "cancel"
+                    | "canceled"
+                    | "cancelled"
+                    | "never"
+                    | "wait"
+                    | "stop"
+                    | "abort"
+                    | "decline"
+                    | "declined"
+                    | "deny"
+                    | "denied"
+                    | "không"
+                    | "chưa"
+                    | "đừng"
+                    | "khoan"
+                    | "hủy"
+                    | "huỷ"
+            )
+        })
 }
 
 impl ServerState {
+    pub fn is_negated_message(message: &str) -> bool {
+        let msg = message.trim().to_lowercase();
+        !msg.is_empty() && has_explicit_negation(&msg)
+    }
+
     pub fn is_approval_message(message: &str) -> bool {
         let msg = message.trim().to_lowercase();
         if msg.is_empty() {
             return false;
         }
 
-        if msg.split_whitespace().count() <= 10 && starts_with_negation(&msg) {
+        if has_explicit_negation(&msg) {
             return false;
         }
 
         let phrase_keywords = [
             "the user has approved this document",
             "proceeded with implementation plan",
-            "comments on artifact uri",
             "proceed with implementation plan",
             "approve plan",
             "proceed with",
@@ -53,8 +105,8 @@ impl ServerState {
         }
 
         let word_keywords = [
-            "ok", "proceed", "approved", "approve", "start", "yes", "yep",
-            "lgtm", "agree", "exec", "duyệt", "thực thi", "chốt",
+            "ok", "proceed", "approved", "approve", "yes", "yep",
+            "lgtm", "agree", "duyệt", "thực thi", "chốt",
         ];
 
         for kw in word_keywords {
@@ -78,10 +130,12 @@ impl ServerState {
         if msg.is_empty() {
             return false;
         }
+        if has_explicit_negation(&msg) {
+            return false;
+        }
         let gui_phrases = [
             "the user has approved this document",
             "proceeded with implementation plan",
-            "comments on artifact uri",
             "proceed with implementation plan",
             "approve plan",
         ];
@@ -89,10 +143,6 @@ impl ServerState {
             return true;
         }
         if msg.split_whitespace().count() > 6 {
-            return false;
-        }
-
-        if starts_with_negation(&msg) {
             return false;
         }
 

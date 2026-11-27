@@ -287,3 +287,93 @@ fn test_pending_skill_proposals_and_advance_boundary_guards() {
     let _ = std::fs::remove_dir_all(&temp);
 }
 
+#[test]
+fn test_batch_normalized_paths_snapshot_honesty_advance_stage_alias_and_fast_path_quota() {
+    let temp = std::env::temp_dir().join(format!("ag_batch_norm_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(temp.join("src")).unwrap();
+    std::fs::write(temp.join("src/a.rs"), "pub fn a() {}\n").unwrap();
+
+    let mut state = ServerState::new();
+    state.plan_approved = true;
+    state.set_stage("Build").unwrap();
+
+    // 1. Normalized paths + honest snapshot note for new vs existing files
+    let res = handle_tool_call(
+        "workflow_gate",
+        json!({
+            "action": "authorize_edit",
+            "project_path": temp.to_str().unwrap(),
+            "relative_paths": ["./src\\a.rs", "src/new_file.rs"],
+            "architecture_pattern": "Flat_Library",
+            "justification": "Test normalized batch authorization"
+        }),
+        &mut state,
+    )
+    .unwrap();
+    let text = res["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("`src/a.rs`"));
+    assert!(text.contains("`src/new_file.rs`"));
+    assert!(text.contains("Snapshot created"));
+    assert!(text.contains("New file (no snapshot needed)"), "Got: {}", text);
+    assert!(state.modified_files.contains(&"src/a.rs".to_string()));
+    assert!(state.modified_files.contains(&"src/new_file.rs".to_string()));
+
+    // 2. Fast-path failed validation does not consume quota
+    let mut fp_state = ServerState::new();
+    fp_state.is_fast_path = true;
+    fp_state.plan_approved = true;
+    fp_state.set_stage("Build").unwrap();
+    let _ = handle_tool_call(
+        "workflow_gate",
+        json!({
+            "action": "authorize_edit",
+            "project_path": temp.to_str().unwrap(),
+            "relative_path": "src/a.rs",
+            "architecture_pattern": "InvalidArch"
+        }),
+        &mut fp_state,
+    )
+    .unwrap();
+    assert!(fp_state.fast_path_files.is_empty());
+
+    // 3. approve_plan with empty paths transitions to Build
+    let mut ap_state = ServerState::new();
+    ap_state.set_stage("Plan").unwrap();
+    handle_tool_call(
+        "workflow_gate",
+        json!({
+            "action": "approve_plan",
+            "user_confirmed": true,
+            "project_path": temp.to_str().unwrap()
+        }),
+        &mut ap_state,
+    )
+    .unwrap();
+    assert_eq!(ap_state.workflow_stage, "Build");
+
+    // 4. advance supports `stage` alias and drains deferred_authorized_paths
+    let mut adv_state = ServerState::new();
+    adv_state.set_stage("Plan").unwrap();
+    adv_state.queue_deferred_authorization(&["src/a.rs".to_string()]);
+    let adv_res = handle_tool_call(
+        "workflow_gate",
+        json!({
+            "action": "advance",
+            "stage": "Build",
+            "user_confirmed": true,
+            "architecture_pattern": "Flat_Library",
+            "project_path": temp.to_str().unwrap()
+        }),
+        &mut adv_state,
+    )
+    .unwrap();
+    let adv_text = adv_res["content"][0]["text"].as_str().unwrap();
+    assert!(adv_text.contains("advance & pre-authorized"));
+    assert!(adv_state.edit_authorized);
+    assert!(adv_state.deferred_authorized_paths.is_empty());
+    assert!(adv_state.modified_files.contains(&"src/a.rs".to_string()));
+
+    let _ = std::fs::remove_dir_all(&temp);
+}
+

@@ -41,8 +41,16 @@ pub(crate) fn handle(
             state.plan_approved = false;
             return Ok(blocked);
         }
-        let msg_approves = user_msg.map(ServerState::is_approval_message).unwrap_or(false);
-        inline_approved = user_confirmed || msg_approves;
+        if user_msg.is_some_and(ServerState::is_negated_message) {
+            state.plan_approved = false;
+            if user_confirmed {
+                return Ok("# Workflow Gate: [approval]\n\nStatus: BLOCKED | Error: USER_APPROVAL_NEGATED: Explicit negation detected in `user_message`. `user_confirmed=true` cannot override user rejection or pause.".to_string());
+            }
+            inline_approved = false;
+        } else {
+            let msg_approves = user_msg.map(ServerState::is_approval_message).unwrap_or(false);
+            inline_approved = user_confirmed || msg_approves;
+        }
     }
 
     let proj_path_arg = arguments
@@ -53,6 +61,7 @@ pub(crate) fn handle(
     let proj_path = detect_project_path_with_targets(proj_path_arg, &target_paths, state);
 
     let resp = match action {
+        "check" => handle_check(state),
         "approve" | "approve_plan" => {
             handle_approve_plan(&arguments, state, user_confirmed, user_msg, &proj_path)
         }
@@ -70,8 +79,10 @@ pub(crate) fn handle(
             if rel_path.is_empty() {
                 "# Workflow Gate: [invalidate]\n\nError: 'relative_path' is required for invalidate/sync_file action.".to_string()
             } else {
+                state.ast_cache.invalidate_file(rel_path);
                 match crate::context::indexer::invalidator::invalidate_and_sync_file(&proj_path, rel_path) {
                     Ok(rep) => {
+                        state.ast_cache.invalidate_file(&rep.rel_path);
                         format!(
                             "# Workflow Gate: [invalidate]\n\n- File: `{}`\n- Reindexed: {}\n- Symbols: {}\n- Edges: {}\n- Duration: {}ms\n\nWrite-through AST sync complete.",
                             rep.rel_path, rep.reindexed, rep.symbols_extracted, rep.edges_created, rep.duration_ms
@@ -82,7 +93,15 @@ pub(crate) fn handle(
             }
         }
         "rollback" => handle_rollback(state, &proj_path),
-        _ => handle_check(state),
+        _ => {
+            return Err((
+                -32602,
+                format!(
+                    "Unknown workflow_gate action '{}'. Valid actions: check, status, set_stage, set_architecture, advance, advance_stage, approve_plan, approve, pass_verification, authorize_edit, invalidate, sync_file, rollback.",
+                    action
+                ),
+            ));
+        }
     };
     Ok(resp)
 }

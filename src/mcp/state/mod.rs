@@ -1,5 +1,6 @@
 pub mod types;
 pub mod uri;
+pub mod workspace;
 pub mod approval_phrases;
 pub mod gates;
 pub mod permissions;
